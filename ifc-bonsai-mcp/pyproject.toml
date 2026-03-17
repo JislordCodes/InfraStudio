@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ifc-bonsai-mcp"
+version = "0.1.0"
+authors = [
+  { name = "Show2Instruct" },
+]
+description = "Bonsai Blender Model Context Protocol integration"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # MCP Server Core
+    "mcp-server",
+    
+    # AI/LLM Libraries
+    "langchain>=0.1.0",
+    "langchain-community>=0.1.0",
+    "langchain-huggingface>=0.0.1",
+    "langchain-chroma>=0.1.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    
+    # Core utilities
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "tqdm>=4.66.0",
+    
+    # Standalone MCP client support
+    "mcp>=1.0.0",
+    "anthropic>=0.40.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    
+    # Web server capabilities
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+    
+    # Scientific computing and analysis
+    "numpy>=1.26.0",
+    "scipy>=1.11.0",
+    "matplotlib>=3.7.0",
+    "scikit-image>=0.22.0",
+    "networkx>=3.2.0",
+    "faiss-cpu>=1.7.4",
+    "shapely>=2.0.0",
+    
+    # Note: Blender-specific packages (ifcopenshell, trimesh, pillow) are NOT included
+    # here as they need to be installed separately in Blender's Python environment
+]
+
+[project.scripts]
+ifc-bonsai-mcp = "main:main"
+
+[tool.setuptools]
+packages = ["blender_mcp"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+"blender_mcp" = ["*.py"]
+
