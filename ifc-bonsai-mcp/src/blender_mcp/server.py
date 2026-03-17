@@ -9,6 +9,7 @@ from typing import AsyncIterator, Dict, Any
 import os
 
 from .mcp_instance import mcp
+from . import s3_utils
 
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -93,7 +94,20 @@ class BlenderConnection:
                 logger.error(f"Blender returned error: {error_msg}")
                 return {"error": error_msg}
                 
-            return response.get('result', {})
+            try:
+                s3_utils.upload_if_changed()
+            except Exception as e:
+                logger.error(f"Failed to trigger S3 sync: {e}")
+                
+            result = response.get('result', {})
+            s3_url = s3_utils.get_public_url()
+            if s3_url:
+                if isinstance(result, dict):
+                    result["s3_model_url"] = s3_url
+                elif isinstance(result, str):
+                    result += f"\n\nModel available at S3 URL: {s3_url}"
+                
+            return result
         
         except socket.error as e:
             logger.error(f"Socket connection error: {str(e)}")
@@ -139,6 +153,10 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         logger.info("BlenderMCP server shut down")
         
 mcp.lifespan = server_lifespan
+# Switch to SSE transport for AWS App Runner
+mcp.settings.transport = "sse"
+mcp.settings.host = "0.0.0.0"
+mcp.settings.port = 8080
 
 _blender_connection = None
 
