@@ -84,10 +84,12 @@ RUN uv venv
 # Copy the full application source (needed for -e install)
 COPY . ./
 
-# Install MCP server python dependencies including Torch/SentenceTransformers for RAG
-RUN . .venv/bin/activate && uv pip install -e .
-RUN . .venv/bin/activate && uv pip install boto3 uvicorn starlette watchdog
-RUN . .venv/bin/activate && uv pip install torch sentence-transformers fastapi
+# Install all Python dependencies in one layer for speed and reliability
+# We include langchain explicitly to ensure all sub-packages (core, community, chroma, huggingface) are present
+RUN . .venv/bin/activate && uv pip install -e . \
+    boto3 uvicorn starlette watchdog \
+    torch sentence-transformers fastapi \
+    langchain langchain-community langchain-huggingface langchain-chroma requests beautifulsoup4
 
 # Initialize Knowledge Base (downloads embedding model into Docker image)
 RUN . .venv/bin/activate && python3 scripts/init_knowledge_base.py
