@@ -19,7 +19,11 @@ RUN wget https://mirror.clarkson.edu/blender/release/Blender4.4/blender-4.4.0-li
     && rm blender-4.4.0-linux-x64.tar.xz
 
 # Download latest Bonsai Addon for Python 3.11 (Blender 4.4)
-RUN wget -qO bonsai.zip "https://github.com/IfcOpenShell/IfcOpenShell/releases/download/v0.8.5-alpha/bonsai_py311-0.8.5-alpha260316-linux-x64.zip"
+# Use GitHub API to get the actual latest release URL dynamically
+RUN BONSAI_URL=$(curl -s https://api.github.com/repos/IfcOpenShell/IfcOpenShell/releases \
+    | python3 -c "import sys,json; releases=json.load(sys.stdin); assets=[a for r in releases for a in r['assets'] if 'bonsai_py311' in a['name'] and 'linux-x64' in a['name']]; print(assets[0]['browser_download_url'])") \
+    && echo "Downloading Bonsai from: $BONSAI_URL" \
+    && wget --fail -qO bonsai.zip "$BONSAI_URL"
 
 # -----------------
 # Final Runtime Image
