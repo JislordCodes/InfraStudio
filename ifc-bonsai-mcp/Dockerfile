@@ -23,7 +23,8 @@ RUN wget https://mirror.clarkson.edu/blender/release/Blender4.4/blender-4.4.0-li
 RUN BONSAI_URL=$(curl -s https://api.github.com/repos/IfcOpenShell/IfcOpenShell/releases \
     | python3 -c "import sys,json; releases=json.load(sys.stdin); assets=[a for r in releases for a in r['assets'] if 'bonsai_py311' in a['name'] and 'linux-x64' in a['name']]; print(assets[0]['browser_download_url'])") \
     && echo "Downloading Bonsai from: $BONSAI_URL" \
-    && wget --fail -qO bonsai.zip "$BONSAI_URL"
+    && wget -qO bonsai.zip "$BONSAI_URL" \
+    && test -s bonsai.zip || (echo "ERROR: bonsai.zip is empty or missing" && exit 1)
 
 # -----------------
 # Final Runtime Image
