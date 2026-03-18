@@ -78,18 +78,19 @@ print("Bonsai Addon Installed successfully!")
 EOF
 RUN /opt/blender/blender -b -P install_addon.py
 
+# Create virtualenv early for layer caching
+RUN uv venv
+
+# Copy the full application source (needed for -e install)
+COPY . ./
+
 # Install MCP server python dependencies including Torch/SentenceTransformers for RAG
-COPY pyproject.toml uv.lock ./
-RUN uv venv && . .venv/bin/activate && uv pip install -e .
+RUN . .venv/bin/activate && uv pip install -e .
 RUN . .venv/bin/activate && uv pip install boto3 uvicorn starlette watchdog
 RUN . .venv/bin/activate && uv pip install torch sentence-transformers fastapi
 
 # Initialize Knowledge Base (downloads embedding model into Docker image)
-COPY scripts/init_knowledge_base.py scripts/
 RUN . .venv/bin/activate && python3 scripts/init_knowledge_base.py
-
-# Copy the rest of the application
-COPY . ./
 
 # Expose port for App Runner (Port 8080)
 EXPOSE 8080
