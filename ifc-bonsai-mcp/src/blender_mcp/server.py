@@ -152,11 +152,8 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             _blender_connection = None
         logger.info("BlenderMCP server shut down")
         
+# Life cycle management
 mcp.lifespan = server_lifespan
-# Switch to SSE transport for AWS App Runner
-mcp.settings.transport = "sse"
-mcp.settings.host = "0.0.0.0"
-mcp.settings.port = 8080
 
 _blender_connection = None
 
@@ -184,7 +181,12 @@ from .mcp_functions import api_tools, analysis_tools, prompts, rag_tools
 
 def main():
     """Run the MCP server"""
-    mcp.run()
+    # Use SSE transport for AWS App Runner
+    mcp.run(
+        transport="sse",
+        host="0.0.0.0",
+        port=8080
+    )
 
 if __name__ == "__main__":
     main()
