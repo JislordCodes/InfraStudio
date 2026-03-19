@@ -91,14 +91,15 @@ EXPOSE 8080
 # Environment variables
 ENV BLENDER_EXECUTABLE="/opt/blender/blender"
 ENV AWS_REGION="us-east-1"
-ENV BLENDER_MCP_HOST="127.0.0.1"
-ENV BLENDER_MCP_PORT="9876"
-ENV HOST="0.0.0.0"
-ENV BLENDER_MCP_REMOTE_EMBEDDINGS_URL="http://127.0.0.1:8081/embeddings"
-ENV PYTHONPATH="/app/src"
+ENV HOST=0.0.0.0
+ENV PORT=8080
+ENV PYTHONPATH=/app/src
+ENV BLENDER_MCP_PORT=9876
+ENV BLENDER_MCP_HOST=localhost
+ENV PYTHONUNBUFFERED=1
 
 # Startup Script to run Blender Headless, RAG Embeddings Server, and FastMCP
-RUN printf '#!/bin/bash\nset -e\necho "Starting headless Blender on port $BLENDER_MCP_PORT..."\n/opt/blender/blender -b -P scripts/start_blender.py &\nBLENDER_PID=$!\necho "Waiting for Blender to start..."\nsleep 5\nsource .venv/bin/activate\necho "Starting RAG Embedding Server on port 8081..."\npython3 scripts/embedding_server.py --model sentence-transformers/all-MiniLM-L6-v2 --host 127.0.0.1 --port 8081 --normalize &\nEMB_PID=$!\necho "Starting FastMCP Server on $HOST:8080..."\npython3 -m blender_mcp.server\n' > start.sh
+RUN printf '#!/bin/bash\nset -e\necho "Starting headless Blender on port $BLENDER_MCP_PORT..."\n/opt/blender/blender -b -P scripts/start_blender.py &\nBLENDER_PID=$!\necho "Waiting for Blender to start (15s)..."\nsleep 15\nsource .venv/bin/activate\necho "Starting RAG Embedding Server on port 8081..."\npython3 scripts/embedding_server.py --model sentence-transformers/all-MiniLM-L6-v2 --host 127.0.0.1 --port 8081 --normalize &\nEMB_PID=$!\necho "Starting FastMCP Server on $HOST:8080..."\nexec uv run python -m blender_mcp.server\n' > start.sh
 RUN chmod +x start.sh
 
 CMD ["/bin/bash", "./start.sh"]
