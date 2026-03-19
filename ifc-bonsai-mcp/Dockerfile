@@ -73,7 +73,7 @@ import os
 addon_path = "/opt/bonsai_addon.zip"
 bpy.ops.preferences.addon_install(filepath=addon_path)
 bpy.ops.preferences.addon_enable(module="bonsai")
-bpy.ops.wm.save_homefile()
+bpy.ops.wm.save_userpref()
 print("Bonsai Addon Installed successfully!")
 EOF
 RUN /opt/blender/blender -b -P install_addon.py
@@ -104,32 +104,10 @@ ENV BLENDER_MCP_HOST="127.0.0.1"
 ENV BLENDER_MCP_PORT="9876"
 ENV HOST="0.0.0.0"
 ENV BLENDER_MCP_REMOTE_EMBEDDINGS_URL="http://127.0.0.1:8081/embeddings"
+ENV PYTHONPATH="/app/src"
 
 # Startup Script to run Blender Headless, RAG Embeddings Server, and FastMCP
-RUN cat << 'EOF' > start.sh
-#!/bin/bash
-set -e
-
-echo "Starting headless Blender on port $BLENDER_MCP_PORT..."
-# Run Blender in background
-/opt/blender/blender -b -P scripts/start_blender.py &
-BLENDER_PID=$!
-
-echo "Waiting for Blender to start..."
-sleep 5
-
-source .venv/bin/activate
-
-echo "Starting RAG Embedding Server on port 8081..."
-python3 scripts/embedding_server.py --model sentence-transformers/all-MiniLM-L6-v2 --host 127.0.0.1 --port 8081 --normalize &
-EMB_PID=$!
-
-echo "Starting FastMCP Server on $HOST:8080..."
-
-# Execute the python script that starts MCP
-python3 src/blender_mcp/server.py
-EOF
-
+RUN printf '#!/bin/bash\nset -e\necho "Starting headless Blender on port $BLENDER_MCP_PORT..."\n/opt/blender/blender -b -P scripts/start_blender.py &\nBLENDER_PID=$!\necho "Waiting for Blender to start..."\nsleep 5\nsource .venv/bin/activate\necho "Starting RAG Embedding Server on port 8081..."\npython3 scripts/embedding_server.py --model sentence-transformers/all-MiniLM-L6-v2 --host 127.0.0.1 --port 8081 --normalize &\nEMB_PID=$!\necho "Starting FastMCP Server on $HOST:8080..."\npython3 -m blender_mcp.server\n' > start.sh
 RUN chmod +x start.sh
 
-CMD ["./start.sh"]
+CMD ["/bin/bash", "./start.sh"]

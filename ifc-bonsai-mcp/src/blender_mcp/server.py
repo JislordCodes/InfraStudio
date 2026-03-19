@@ -181,12 +181,10 @@ from .mcp_functions import api_tools, analysis_tools, prompts, rag_tools
 
 def main():
     """Run the MCP server"""
-    # Use SSE transport for AWS App Runner
-    mcp.run(
-        transport="sse",
-        host="0.0.0.0",
-        port=8080
-    )
+    import uvicorn
+    # FastMCP instances have a .app property which is a standard ASGI app
+    logger.info("Starting SSE server via uvicorn on 0.0.0.0:8080")
+    uvicorn.run(mcp.app, host="0.0.0.0", port=8080)
 
 if __name__ == "__main__":
     main()
