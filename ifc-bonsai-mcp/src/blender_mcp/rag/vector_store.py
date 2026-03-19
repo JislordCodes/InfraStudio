@@ -30,7 +30,11 @@ try:
     from langchain_core.documents import Document
 except ImportError:
     from langchain.schema import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from .document_parser import IFCDocumentParser
 

@@ -85,11 +85,11 @@ RUN uv venv
 COPY . ./
 
 # Install all Python dependencies in one layer for speed and reliability
-# We include langchain explicitly to ensure all sub-packages (core, community, chroma, huggingface) are present
+# We include langchain explicitly to ensure all sub-packages (core, community, chroma, huggingface, text_splitters) are present
 RUN . .venv/bin/activate && uv pip install -e . \
     boto3 uvicorn starlette watchdog \
     torch sentence-transformers fastapi \
-    langchain langchain-community langchain-huggingface langchain-chroma requests beautifulsoup4
+    langchain langchain-community langchain-huggingface langchain-chroma langchain-text-splitters requests beautifulsoup4
 
 # Initialize Knowledge Base (downloads embedding model into Docker image)
 RUN . .venv/bin/activate && python3 scripts/init_knowledge_base.py
