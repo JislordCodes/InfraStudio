@@ -65,18 +65,7 @@ RUN /opt/blender/4.4/python/bin/python3.11 -m pip install --upgrade pip
 RUN /opt/blender/4.4/python/bin/python3.11 -m pip install ifcopenshell>=0.7.0 trimesh>=3.24.0 pillow>=10.0.0 numpy>=1.26.0
 
 # Install Bonsai Addon headlessly into Blender
-RUN cat << 'EOF' > install_addon.py
-import bpy
-import sys
-import os
-
-addon_path = "/opt/bonsai_addon.zip"
-bpy.ops.preferences.addon_install(filepath=addon_path)
-bpy.ops.preferences.addon_enable(module="bonsai")
-bpy.ops.wm.save_userpref()
-print("Bonsai Addon Installed successfully!")
-EOF
-RUN /opt/blender/blender -b -P install_addon.py
+RUN /opt/blender/blender -b --python-expr "import bpy; bpy.ops.preferences.addon_install(filepath='/opt/bonsai_addon.zip'); bpy.ops.preferences.addon_enable(module='bonsai'); bpy.ops.wm.save_userpref(); print('Bonsai Addon Installed')"
 
 # Create virtualenv early for layer caching
 RUN uv venv
