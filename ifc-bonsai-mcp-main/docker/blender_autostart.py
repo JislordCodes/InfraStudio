@@ -24,6 +24,14 @@ for _mod in _au.modules():  # type: ignore
         break
 
 try:
+    print("  [DEBUG] Attempting to enable 'bonsai' addon...")
+    _au.enable("bonsai", default_set=True, persistent=True)  # type: ignore
+    print("  [OK] bonsai addon enabled.")
+except Exception as e:
+    print(f"  [WARN] Could not enable bonsai addon: {e}")
+
+try:
+    print("  [DEBUG] Attempting to enable 'blendermcp' addon...")
     _au.enable("blendermcp", default_set=True, persistent=True)  # type: ignore
     print("  [OK] blendermcp addon enabled.")
 except Exception as e:

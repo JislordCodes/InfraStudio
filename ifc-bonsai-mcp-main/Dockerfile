@@ -59,6 +59,13 @@ RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VE
     rm /tmp/blender.tar.xz && \
     ln -s ${BLENDER_DIR}/blender /usr/local/bin/blender
 
+# ── Download and install Bonsai Addon (v0.8.0) ─────────────────────────────
+RUN wget -q https://github.com/IfcOpenShell/IfcOpenShell/releases/download/v0.8.0/bonsai-0.8.0-linux-py311.zip -O /tmp/bonsai.zip && \
+    mkdir -p ${BLENDER_DIR}/4.4/scripts/addons/bonsai && \
+    unzip -q /tmp/bonsai.zip -d /tmp/bonsai_unzip && \
+    cp -r /tmp/bonsai_unzip/* ${BLENDER_DIR}/4.4/scripts/addons/bonsai/ && \
+    rm -rf /tmp/bonsai.zip /tmp/bonsai_unzip
+
 # ── Install required packages into Blender's Python ────────────────────────
 ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
 RUN ${BLENDER_PYTHON} -m pip install --upgrade pip && \
@@ -89,7 +96,10 @@ EXPOSE 8080
 
 ENV HOST=0.0.0.0
 ENV PORT=8080
+ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/.cache/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/app/.cache/huggingface
 ENV BLENDER_MCP_HOST=127.0.0.1
 ENV BLENDER_MCP_PORT=9876
 ENV BLENDER_MCP_REMOTE_EMBEDDINGS_URL=http://127.0.0.1:9090/embeddings
