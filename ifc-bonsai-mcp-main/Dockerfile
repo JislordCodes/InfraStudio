@@ -59,8 +59,8 @@ RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VE
     rm /tmp/blender.tar.xz && \
     ln -s ${BLENDER_DIR}/blender /usr/local/bin/blender
 
-# ── Download and install Bonsai Addon (v0.8.0) ─────────────────────────────
-RUN wget -q https://github.com/IfcOpenShell/IfcOpenShell/releases/download/v0.8.0/bonsai-0.8.0-linux-py311.zip -O /tmp/bonsai.zip && \
+# ── Download and install Bonsai Addon (v0.8.5 alpha) ───────────────────────
+RUN wget -q https://github.com/IfcOpenShell/IfcOpenShell/releases/download/bonsai-0.8.5-alpha2603201233/bonsai_py311-0.8.5-alpha260320-linux-x64.zip -O /tmp/bonsai.zip && \
     mkdir -p ${BLENDER_DIR}/4.4/scripts/addons/bonsai && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_unzip && \
     cp -r /tmp/bonsai_unzip/* ${BLENDER_DIR}/4.4/scripts/addons/bonsai/ && \
