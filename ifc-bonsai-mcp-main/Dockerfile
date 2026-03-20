@@ -48,7 +48,8 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
         sentence-transformers \
         chromadb \
         fastapi \
-        uvicorn[standard]
+        uvicorn[standard] \
+        sse-starlette
 
 # ── Download and install Blender 4.4.3 ────────────────────────────────────
 ENV BLENDER_VERSION=4.4.3

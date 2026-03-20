@@ -46,3 +46,12 @@ try:
 except Exception:
     pass
 
+# Keep Blender alive in headless mode
+import time
+print("=== BlenderMCP is now running and keeping the process alive ===")
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("=== BlenderMCP shutting down ===")
+
