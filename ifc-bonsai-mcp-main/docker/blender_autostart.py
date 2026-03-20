@@ -11,11 +11,23 @@ This script:
 """
 
 import bpy
-import time
-import threading
 import sys
+import os
 
 print("=== BlenderMCP Autostart: initialising ===")
+
+# ── Ensure Blender can find the addon module ───────────────────────────────
+# The addon is installed as a folder named 'blendermcp' inside Blender's
+# scripts/addons directory. Add its PARENT to sys.path so we can import it.
+import addon_utils as _au
+for _mod in _au.modules():
+    if _mod.bl_info.get("name") == "Blender MCP":
+        _addon_dir = os.path.dirname(_mod.__file__)
+        _addons_parent = os.path.dirname(_addon_dir)
+        if _addons_parent not in sys.path:
+            sys.path.insert(0, _addons_parent)
+        print(f"  [INFO] blendermcp addon dir: {_addon_dir}")
+        break
 
 # ── Ensure addon is registered ─────────────────────────────────────────────
 try:
@@ -26,15 +38,17 @@ except Exception as e:
     print(f"  [WARN] Could not enable blendermcp addon: {e}")
 
 # ── Start the socket server ────────────────────────────────────────────────
+# The addon folder is named 'blendermcp' so its submodules are accessed as
+# blendermcp.core — NOT blender_addon.core.
 try:
-    from blender_addon.core import create_server_instance
+    from blendermcp.core import create_server_instance
     server = create_server_instance(port=9876)
     server.start()
     print("  [OK] BlenderMCP socket server started on port 9876.")
 except Exception as e:
-    print(f"  [WARN] Could not start BlenderMCP server via import: {e}")
+    print(f"  [WARN] Could not start BlenderMCP server via blendermcp.core: {e}")
 
-    # Fallback: try via bpy operator if registered
+    # Fallback: try via bpy operator if the addon registered one
     try:
         bpy.ops.blendermcp.start_server()
         print("  [OK] BlenderMCP server started via bpy operator.")
@@ -43,15 +57,13 @@ except Exception as e:
 
 print("=== BlenderMCP Autostart: running event loop ===")
 
-# ── Keep Blender alive with a minimal timer loop ───────────────────────────
-# Without this, Blender exits immediately in -b (background) mode after
-# running the Python script. We need it to stay alive so the socket server
-# keeps processing commands via bpy.app.timers.
+# ── Keep Blender alive with a persistent timer ─────────────────────────────
+# Without this, Blender exits immediately after the--python script returns
+# in -b mode. The timer keeps the event loop alive so bpy.app.timers and
+# the socket server thread can continue to process commands.
 def keep_alive():
-    """Keep Blender alive by re-scheduling itself every second."""
-    return 1.0  # return delay in seconds for next call
+    """Re-schedule itself every second to keep Blender's event loop running."""
+    return 1.0
 
 bpy.app.timers.register(keep_alive, first_interval=1.0, persistent=True)
-
-# Block the script from returning (Blender exits if the script returns in -b mode)
-print("  [OK] Timer registered. Blender will run indefinitely in background mode.")
+print("  [OK] Keep-alive timer registered. Blender running indefinitely in background.")
