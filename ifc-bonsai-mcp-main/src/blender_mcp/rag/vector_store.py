@@ -1,4 +1,4 @@
-"""
+﻿"""
 Vector store for IFC knowledge base using ChromaDB and LangChain.
 
 Offline-aware embedding loading:
@@ -26,15 +26,8 @@ try:
     from langchain_chroma import Chroma
 except ImportError:
     from langchain_community.vectorstores import Chroma
-try:
-    from langchain_core.documents import Document
-except ImportError:
-    from langchain.schema import Document
-
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from .document_parser import IFCDocumentParser
 
