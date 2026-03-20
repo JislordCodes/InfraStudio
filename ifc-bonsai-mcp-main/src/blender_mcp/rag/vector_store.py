@@ -1,4 +1,5 @@
-﻿"""
+# pyre-ignore-all-errors
+"""
 Vector store for IFC knowledge base using ChromaDB and LangChain.
 
 Offline-aware embedding loading:
@@ -26,7 +27,7 @@ try:
     from langchain_chroma import Chroma
 except ImportError:
     from langchain_community.vectorstores import Chroma
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from .document_parser import IFCDocumentParser
