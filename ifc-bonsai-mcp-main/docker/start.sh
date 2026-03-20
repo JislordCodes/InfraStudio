@@ -6,4 +6,4 @@ mkdir -p /app/.blender_config
 mkdir -p /tmp/ifc_files
 mkdir -p /var/log
 echo "=== Launching supervisord ==="
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+exec /usr/bin/supervisord -c /app/docker/supervisord.conf
