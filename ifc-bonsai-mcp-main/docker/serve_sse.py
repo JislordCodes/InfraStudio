@@ -44,46 +44,13 @@ except ImportError as e:
     logger.error(f'Failed to import tools: {e}')
 
 if __name__ == "__main__":
-    import uvicorn
-    # ── Phase 8.1: Explicit App Manifestation ────────────────────────────────
-    # App Runner REQUIRES binding to 0.0.0.0.
-    # FastMCP requires calling streamable_http_app() BEFORE accessing internal state.
-    app = None
-    
+    # ── Phase 8.4: Native MCP Entry Point ─────────────────────────────────────
+    # We use mcp.run() directly to ensure the SSE routes (/sse, /messages) 
+    # are correctly mounted and the server binds to 0.0.0.0:8000.
+    logger.info(f"Launching MCP SSE server on {MCP_HOST}:{MCP_PORT}...")
     try:
-        if hasattr(mcp, "streamable_http_app"):
-            logger.info("Calling mcp.streamable_http_app() to manifest ASGI app...")
-            app = mcp.streamable_http_app()
+        # Standard FastMCP entry point for SSE
+        mcp.run(transport='sse', host=MCP_HOST, port=MCP_PORT)
     except Exception as e:
-        logger.warning(f"Failed to call streamable_http_app: {e}")
-
-    if not app:
-        # Fallback to known attributes if call failed
-        for attr in ["starlette_app", "app", "_app"]:
-            if hasattr(mcp, attr):
-                app = getattr(mcp, attr)
-                logger.info(f"Using existing app attribute: {attr}")
-                break
-
-    if not app:
-        # Final desperate search via duck-typing (avoiding session_manager)
-        for attr in dir(mcp):
-            if attr in ("__init__", "session_manager"): continue
-            try:
-                val = getattr(mcp, attr)
-                if hasattr(val, "router") and hasattr(val, "add_event_handler"):
-                    app = val
-                    logger.info(f"Found MCP app via duck-typing: {attr}")
-                    break
-            except Exception:
-                continue
-
-    if app:
-        logger.info(f"Starting MCP SSE server on {MCP_HOST}:{MCP_PORT}")
-        uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
-    else:
-        logger.error("CRITICAL: Could not manifest Starlette app. Falling back to mcp.run().")
-        try:
-            mcp.run(transport='sse', host=MCP_HOST, port=MCP_PORT)
-        except TypeError:
-            mcp.run(transport='sse')
+        logger.error(f"Failed to start MCP server: {e}")
+        sys.exit(1)
