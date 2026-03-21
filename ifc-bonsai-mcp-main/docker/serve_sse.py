@@ -45,29 +45,35 @@ except ImportError as e:
 
 if __name__ == "__main__":
     import uvicorn
-    # ── Phase 7: Duck-Typing Discovery ──────────────────────────────────────
-    # We must find the Starlette/FastAPI instance regardless of its attribute name.
+    # ── Phase 8.1: Explicit App Manifestation ────────────────────────────────
     # App Runner REQUIRES binding to 0.0.0.0.
+    # FastMCP requires calling streamable_http_app() BEFORE accessing internal state.
     app = None
     
-    # 1. Check known attribute names first
-    for attr in ["starlette_app", "app", "_app"]:
-        if hasattr(mcp, attr):
-            app = getattr(mcp, attr)
-            logger.info(f"Found MCP app on known attribute: {attr}")
-            break
-            
-    # 2. If not found, scan all attributes for something that looks like an ASGI app
+    try:
+        if hasattr(mcp, "streamable_http_app"):
+            logger.info("Calling mcp.streamable_http_app() to manifest ASGI app...")
+            app = mcp.streamable_http_app()
+    except Exception as e:
+        logger.warning(f"Failed to call streamable_http_app: {e}")
+
     if not app:
-        logger.info(f"mcp attributes: {dir(mcp)}")
+        # Fallback to known attributes if call failed
+        for attr in ["starlette_app", "app", "_app"]:
+            if hasattr(mcp, attr):
+                app = getattr(mcp, attr)
+                logger.info(f"Using existing app attribute: {attr}")
+                break
+
+    if not app:
+        # Final desperate search via duck-typing (avoiding session_manager)
         for attr in dir(mcp):
-            if attr.startswith("__"): continue
+            if attr in ("__init__", "session_manager"): continue
             try:
                 val = getattr(mcp, attr)
-                # Starlette apps have 'router' and 'add_event_handler'
                 if hasattr(val, "router") and hasattr(val, "add_event_handler"):
                     app = val
-                    logger.info(f"Found MCP app via duck-typing on attribute: {attr}")
+                    logger.info(f"Found MCP app via duck-typing: {attr}")
                     break
             except Exception:
                 continue
@@ -76,11 +82,8 @@ if __name__ == "__main__":
         logger.info(f"Starting MCP SSE server on {MCP_HOST}:{MCP_PORT}")
         uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
     else:
-        logger.error("CRITICAL: Could not find Starlette app on FastMCP instance. Falling back to mcp.run().")
-        # Standardize fallback to bind to all interfaces if possible
-        # Early versions of FastMCP might not support these kwargs
+        logger.error("CRITICAL: Could not manifest Starlette app. Falling back to mcp.run().")
         try:
             mcp.run(transport='sse', host=MCP_HOST, port=MCP_PORT)
         except TypeError:
-            logger.warning("mcp.run() does not support host/port. Defaulting to 8000 on 127.0.0.1 (likely to fail health checks).")
             mcp.run(transport='sse')

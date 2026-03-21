@@ -61,14 +61,20 @@ RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VE
     ln -s ${BLENDER_DIR}/blender /usr/local/bin/blender
 
 # ── Download and install Bonsai Addon (v0.8.5 alpha) ───────────────────────
+# We use the official pre-compiled zip for the binaries (ifcopenshell, etc)
+# but we ALSO clone the repo to ensure the 'bonsai' addon sources are complete as per advice.
 RUN wget -q https://github.com/IfcOpenShell/IfcOpenShell/releases/download/bonsai-0.8.5-alpha2603201233/bonsai_py311-0.8.5-alpha260320-linux-x64.zip -O /tmp/bonsai.zip && \
     mkdir -p /tmp/bonsai_temp && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_temp/ && \
-    mkdir -p ${BLENDER_DIR}/4.4/scripts/addons && \
-    # Find the actual 'bonsai' package folder inside the zip (might be nested) and move it
-    BP=$(find /tmp/bonsai_temp -maxdepth 3 -name "__init__.py" | grep "bonsai/__init__.py" | head -n 1 | xargs dirname) && \
-    mv "$BP" ${BLENDER_DIR}/4.4/scripts/addons/bonsai && \
-    rm -rf /tmp/bonsai.zip /tmp/bonsai_temp
+    # Clone the source to get the perfect folder structure for the addon
+    git clone --depth 1 https://github.com/IfcOpenShell/IfcOpenShell.git /tmp/ifcos_repo && \
+    mkdir -p ${BLENDER_DIR}/4.4/scripts/addons/bonsai && \
+    # 1. Copy the addon source code from the repo (guarantees bim/ tool/ exist)
+    cp -r /tmp/ifcos_repo/src/bonsai/* ${BLENDER_DIR}/4.4/scripts/addons/bonsai/ && \
+    # 2. Find and copy the pre-compiled 'ifcopenshell' binary from the zip
+    IPDIR=$(find /tmp/bonsai_temp -type d -name "ifcopenshell" | head -n 1) && \
+    cp -r "$IPDIR" ${BLENDER_DIR}/4.4/scripts/addons/ && \
+    rm -rf /tmp/bonsai.zip /tmp/bonsai_temp /tmp/ifcos_repo
 
 # ── Install required packages into Blender's Python ────────────────────────
 ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
