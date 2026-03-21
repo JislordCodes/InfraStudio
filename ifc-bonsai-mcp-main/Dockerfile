@@ -63,7 +63,7 @@ RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VE
 ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
 RUN ${BLENDER_PYTHON} -m ensurepip && \
     ${BLENDER_PYTHON} -m pip install --upgrade pip && \
-    ${BLENDER_PYTHON} -m pip install --no-cache-dir ifcopenshell && \
+    ${BLENDER_PYTHON} -m pip install --no-cache-dir ifcopenshell bcf && \
     ${BLENDER_PYTHON} -m pip install \
         "trimesh>=3.24.0" \
         "pillow>=10.0.0" \

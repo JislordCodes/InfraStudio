@@ -43,14 +43,37 @@ try:
 except ImportError as e:
     logger.error(f'Failed to import tools: {e}')
 
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+from mcp.server.sse import SseServerTransport
+
+app = Starlette(
+    routes=[
+        Route("/ping", lambda r: JSONResponse({"status": "ok", "version": "8.8"}), methods=["GET", "HEAD"]),
+    ]
+)
+
+@app.on_event("startup")
+async def startup():
+    logger.info("Phase 8.8: Explicit Starlette Manifest starting...")
+
+async def handle_sse(request):
+    async with SseServerTransport("/messages") as transport:
+        await mcp.server.handle_sse(
+            transport.scope, transport.receive, transport.send, transport.endpoint
+        )
+
+# Explicitly mount MCP logic if needed or use the transport helper
+# Actually, FastMCP has a helper for this:
+stream_app = mcp.streamable_http_app()
+app.mount("/", stream_app)
+
 if __name__ == "__main__":
-    # ── Phase 8.4: Native MCP Entry Point ─────────────────────────────────────
-    # We use mcp.run() directly to ensure the SSE routes (/sse, /messages) 
-    # are correctly mounted and the server binds to 0.0.0.0:8000.
-    logger.info(f"Launching MCP SSE server on {MCP_HOST}:{MCP_PORT}...")
+    import uvicorn
+    logger.info(f"Phase 8.8: Starting Explicit SSE server on {MCP_HOST}:{MCP_PORT}")
     try:
-        # Standard FastMCP entry point for SSE
-        mcp.run(transport='sse', host=MCP_HOST, port=MCP_PORT)
+        uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
     except Exception as e:
         logger.error(f"Failed to start MCP server: {e}")
         sys.exit(1)
