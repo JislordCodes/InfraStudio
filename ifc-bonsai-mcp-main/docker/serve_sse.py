@@ -43,31 +43,20 @@ try:
 except ImportError as e:
     logger.error(f'Failed to import tools: {e}')
 
-from starlette.applications import Starlette
-from starlette.routing import Route
 from starlette.responses import JSONResponse
-from mcp.server.sse import SseServerTransport
 
-app = Starlette(
-    routes=[
-        Route("/ping", lambda r: JSONResponse({"status": "ok", "version": "8.8"}), methods=["GET", "HEAD"]),
-    ]
-)
+# Extract the native FastMCP Starlette application.
+# By mutating the native app instead of 'Mount'ing it, we perfectly preserve
+# the FastMCP internal ASGI lifecycle events required to initialize the SSE manager.
+app = mcp.streamable_http_app()
+
+# Bind the App Runner health check intrinsically
+app.add_route("/ping", lambda r: JSONResponse({"status": "ok", "version": "8.8.5"}), methods=["GET", "HEAD"])
 
 @app.on_event("startup")
 async def startup():
-    logger.info("Phase 8.8: Explicit Starlette Manifest starting...")
+    logger.info("Phase 8.8.5: Native FastMCP ASGI app started.")
 
-async def handle_sse(request):
-    async with SseServerTransport("/messages") as transport:
-        await mcp.server.handle_sse(
-            transport.scope, transport.receive, transport.send, transport.endpoint
-        )
-
-# Explicitly mount MCP logic if needed or use the transport helper
-# Actually, FastMCP has a helper for this:
-stream_app = mcp.streamable_http_app()
-app.mount("/", stream_app)
 
 if __name__ == "__main__":
     import uvicorn
