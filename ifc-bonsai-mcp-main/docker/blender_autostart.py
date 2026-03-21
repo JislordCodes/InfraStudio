@@ -42,10 +42,35 @@ import logging
 import time
 import os
 import sys
+import subprocess
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] blender: %(message)s')
+logger = logging.getLogger(__name__)
+
+def audit_filesystem():
+    try:
+        addons_path = os.path.join(os.environ.get('BLENDER_DIR', '/opt/blender-4.4.3-linux-x64'), '4.4', 'scripts', 'addons')
+        logger.info(f"=== Filesystem Audit: {addons_path} ===")
+        if os.path.exists(addons_path):
+            logger.info(f"Addons folder content: {os.listdir(addons_path)}")
+            bonsai_dir = os.path.join(addons_path, 'bonsai')
+            if os.path.exists(bonsai_dir):
+                logger.info(f"Bonsai folder content: {os.listdir(bonsai_dir)}")
+                # Check for bim folder
+                bim_dir = os.path.join(bonsai_dir, 'bim')
+                logger.info(f"Bonsai/bim exists: {os.path.exists(bim_dir)}")
+        logger.info("==========================================")
+    except Exception as e:
+        logger.error(f"Audit failed: {e}")
+
+audit_filesystem()
 
 # Standardize logs to stdout for App Runner/CloudWatch
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] blender: %(message)s')
-logger = logging.getLogger('blender_autostart')
+# The previous logging.basicConfig and logger = getLogger('blender_autostart') are now redundant
+# as they are handled by the new setup above.
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] blender: %(message)s')
+# logger = logging.getLogger('blender_autostart')
 
 # ── Phase 6: Path Hardening for Bonsai (v0.8.5+) ──────────────────────────
 # Ensure scripts/addons is in sys.path so sub-packages like 'bonsai.bim' can be found.

@@ -59,14 +59,18 @@ if __name__ == "__main__":
             
     # 2. If not found, scan all attributes for something that looks like an ASGI app
     if not app:
+        logger.info(f"mcp attributes: {dir(mcp)}")
         for attr in dir(mcp):
             if attr.startswith("__"): continue
-            val = getattr(mcp, attr)
-            # Starlette apps have 'router' and 'add_event_handler'
-            if hasattr(val, "router") and hasattr(val, "add_event_handler"):
-                app = val
-                logger.info(f"Found MCP app via duck-typing on attribute: {attr}")
-                break
+            try:
+                val = getattr(mcp, attr)
+                # Starlette apps have 'router' and 'add_event_handler'
+                if hasattr(val, "router") and hasattr(val, "add_event_handler"):
+                    app = val
+                    logger.info(f"Found MCP app via duck-typing on attribute: {attr}")
+                    break
+            except Exception:
+                continue
 
     if app:
         logger.info(f"Starting MCP SSE server on {MCP_HOST}:{MCP_PORT}")
