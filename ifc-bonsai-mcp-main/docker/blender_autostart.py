@@ -37,29 +37,53 @@ try:
 except Exception as e:
     print(f"  [WARN] Could not enable blendermcp addon: {e}")
 
-try:
-    from blendermcp.core import create_server_instance  # type: ignore
-    server = create_server_instance(port=9876)  # type: ignore
-    server.start()  # type: ignore
-    print("  [OK] BlenderMCP socket server started on port 9876.")
-except Exception as e:
-    print(f"  [WARN] Could not start BlenderMCP server: {e}")
+import addon_utils
+import logging
+import time
+import os
+import sys
 
-def keep_alive():
-    return 1.0
+# Standardize logs to stdout for App Runner/CloudWatch
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] blender: %(message)s')
+logger = logging.getLogger('blender_autostart')
 
-try:
-    if not bpy.app.timers.is_registered(keep_alive):  # type: ignore
-        bpy.app.timers.register(keep_alive, first_interval=1.0, persistent=True)  # type: ignore
-except Exception:
-    pass
+# ── Phase 6: Path Hardening for Bonsai (v0.8.5+) ──────────────────────────
+# Ensure scripts/addons is in sys.path so sub-packages like 'bonsai.bim' can be found.
+blender_dir = os.environ.get('BLENDER_DIR', '/opt/blender-4.4.3-linux-x64')
+addons_path = os.path.join(blender_dir, '4.4', 'scripts', 'addons')
+if addons_path not in sys.path:
+    sys.path.insert(0, addons_path)
+    logger.info(f"Added {addons_path} to sys.path")
+
+logger.info("Starting Blender internal autostart script...")
+
+def enable_addons():
+    try:
+        # Bonsai v0.8.5 alpha requires special treatment
+        logger.info("Enabling bonsai addon...")
+        res = addon_utils.enable("bonsai", default_set=True)
+        if res:
+            logger.info("Bonsai addon enabled successfully")
+        else:
+            logger.error("Failed to enable bonsai addon (returned None/False)")
+
+        logger.info("Enabling blendermcp addon...")
+        res = addon_utils.enable("blendermcp", default_set=True)
+        if res:
+            logger.info("BlenderMCP addon enabled successfully")
+        else:
+            logger.error("Failed to enable blendermcp addon")
+            
+    except Exception as e:
+        logger.error(f"Error enabling addons: {str(e)}", exc_info=True)
+
+# Run activation
+enable_addons()
 
 # Keep Blender alive in headless mode
-import time
 print("=== BlenderMCP is now running and keeping the process alive ===")
 try:
     while True:
-        time.sleep(1)
+        time.sleep(3600)
 except KeyboardInterrupt:
     print("=== BlenderMCP shutting down ===")
-

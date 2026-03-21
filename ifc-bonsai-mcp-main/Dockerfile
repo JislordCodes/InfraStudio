@@ -7,7 +7,7 @@
 #   - MCP SSE Server  (FastMCP + all IFC tools)               → HTTP on 8080
 #
 # All three processes are managed by supervisord.
-# App Runner routes HTTPS traffic → port 8080 (MCP SSE Server).
+# App Runner routes HTTPS traffic → port 8000 (MCP SSE Server).
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.11-slim
@@ -53,7 +53,7 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
 
 # ── Download and install Blender 4.4.3 ────────────────────────────────────
 ENV BLENDER_VERSION=4.4.3
-ENV PORT=8080
+ENV PORT=8000
 ENV BLENDER_DIR=/opt/blender-${BLENDER_VERSION}-linux-x64
 RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz && \
     tar -xf /tmp/blender.tar.xz -C /opt/ && \

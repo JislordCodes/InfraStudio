@@ -19,7 +19,7 @@ BLENDER_HOST = os.environ.get('BLENDER_MCP_HOST', '127.0.0.1')
 BLENDER_PORT = int(os.environ.get('BLENDER_MCP_PORT', '9876'))
 BLENDER_WAIT_SECONDS = int(os.environ.get('BLENDER_WAIT_SECONDS', '120'))
 MCP_HOST = os.environ.get('HOST', '0.0.0.0')
-MCP_PORT = int(os.environ.get('PORT', '8080'))
+MCP_PORT = int(os.environ.get('PORT', '8000'))
 
 def wait_for_blender(host, port, timeout):
     deadline = time.time() + timeout
