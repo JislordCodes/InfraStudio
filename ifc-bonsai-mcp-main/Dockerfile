@@ -53,42 +53,39 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
 
 # ── Download and install Blender 4.4.3 ────────────────────────────────────
 ENV BLENDER_VERSION=4.4.3
-ENV PORT=8000
 ENV BLENDER_DIR=/opt/blender-${BLENDER_VERSION}-linux-x64
 RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz && \
     tar -xf /tmp/blender.tar.xz -C /opt/ && \
     rm /tmp/blender.tar.xz && \
     ln -s ${BLENDER_DIR}/blender /usr/local/bin/blender
 
-# ── Install Bonsai Addon and IfcOpenShell Core ────────────────────────────
-# 1. Clone the addon sources for the perfect folder structure (bim/, tool/, etc.)
-RUN git clone --depth 1 https://github.com/IfcOpenShell/IfcOpenShell.git /tmp/ifcos_repo && \
-    mkdir -p ${BLENDER_DIR}/4.4/scripts/addons/bonsai && \
-    cp -r /tmp/ifcos_repo/src/bonsai/* ${BLENDER_DIR}/4.4/scripts/addons/bonsai/ && \
-    rm -rf /tmp/ifcos_repo
-
-# 2. Install the compiled C++ core library directly into Blender's Python
-# This ensures binary compatibility and resolves all ModuleNotFoundError issues.
-ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
-RUN ${BLENDER_PYTHON} -m ensurepip && \
-    ${BLENDER_PYTHON} -m pip install --no-cache-dir ifcopenshell
-
 # ── Install required packages into Blender's Python ────────────────────────
 ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
-RUN ${BLENDER_PYTHON} -m pip install --upgrade pip && \
+RUN ${BLENDER_PYTHON} -m ensurepip && \
+    ${BLENDER_PYTHON} -m pip install --upgrade pip && \
+    ${BLENDER_PYTHON} -m pip install --no-cache-dir ifcopenshell && \
     ${BLENDER_PYTHON} -m pip install \
-        "ifcopenshell>=0.7.0" \
         "trimesh>=3.24.0" \
         "pillow>=10.0.0" \
         "numpy>=1.26.0"
 
-# ── Install the Blender addon (blendermcp) ────────────────────────────────
+# ── Phase 8.5: Surgical BIM Engine (Bonsai 0.8.5 Alpha) ─────────────────────
+# We use the official release ZIP for completeness but surgically flatten the folder structure.
+ARG BONSAI_ZIP_URL="https://github.com/IfcOpenShell/IfcOpenShell/releases/download/v0.8.0/bonsai_py311-0.8.5-alpha260320-linux-x64.zip"
 ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/4.4/scripts/addons
-RUN zip -r /tmp/blendermcp.zip blender_addon/ && \
-    mkdir -p ${BLENDER_ADDONS_DIR}/blendermcp && \
-    unzip -q /tmp/blendermcp.zip -d /tmp/blendermcp_unzip && \
-    cp -r /tmp/blendermcp_unzip/blender_addon/* ${BLENDER_ADDONS_DIR}/blendermcp/ && \
-    rm -rf /tmp/blendermcp.zip /tmp/blendermcp_unzip
+
+RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
+    wget -qO /tmp/bonsai.zip "${BONSAI_ZIP_URL}" && \
+    mkdir -p /tmp/bonsai_ext && \
+    unzip -q /tmp/bonsai.zip -d /tmp/bonsai_ext && \
+    # Find the real 'bonsai' package folder and move it
+    BONSAI_SRC=$(find /tmp/bonsai_ext -name "bonsai" -type d -print -quit) && \
+    mv -f "${BONSAI_SRC}" ${BLENDER_ADDONS_DIR}/ && \
+    rm -rf /tmp/bonsai.zip /tmp/bonsai_ext
+
+# ── Install the Blender addon (blendermcp) ────────────────────────────────
+RUN mkdir -p ${BLENDER_ADDONS_DIR}/blendermcp && \
+    cp -r /app/blender_addon/* ${BLENDER_ADDONS_DIR}/blendermcp/
 
 # ── Pre-build the RAG knowledge base ──────────────────────────────────────
 ENV PYTHONPATH=/app/src
@@ -99,10 +96,10 @@ RUN python scripts/init_knowledge_base.py \
 
 # ── Setup Runtime ──────────────────────────────────────────────────────────
 RUN chmod +x /app/docker/start.sh
-EXPOSE 8080
+EXPOSE 8000
 
 ENV HOST=0.0.0.0
-ENV PORT=8080
+ENV PORT=8000
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/app/.cache/huggingface
