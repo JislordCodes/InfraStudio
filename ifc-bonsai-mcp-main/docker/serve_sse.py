@@ -43,4 +43,7 @@ try:
 except ImportError as e:
     logger.error(f'Failed to import tools: {e}')
 
-mcp.run(transport='sse', host=MCP_HOST, port=MCP_PORT)
+if __name__ == "__main__":
+    import uvicorn
+    # When using SSE, FastMCP provides a Starlette 'app' object
+    uvicorn.run(mcp.app, host=MCP_HOST, port=MCP_PORT)

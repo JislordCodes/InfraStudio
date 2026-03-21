@@ -61,10 +61,9 @@ RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VE
 
 # ── Download and install Bonsai Addon (v0.8.5 alpha) ───────────────────────
 RUN wget -q https://github.com/IfcOpenShell/IfcOpenShell/releases/download/bonsai-0.8.5-alpha2603201233/bonsai_py311-0.8.5-alpha260320-linux-x64.zip -O /tmp/bonsai.zip && \
-    mkdir -p ${BLENDER_DIR}/4.4/scripts/addons/bonsai && \
-    unzip -q /tmp/bonsai.zip -d /tmp/bonsai_unzip && \
-    cp -r /tmp/bonsai_unzip/* ${BLENDER_DIR}/4.4/scripts/addons/bonsai/ && \
-    rm -rf /tmp/bonsai.zip /tmp/bonsai_unzip
+    mkdir -p ${BLENDER_DIR}/4.4/scripts/addons && \
+    unzip -q /tmp/bonsai.zip -d ${BLENDER_DIR}/4.4/scripts/addons/ && \
+    rm -rf /tmp/bonsai.zip
 
 # ── Install required packages into Blender's Python ────────────────────────
 ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
