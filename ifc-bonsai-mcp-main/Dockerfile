@@ -69,14 +69,16 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
         "pillow>=10.0.0" \
         "numpy>=1.26.0"
 
-# ── Phase 8.6: Complete BIM Engine Sync (Bonsai 0.8.5 Alpha) ────────────────
-# We extract ALL top-level packages from the release ZIP (bonsai, bcf, etc.)
-# to ensure the internal cross-imports (like 'import bcf') work correctly.
-ARG BONSAI_ZIP_URL="https://github.com/IfcOpenShell/IfcOpenShell/releases/download/v0.8.0/bonsai_py311-0.8.5-alpha260320-linux-x64.zip"
+# ── Phase 8.8.3: Dynamic Autonomous Bonsai Sync (Latest release) ────────────
+# We dynamically scrape the latest daily alpha from GitHub Releases to prevent 404s
+# and extract ALL top-level packages to satisfy internal imports.
 ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/4.4/scripts/addons
 
 RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
-    wget -qO /tmp/bonsai.zip "${BONSAI_ZIP_URL}" && \
+    export BONSAI_PATH=$(curl -sL https://github.com/IfcOpenShell/IfcOpenShell/releases | grep -o '/IfcOpenShell/IfcOpenShell/releases/download/[^"]*bonsai_py311[^"]*linux-x64\.zip' | head -n 1) && \
+    export BONSAI_ZIP_URL="https://github.com${BONSAI_PATH}" && \
+    echo "Resolving Bonsai zip: $BONSAI_ZIP_URL" && \
+    wget -qO /tmp/bonsai.zip "$BONSAI_ZIP_URL" && \
     mkdir -p /tmp/bonsai_ext && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_ext && \
     # Move all top-level directories from the extraction (likely includes bonsai, bcf, bim)
