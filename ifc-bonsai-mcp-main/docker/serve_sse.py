@@ -45,17 +45,38 @@ except ImportError as e:
 
 if __name__ == "__main__":
     import uvicorn
-    # Robustly find the Starlette app on the FastMCP instance
+    # ── Phase 7: Duck-Typing Discovery ──────────────────────────────────────
+    # We must find the Starlette/FastAPI instance regardless of its attribute name.
+    # App Runner REQUIRES binding to 0.0.0.0.
     app = None
+    
+    # 1. Check known attribute names first
     for attr in ["starlette_app", "app", "_app"]:
         if hasattr(mcp, attr):
             app = getattr(mcp, attr)
-            logger.info(f"Found MCP app on attribute: {attr}")
+            logger.info(f"Found MCP app on known attribute: {attr}")
             break
-    
+            
+    # 2. If not found, scan all attributes for something that looks like an ASGI app
+    if not app:
+        for attr in dir(mcp):
+            if attr.startswith("__"): continue
+            val = getattr(mcp, attr)
+            # Starlette apps have 'router' and 'add_event_handler'
+            if hasattr(val, "router") and hasattr(val, "add_event_handler"):
+                app = val
+                logger.info(f"Found MCP app via duck-typing on attribute: {attr}")
+                break
+
     if app:
+        logger.info(f"Starting MCP SSE server on {MCP_HOST}:{MCP_PORT}")
         uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
     else:
-        logger.warning("Could not find Starlette app on FastMCP, falling back to default run()")
-        # Fallback might use port 8000 by default
-        mcp.run(transport='sse')
+        logger.error("CRITICAL: Could not find Starlette app on FastMCP instance. Falling back to mcp.run().")
+        # Standardize fallback to bind to all interfaces if possible
+        # Early versions of FastMCP might not support these kwargs
+        try:
+            mcp.run(transport='sse', host=MCP_HOST, port=MCP_PORT)
+        except TypeError:
+            logger.warning("mcp.run() does not support host/port. Defaulting to 8000 on 127.0.0.1 (likely to fail health checks).")
+            mcp.run(transport='sse')
