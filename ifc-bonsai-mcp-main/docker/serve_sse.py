@@ -45,5 +45,17 @@ except ImportError as e:
 
 if __name__ == "__main__":
     import uvicorn
-    # When using SSE, FastMCP provides a Starlette 'app' object
-    uvicorn.run(mcp.app, host=MCP_HOST, port=MCP_PORT)
+    # Robustly find the Starlette app on the FastMCP instance
+    app = None
+    for attr in ["starlette_app", "app", "_app"]:
+        if hasattr(mcp, attr):
+            app = getattr(mcp, attr)
+            logger.info(f"Found MCP app on attribute: {attr}")
+            break
+    
+    if app:
+        uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
+    else:
+        logger.warning("Could not find Starlette app on FastMCP, falling back to default run()")
+        # Fallback might use port 8000 by default
+        mcp.run(transport='sse')
