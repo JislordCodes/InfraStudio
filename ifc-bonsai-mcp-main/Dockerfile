@@ -75,8 +75,7 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
 ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/4.4/scripts/addons
 
 RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
-    export BONSAI_PATH=$(curl -sL https://github.com/IfcOpenShell/IfcOpenShell/releases | grep -o '/IfcOpenShell/IfcOpenShell/releases/download/[^"]*bonsai_py311[^"]*linux-x64\.zip' | head -n 1) && \
-    export BONSAI_ZIP_URL="https://github.com${BONSAI_PATH}" && \
+    export BONSAI_ZIP_URL=$(curl -sL https://api.github.com/repos/IfcOpenShell/IfcOpenShell/releases | grep -o '"browser_download_url": "[^"]*bonsai_py311[^"]*linux-x64\.zip"' | head -n 1 | cut -d '"' -f 4) && \
     echo "Resolving Bonsai zip: $BONSAI_ZIP_URL" && \
     wget -qO /tmp/bonsai.zip "$BONSAI_ZIP_URL" && \
     mkdir -p /tmp/bonsai_ext && \
