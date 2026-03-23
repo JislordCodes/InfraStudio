@@ -57,6 +57,16 @@ def register():
         default=False
     )
 
+    # Auto-start socket server in headless/cloud mode (no UI available)
+    import os
+    port = int(os.environ.get("BLENDER_MCP_PORT", "9876"))
+    try:
+        server = core.create_server_instance(port=port)
+        server.start()
+        print(f"[BlenderMCP] Auto-started socket server on port {port}")
+    except Exception as e:
+        print(f"[BlenderMCP] WARNING: Could not auto-start socket server: {e}")
+
 def unregister():
     """Unregister the addon and its components from Blender"""
     server_instance = core.get_server_instance()
