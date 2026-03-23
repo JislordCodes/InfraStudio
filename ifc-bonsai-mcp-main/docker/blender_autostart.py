@@ -81,43 +81,51 @@ def enable_addons():
 # Run activation
 enable_addons()
 
-# ── Ensure the socket server is running ─────────────────────────────────────
-# The addon's register() already auto-starts it, but we add a timer-based
-# fallback here in case Blender's event loop hadn't fully initialised yet.
-def ensure_socket_server_running():
-    """Called via bpy.app.timers after Blender event loop is live."""
-    import os
-    try:
-        # Check if already running (auto-started in register())
-        from blendermcp import core as _core
-        srv = _core.get_server_instance()
-        if srv and srv.running:
-            logger.info("BlenderMCP socket server already running (auto-start succeeded).")
-            return None  # timer fires once only
-
-        # Not running yet — try the operator first (works in background too)
-        try:
-            import bpy as _bpy
-            _bpy.ops.blendermcp.start_server()
-            logger.info("BlenderMCP socket server started via operator.")
-        except Exception as op_err:
-            logger.warning(f"Operator start failed ({op_err}), trying direct core start...")
-            port = int(os.environ.get("BLENDER_MCP_PORT", "9876"))
-            srv = _core.create_server_instance(port=port)
-            srv.start()
-            logger.info(f"BlenderMCP socket server started directly on port {port}.")
-    except Exception as e:
-        logger.error(f"Could not ensure socket server is running: {e}", exc_info=True)
-    return None  # do not repeat timer
-
+# ── Ensure the socket server is running and intercept timers ───────────────
+import queue
 import bpy
-bpy.app.timers.register(ensure_socket_server_running, first_interval=3.0)
-logger.info("Registered socket-server ensure timer (fires in 3s).")
 
-# Keep Blender alive in headless mode
-logger.info("Blender is now running and keeping the process alive for MCP requests.")
+_mcp_queue = queue.Queue()
+_original_register = bpy.app.timers.register
+
+def custom_register(func, first_interval=0.0, persistent=False):
+    """Intercept timer registrations so we can process them in our blocking loop."""
+    _mcp_queue.put((func, time.time() + first_interval))
+    return first_interval
+
+bpy.app.timers.register = custom_register
+logger.info("Intercepted bpy.app.timers.register to allow headless execution.")
+
+# Start the socket server directly (since we bypassed the normal timers)
+try:
+    from blendermcp import core as _core
+    port = int(os.environ.get("BLENDER_MCP_PORT", "9876"))
+    srv = _core.create_server_instance(port=port)
+    srv.start()
+    logger.info(f"BlenderMCP socket server started directly on port {port}.")
+except Exception as e:
+    logger.error(f"Could not start socket server: {e}", exc_info=True)
+
+# Keep Blender alive in headless mode AND process tasks
+logger.info("Blender is now running custom headless event pump for MCP requests.")
 try:
     while True:
-        time.sleep(3600)
+        try:
+            func, exec_time = _mcp_queue.get(timeout=0.1)
+            current_time = time.time()
+            if current_time >= exec_time:
+                try:
+                    res = func()
+                    # If timer returns a number, it wants to run again after that delay
+                    if isinstance(res, (int, float)) and res > 0:
+                        _mcp_queue.put((func, time.time() + res))
+                except Exception as e:
+                    logger.error(f"Timer execution failed: {e}", exc_info=True)
+            else:
+                # Not ready yet, put it back
+                _mcp_queue.put((func, exec_time))
+                time.sleep(0.05)
+        except queue.Empty:
+            pass
 except KeyboardInterrupt:
     logger.info("Blender process received shutdown signal.")
