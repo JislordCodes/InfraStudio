@@ -58,6 +58,7 @@ from . import root
 from . import system
 from . import code
 from . import stairs
+from . import project
 
 from .wall import create_wall, update_wall, get_wall_properties
 from .window import create_window, update_window, get_window_properties, get_window_partition_types
@@ -71,4 +72,5 @@ from .scene import get_scene_info, get_blender_object_info, get_selected_objects
 from .system import list_commands
 from .code import execute_code, ping, execute_ifc_code
 from .root import copy_class, reassign_class, delete_ifc_objects
+from .project import initialize_project
 from .feature import get_opening_types, create_opening, fill_opening, remove_opening, remove_filling, get_element_openings, get_opening_info
