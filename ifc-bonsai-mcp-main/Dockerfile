@@ -93,7 +93,8 @@ RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     echo "=== Step 2 done — main bonsai subpackages merged ===" && \
     # Step 3: Install ALL wheels (including dependencies like 'bcf' and 'ifcopenshell')
     # into Blender's own Python interpreter so they are available as platform libraries.
-    ${BLENDER_PYTHON} -m pip install --no-index --find-links=/tmp/bonsai_ext/bonsai/wheels /tmp/bonsai_ext/bonsai/wheels/*.whl && \
+    # We remove --no-index to allow fetching missing secondary dependencies (like pydantic) from PyPI.
+    ${BLENDER_PYTHON} -m pip install --find-links=/tmp/bonsai_ext/bonsai/wheels /tmp/bonsai_ext/bonsai/wheels/*.whl && \
     echo "=== Step 3 done — dependencies installed via pip ===" && \
     ls ${BLENDER_ADDONS_DIR}/bonsai/ && \
     rm -rf /tmp/bonsai.zip /tmp/bonsai_ext /tmp/bonsai_wheel_ext
