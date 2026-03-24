@@ -13,11 +13,17 @@ from typing import List, Optional, Any, Dict
 
 
 def get_ifc_file():
-    """Get current IFC file."""
+    """Get current IFC file. Auto-initializes a project if none is open."""
     import bonsai.tool as tool
     ifc = tool.Ifc.get()
     if not ifc:
-        raise RuntimeError("No IFC file open")
+        # Avoid circular import at top level
+        from .project import initialize_project
+        print("No IFC project found. Auto-initializing default project...")
+        initialize_project(project_name="Auto-Initialized Project")
+        ifc = tool.Ifc.get()
+        if not ifc:
+            raise RuntimeError("No IFC file open and auto-initialization failed")
     return ifc
 
 
