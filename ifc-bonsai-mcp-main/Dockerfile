@@ -75,22 +75,21 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
 ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/4.4/scripts/addons
 
 RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
-    apt-get install -y --no-install-recommends rsync && \
     export BONSAI_ZIP_URL=$(curl -sL https://api.github.com/repos/IfcOpenShell/IfcOpenShell/releases | grep -o '"browser_download_url": "[^"]*bonsai_py311[^"]*linux-x64\.zip"' | head -n 1 | cut -d '"' -f 4) && \
     echo "Resolving Bonsai zip: $BONSAI_ZIP_URL" && \
     wget -qO /tmp/bonsai.zip "$BONSAI_ZIP_URL" && \
     mkdir -p /tmp/bonsai_ext && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_ext && \
-    echo "=== Bonsai zip contents ==" && ls -la /tmp/bonsai_ext/ && \
-    # The zip contains a 'bonsai/' folder. Copy its CONTENTS (recursively) so that
-    # bonsai.bim, bonsai.tool etc are all present inside ${BLENDER_ADDONS_DIR}/bonsai/
+    echo "=== Bonsai zip top-level ===" && ls /tmp/bonsai_ext/ && \
+    # If the zip has a top-level 'bonsai' folder, copy its contents INTO addons/bonsai/
+    # so that bonsai.bim, bonsai.tool etc. resolve correctly.
     if [ -d /tmp/bonsai_ext/bonsai ]; then \
       mkdir -p ${BLENDER_ADDONS_DIR}/bonsai && \
-      rsync -a /tmp/bonsai_ext/bonsai/ ${BLENDER_ADDONS_DIR}/bonsai/ && \
-      echo "Copied bonsai via rsync"; \
+      cp -r /tmp/bonsai_ext/bonsai/. ${BLENDER_ADDONS_DIR}/bonsai/ && \
+      echo "Done: copied bonsai/* into addons/bonsai/"; \
     else \
-      find /tmp/bonsai_ext -maxdepth 2 -mindepth 1 -type d -exec cp -r {} ${BLENDER_ADDONS_DIR}/ \; && \
-      echo "Copied top-level dirs"; \
+      find /tmp/bonsai_ext -maxdepth 1 -mindepth 1 -type d -exec cp -r {} ${BLENDER_ADDONS_DIR}/ \; && \
+      echo "Done: copied top-level dirs"; \
     fi && \
     rm -rf /tmp/bonsai.zip /tmp/bonsai_ext
 
