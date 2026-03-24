@@ -81,16 +81,15 @@ RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     mkdir -p /tmp/bonsai_ext && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_ext && \
     echo "=== Bonsai zip top-level ===" && ls /tmp/bonsai_ext/ && \
-    # If the zip has a top-level 'bonsai' folder, copy its contents INTO addons/bonsai/
-    # so that bonsai.bim, bonsai.tool etc. resolve correctly.
-    if [ -d /tmp/bonsai_ext/bonsai ]; then \
-      mkdir -p ${BLENDER_ADDONS_DIR}/bonsai && \
-      cp -r /tmp/bonsai_ext/bonsai/. ${BLENDER_ADDONS_DIR}/bonsai/ && \
-      echo "Done: copied bonsai/* into addons/bonsai/"; \
-    else \
-      find /tmp/bonsai_ext -maxdepth 1 -mindepth 1 -type d -exec cp -r {} ${BLENDER_ADDONS_DIR}/ \; && \
-      echo "Done: copied top-level dirs"; \
-    fi && \
+    # Step 1: Copy the bonsai addon folder (metadata + __init__.py) to addons dir
+    mkdir -p ${BLENDER_ADDONS_DIR}/bonsai && \
+    cp -r /tmp/bonsai_ext/bonsai/. ${BLENDER_ADDONS_DIR}/bonsai/ && \
+    echo "=== Bonsai addon files ===" && ls ${BLENDER_ADDONS_DIR}/bonsai/ && \
+    # Step 2: Install ALL wheels (including bonsai-*.whl which provides bonsai.bim etc.)
+    # into Blender's own Python interpreter so they are importable at runtime.
+    echo "=== Installing bonsai wheels into Blender Python ===" && \
+    ${BLENDER_PYTHON} -m pip install --no-index --find-links=/tmp/bonsai_ext/bonsai/wheels /tmp/bonsai_ext/bonsai/wheels/bonsai-*.whl && \
+    echo "=== Done installing wheels ===" && \
     rm -rf /tmp/bonsai.zip /tmp/bonsai_ext
 
 # ── Install the Blender addon (blendermcp) ────────────────────────────────
