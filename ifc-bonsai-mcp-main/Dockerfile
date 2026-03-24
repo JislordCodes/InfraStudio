@@ -80,17 +80,20 @@ RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     wget -qO /tmp/bonsai.zip "$BONSAI_ZIP_URL" && \
     mkdir -p /tmp/bonsai_ext && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_ext && \
-    echo "=== Bonsai zip top-level ===" && ls /tmp/bonsai_ext/ && \
-    # Step 1: Copy the bonsai addon folder (metadata + __init__.py) to addons dir
+    # Step 1: Copy the addon outer folder into addons dir
     mkdir -p ${BLENDER_ADDONS_DIR}/bonsai && \
     cp -r /tmp/bonsai_ext/bonsai/. ${BLENDER_ADDONS_DIR}/bonsai/ && \
-    echo "=== Bonsai addon files ===" && ls ${BLENDER_ADDONS_DIR}/bonsai/ && \
-    # Step 2: Install ALL wheels (including bonsai-*.whl which provides bonsai.bim etc.)
-    # into Blender's own Python interpreter so they are importable at runtime.
-    echo "=== Installing bonsai wheels into Blender Python ===" && \
-    ${BLENDER_PYTHON} -m pip install --no-index --find-links=/tmp/bonsai_ext/bonsai/wheels /tmp/bonsai_ext/bonsai/wheels/bonsai-*.whl && \
-    echo "=== Done installing wheels ===" && \
-    rm -rf /tmp/bonsai.zip /tmp/bonsai_ext
+    echo "=== Step 1 done — addon META files in place ===" && \
+    # Step 2: The bonsai.whl (inside wheels/) contains bonsai/bim, bonsai/tool, bonsai/core etc.
+    # Wheels are zip files. Unzip it and merge bonsai/* into the addons/bonsai dir so that
+    # 'import bonsai.bim' resolves from the addons dir (which takes priority over site-packages).
+    mkdir -p /tmp/bonsai_wheel_ext && \
+    unzip -q /tmp/bonsai_ext/bonsai/wheels/bonsai-*.whl -d /tmp/bonsai_wheel_ext && \
+    echo "=== Bonsai wheel top-level ===" && ls /tmp/bonsai_wheel_ext/ && \
+    cp -rn /tmp/bonsai_wheel_ext/bonsai/. ${BLENDER_ADDONS_DIR}/bonsai/ && \
+    echo "=== Step 2 done — bonsai subpackages merged ===" && \
+    ls ${BLENDER_ADDONS_DIR}/bonsai/ && \
+    rm -rf /tmp/bonsai.zip /tmp/bonsai_ext /tmp/bonsai_wheel_ext
 
 # ── Install the Blender addon (blendermcp) ────────────────────────────────
 RUN mkdir -p ${BLENDER_ADDONS_DIR}/blendermcp && \

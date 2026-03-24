@@ -1,4 +1,4 @@
-"""
+﻿"""
 Scene-related functions for the IFC Bonsai MCP addon.
 Simple Blender-only operations for scene information.
 
@@ -12,13 +12,22 @@ import mathutils
 import traceback
 from . import register_command
 from typing import List, Optional, Dict, Any, Union
-from bonsai import tool
 import ifcopenshell
 import ifcopenshell.util.element
 try:
     import ifcopenshell.util.unit as ifc_unit
 except Exception:
     ifc_unit = None
+
+# Lazy import â€“ bonsai.tool is a subpackage that may not be available until
+# bonsai registers itself in Blender. Defer to first use to avoid a top-level
+# ImportError that would stop blendermcp from loading at all.
+def _get_bonsai_tool():
+    try:
+        from bonsai import tool as _tool
+        return _tool
+    except Exception:
+        return None
 
 
 @register_command('get_scene_info', description="Get basic information about the current Blender scene.")
@@ -65,7 +74,7 @@ def get_scene_info(
                 "selected": obj.select_get()
             }
             
-            element = tool.Ifc.get_entity(obj)
+            element = _get_bonsai_tool().Ifc.get_entity(obj)
             if element:
                 obj_info["guid"] = getattr(element, 'GlobalId', None)
                 obj_info["ifc_class"] = element.is_a()
@@ -182,7 +191,7 @@ def get_selected_objects() -> Dict[str, Any]:
                 "type": obj.type
             }
             
-            element = tool.Ifc.get_entity(obj)
+            element = _get_bonsai_tool().Ifc.get_entity(obj)
             if element:
                 obj_info["guid"] = getattr(element, 'GlobalId', None)
                 obj_info["ifc_class"] = element.is_a()
@@ -212,7 +221,7 @@ def get_object_info(
     if isinstance(guids, str):
         guids = [guids]
     
-    ifc_file = tool.Ifc.get()
+    ifc_file = _get_bonsai_tool().Ifc.get()
     if not ifc_file:
         return {"success": False, "error": "No IFC file loaded"}
     
@@ -347,12 +356,12 @@ def get_object_info(
         return info
     
     if use_selection or not guids:
-        selected_objs = tool.Blender.get_selected_objects()
+        selected_objs = _get_bonsai_tool().Blender.get_selected_objects()
         if not selected_objs:
             return {"success": False, "error": "No objects selected", "objects": []}
         
         for obj in selected_objs:
-            element = tool.Ifc.get_entity(obj)
+            element = _get_bonsai_tool().Ifc.get_entity(obj)
             if element:
                 objects_info.append(extract_object_info(element, obj, detailed))
             else:
@@ -363,7 +372,7 @@ def get_object_info(
             try:
                 element = ifc_file.by_guid(guid)
                 if element:
-                    obj = tool.Ifc.get_object(element)
+                    obj = _get_bonsai_tool().Ifc.get_object(element)
                     objects_info.append(extract_object_info(element, obj, detailed))
                 else:
                     errors.append(f"GUID {guid} not found")
@@ -381,7 +390,7 @@ def get_object_info(
 @register_command('get_ifc_scene_overview', description='Get comprehensive IFC scene overview')
 def get_ifc_scene_overview(include_selection_summary: bool = False) -> Dict[str, Any]:
     """Return consolidated overview of the loaded IFC scene."""
-    ifc_file = tool.Ifc.get()
+    ifc_file = _get_bonsai_tool().Ifc.get()
     if not ifc_file:
         return {"success": False, "error": "No IFC file loaded"}
 
@@ -488,7 +497,7 @@ def get_ifc_scene_overview(include_selection_summary: bool = False) -> Dict[str,
 
     if include_selection_summary:
         try:
-            selected_objs = tool.Blender.get_selected_objects()
+            selected_objs = _get_bonsai_tool().Blender.get_selected_objects()
             if not selected_objs:
                 overview["selection_summary"] = {"success": False, "error": "No objects selected", "count": 0}
             else:
@@ -502,7 +511,7 @@ def get_ifc_scene_overview(include_selection_summary: bool = False) -> Dict[str,
                 }
                 
                 for obj in selected_objs:
-                    element = tool.Ifc.get_entity(obj)
+                    element = _get_bonsai_tool().Ifc.get_entity(obj)
                     if element:
                         summary["ifc_objects"] += 1
                         ifc_class = element.is_a()
