@@ -60,14 +60,17 @@ except ImportError as e:
 # Extract the native FastMCP Starlette application.
 # By mutating the native app instead of 'Mount'ing it, we perfectly preserve
 # the FastMCP internal ASGI lifecycle events required to initialize the SSE manager.
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    logger.info("Phase 8.8.5: Native FastMCP ASGI app started.")
+    yield
+
 app = mcp.streamable_http_app()
 
 # Bind the App Runner health check intrinsically
 app.add_route("/ping", lambda r: JSONResponse({"status": "ok", "version": "8.8.5"}), methods=["GET", "HEAD"])
-
-@app.on_event("startup")
-async def startup():
-    logger.info("Phase 8.8.5: Native FastMCP ASGI app started.")
 
 
 if __name__ == "__main__":
