@@ -22,9 +22,10 @@ import traceback
 from typing import Dict, Any
 
 from .api import code, get_command, get_all_commands
-from bonsai import tool
 
 BONSAI_AVAILABLE = False
+_bonsai_tool = None
+
 try:
     import ifcopenshell
     import ifcopenshell.api
@@ -35,10 +36,15 @@ try:
     import ifcopenshell.api.root as root
     import ifcopenshell.api.spatial as spatial
     import ifcopenshell.api.unit as unit
+    from bonsai import tool as _tool
+    _bonsai_tool = _tool
     BONSAI_AVAILABLE = True
-except ImportError:
+except (ImportError, ModuleNotFoundError) as e:
     BONSAI_AVAILABLE = False
-    print("Bonsai/IfcOpenShell not available.")
+    print(f"Bonsai/IfcOpenShell/BCF not available: {e}")
+
+def get_bonsai_tool():
+    return _bonsai_tool
 
 from .api import scene, wall
 from .scene_analysis.scene_analysis import *
