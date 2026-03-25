@@ -1,13 +1,17 @@
 """
-MCP SSE HTTP Server entrypoint for AWS App Runner.
+MCP SSE HTTP Server using explicit SseServerTransport for verified endpoint control.
 """
 import os
 import sys
 import time
 import logging
 import socket as _socket
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+from mcp.server.sse import SseServerTransport
 
-print("TELEMETRY: serve_sse: Script starting...", flush=True)
+print("TELEMETRY: server starting...", flush=True)
 
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _src_dir = os.path.normpath(os.path.join(_current_dir, '..', 'src'))
@@ -40,33 +44,43 @@ try:
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
-    print(f"TELEMETRY: serve_sse: Modules imported. Tools in registry: {len(mcp._tool_manager._tools) if hasattr(mcp, '_tool_manager') else 'N/A'}", flush=True)
+    tool_count = len(mcp._tool_manager._tools) if hasattr(mcp, '_tool_manager') else 'N/A'
+    print(f"TELEMETRY: Modules imported. Tools: {tool_count}", flush=True)
 except Exception as e:
     print(f"CRITICAL ERROR: {e}", flush=True)
 
-# Create app
-app = mcp.streamable_http_app()
+# ── Manual SSE Transport Binding ──────────────────────────────────────────
+# Instead of streamable_http_app(), we manually bind SseServerTransport
+# to the Starlette app to ensure absolute control over /sse and /message paths.
+sse = SseServerTransport("/message")
 
-# Audit Routes
-print("TELEMETRY: serve_sse: Auditing Starlette routes:", flush=True)
-for route in app.routes:
-    # Starlette Route objects have 'path' and 'name'
-    methods = getattr(route, 'methods', None)
-    print(f"TELEMETRY: ROUTE: {route.path} (Methods: {methods})", flush=True)
+async def handle_sse(request):
+    print("TELEMETRY: Incoming SSE connection at /sse", flush=True)
+    async with sse.connect_scope(request.scope, request.receive, request.send) as (read_stream, write_stream):
+        await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
 
-from starlette.responses import JSONResponse
+async def handle_messages(request):
+    print("TELEMETRY: Incoming POST at /message", flush=True)
+    await sse.handle_post_request(request.scope, request.receive, request.send)
 
-# Transport patch
+app = Starlette(
+    routes=[
+        Route("/sse", endpoint=handle_sse),
+        Route("/message", endpoint=handle_messages, methods=["POST"]),
+        Route("/ping", endpoint=lambda r: JSONResponse({"status": "ok"}), methods=["GET", "HEAD"]),
+        Route("/", endpoint=lambda r: JSONResponse({"status": "ok", "message": "Blender MCP SSE Server"}), methods=["GET"]),
+    ]
+)
+
+# Host check bypass
 try:
     from mcp.server.transport_security import TransportSecurityMiddleware
     TransportSecurityMiddleware._validate_host = lambda self, host: True
-    print("TELEMETRY: serve_sse: TransportSecurityMiddleware patched.", flush=True)
+    print("TELEMETRY: TransportSecurityMiddleware patched.", flush=True)
 except ImportError:
     pass
 
-app.add_route("/ping", lambda r: JSONResponse({"status": "ok"}), methods=["GET", "HEAD"])
-
 if __name__ == "__main__":
     import uvicorn
-    print(f"TELEMETRY: serve_sse: Starting on {MCP_PORT}", flush=True)
+    print(f"TELEMETRY: Starting Starlette on {MCP_PORT}. SSE at /sse. Messages at /message", flush=True)
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
