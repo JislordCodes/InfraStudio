@@ -36,6 +36,9 @@ wait_for_blender(BLENDER_HOST, BLENDER_PORT, BLENDER_WAIT_SECONDS)
 
 try:
     from blender_mcp.mcp_instance import mcp  # type: ignore
+    logger.info(f"serve_sse: Loaded mcp instance. ID: {id(mcp)}")
+    logger.info(f"serve_sse: sys.path: {sys.path}")
+    
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore

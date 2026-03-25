@@ -30,6 +30,7 @@ import json
 from typing import List, Optional, Union, Dict, Any
 from ..server import logger, get_blender_connection
 from ..mcp_instance import mcp
+logger.info(f"api_tools: Imported mcp instance. ID: {id(mcp)}")
 
 
 @mcp.tool()
