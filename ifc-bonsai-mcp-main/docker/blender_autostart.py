@@ -106,6 +106,19 @@ try:
 except Exception as e:
     logger.error(f"Could not start socket server: {e}", exc_info=True)
 
+# ── Phase 8.1.1: Pre-initialize IFC context to avoid tool-call latency ──────
+try:
+    logger.info("Pre-initializing IFC project context...")
+    # Addons are enabled, so we can import our API
+    from blendermcp.api.project import initialize_project
+    init_res = initialize_project(project_name="Cloud Default Project")
+    if init_res.get("success"):
+        logger.info(f"IFC Context ready: {init_res.get('project_guid')}")
+    else:
+        logger.warning(f"IFC Context initialization returned error: {init_res.get('error')}")
+except Exception as e:
+    logger.warning(f"IFC Context pre-initialization failed (will fallback on first call): {e}", exc_info=True)
+
 # Keep Blender alive in headless mode AND process tasks
 logger.info("Blender is now running custom headless event pump for MCP requests.")
 try:

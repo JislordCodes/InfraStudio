@@ -19,7 +19,9 @@ def get_ifc_file():
     if not ifc:
         # Avoid circular import at top level
         from .project import initialize_project
-        print("No IFC project found. Auto-initializing default project...")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("No IFC project found. Auto-initializing fallback project...")
         initialize_project(project_name="Auto-Initialized Project")
         ifc = tool.Ifc.get()
         if not ifc:
