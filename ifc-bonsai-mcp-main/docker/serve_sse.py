@@ -7,10 +7,14 @@ import time
 import logging
 import socket as _socket
 
+print("TELEMETRY: serve_sse: Script starting...", flush=True)
+
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _src_dir = os.path.normpath(os.path.join(_current_dir, '..', 'src'))
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
+
+print(f"TELEMETRY: serve_sse: sys.path modified. New sys.path: {sys.path}", flush=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 logger = logging.getLogger('serve_sse')
@@ -22,83 +26,73 @@ MCP_HOST = os.environ.get('HOST', '0.0.0.0')
 MCP_PORT = int(os.environ.get('PORT', '8000'))
 
 def wait_for_blender(host, port, timeout):
+    print(f"TELEMETRY: serve_sse: Waiting for Blender at {host}:{port}...", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             s = _socket.create_connection((host, port), timeout=2)
             s.close()
+            print(f"TELEMETRY: serve_sse: Blender ready.", flush=True)
             return True
         except (ConnectionRefusedError, OSError):
             time.sleep(3)
+    print(f"TELEMETRY: serve_sse: Blender wait TIMEOUT.", flush=True)
     return False
 
 wait_for_blender(BLENDER_HOST, BLENDER_PORT, BLENDER_WAIT_SECONDS)
 
 try:
+    print("TELEMETRY: serve_sse: Importing mcp instance...", flush=True)
     from blender_mcp.mcp_instance import mcp  # type: ignore
-    logger.info(f"serve_sse: Loaded mcp instance. ID: {id(mcp)}")
-    logger.info(f"serve_sse: sys.path: {sys.path}")
+    print(f"TELEMETRY: serve_sse: Loaded mcp instance. ID: {id(mcp)}", flush=True)
     
+    print("TELEMETRY: serve_sse: Importing tool modules...", flush=True)
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
     import blender_mcp.mcp_functions.rag_tools as rag_tools  # type: ignore
-except ImportError as e:
-    logger.error(f'Failed to import tools: {e}')
+    print("TELEMETRY: serve_sse: Tool modules imported.", flush=True)
+except Exception as e:
+    print(f"CRITICAL ERROR: serve_sse: Failed to import tools: {e}", flush=True)
+    import traceback
+    traceback.print_exc()
+
+# Create app
+print("TELEMETRY: serve_sse: Creating streamable_http_app...", flush=True)
+app = mcp.streamable_http_app()
 
 # Verify tool registration
 try:
-    # Try different ways to count tools in FastMCP
-    if hasattr(mcp, 'tools') and isinstance(mcp.tools, list):
-        tool_count = len(mcp.tools)
-    elif hasattr(mcp, '_tools') and isinstance(mcp._tools, (list, dict)):
-        tool_count = len(mcp._tools)
-    else:
-        tool_count = "unknown"
+    tool_list = []
+    if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, '_tools'):
+        tool_list = list(mcp._tool_manager._tools.keys())
     
-    logger.info(f"Phase 8.8.4: Registered {tool_count} tools on FastMCP instance.")
-    if tool_count != "unknown" and tool_count == 0:
-        logger.warning("CRITICAL: Zero tools registered! Tool decorators might not be executing.")
-        # Attempt to log imported modules to see if they are what we expect
-        # logger.info(f"Imported api_tools: {api_tools}")
+    print(f"TELEMETRY: serve_sse: Phase 8.8.4: Registered tools: {tool_list} (Count: {len(tool_list)})", flush=True)
+    if not tool_list:
+        print("TELEMETRY: CRITICAL: tool_list is EMPTY in serve_sse registry!", flush=True)
 except Exception as debug_e:
-    logger.warning(f"Failed to count tools in debug: {debug_e}")
+    print(f"TELEMETRY: serve_sse: Error inspecting tool registry: {debug_e}", flush=True)
 
 from starlette.responses import JSONResponse
 
 # ── Phase 8.8.6: Dynamic Origin Whitelisting via Python Monkeypatch ───────
-# The Model Context Protocol SDK actively blocks unknown Host headers with HTTP 421
-# to prevent DNS rebinding attacks. AWS App Runner necessitates a decoupled DNS topology.
-# By surgically mocking out the _validate_host parameter, we securely unbind the
-# routing layer from these strict local network checks.
 try:
     from mcp.server.transport_security import TransportSecurityMiddleware
     TransportSecurityMiddleware._validate_host = lambda self, host: True
-    logger.info("Phase 8.8.6: TransportSecurityMiddleware bypassed for AWS DNS.")
+    print("TELEMETRY: serve_sse: Phase 8.8.6: TransportSecurityMiddleware bypassed for AWS DNS.", flush=True)
 except ImportError as e:
-    logger.warning(f"Phase 8.8.6: TransportSecurityMiddleware patch skipped ({e})")
+    print(f"TELEMETRY: serve_sse: Phase 8.8.6: TransportSecurityMiddleware patch skipped ({e})", flush=True)
 
-# Extract the native FastMCP Starlette application.
-# By mutating the native app instead of 'Mount'ing it, we perfectly preserve
-# the FastMCP internal ASGI lifecycle events required to initialize the SSE manager.
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app):
-    logger.info("Phase 8.8.5: Native FastMCP ASGI app started.")
-    yield
-
-app = mcp.streamable_http_app()
+lifespan = None
 
 # Bind the App Runner health check intrinsically
 app.add_route("/ping", lambda r: JSONResponse({"status": "ok", "version": "8.8.5"}), methods=["GET", "HEAD"])
 
-
 if __name__ == "__main__":
     import uvicorn
-    logger.info(f"Phase 8.8: Starting Explicit SSE server on {MCP_HOST}:{MCP_PORT}")
+    print(f"TELEMETRY: serve_sse: Phase 8.8: Starting Explicit SSE server on {MCP_HOST}:{MCP_PORT}", flush=True)
     try:
         uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
     except Exception as e:
-        logger.error(f"Failed to start MCP server: {e}")
+        print(f"CRITICAL ERROR: serve_sse: Failed to start MCP server: {e}", flush=True)
         sys.exit(1)

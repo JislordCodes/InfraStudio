@@ -1,11 +1,10 @@
 from mcp.server.fastmcp import FastMCP
-import logging
-
-logger = logging.getLogger("mcp_instance")
+import sys
 
 mcp = FastMCP(
     "BlenderMCP",
     instructions="Blender integration through the Model Context Protocol",
 )
 
-logger.info(f"FastMCP instance created. ID: {id(mcp)}")
+# CRITICAL TELEMETRY
+print(f"TELEMETRY: FastMCP instance created in mcp_instance.py. ID: {id(mcp)}", flush=True)
