@@ -43,6 +43,24 @@ try:
 except ImportError as e:
     logger.error(f'Failed to import tools: {e}')
 
+# Verify tool registration
+try:
+    # Try different ways to count tools in FastMCP
+    if hasattr(mcp, 'tools') and isinstance(mcp.tools, list):
+        tool_count = len(mcp.tools)
+    elif hasattr(mcp, '_tools') and isinstance(mcp._tools, (list, dict)):
+        tool_count = len(mcp._tools)
+    else:
+        tool_count = "unknown"
+    
+    logger.info(f"Phase 8.8.4: Registered {tool_count} tools on FastMCP instance.")
+    if tool_count != "unknown" and tool_count == 0:
+        logger.warning("CRITICAL: Zero tools registered! Tool decorators might not be executing.")
+        # Attempt to log imported modules to see if they are what we expect
+        # logger.info(f"Imported api_tools: {api_tools}")
+except Exception as debug_e:
+    logger.warning(f"Failed to count tools in debug: {debug_e}")
+
 from starlette.responses import JSONResponse
 
 # ── Phase 8.8.6: Dynamic Origin Whitelisting via Python Monkeypatch ───────
