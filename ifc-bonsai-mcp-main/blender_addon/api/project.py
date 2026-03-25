@@ -36,9 +36,9 @@ def initialize_project(project_name: str = "My Project") -> dict:
         storey = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Level 0")
         
         # 3. Create spatial hierarchy
-        ifcopenshell.api.run("aggregate.assign_aggregation", ifc_file, relating_object=project, related_objects=[site])
-        ifcopenshell.api.run("aggregate.assign_aggregation", ifc_file, relating_object=site, related_objects=[building])
-        ifcopenshell.api.run("aggregate.assign_aggregation", ifc_file, relating_object=building, related_objects=[storey])
+        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=project, products=[site])
+        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=site, products=[building])
+        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
         
         # 4. Set as active file in Bonsai
         IfcStore.file = ifc_file
