@@ -44,33 +44,46 @@ try:
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
-    
-    # ── CRITICAL: Manual Tool Synchronization ──────────────────────────────
-    # FastMCP only syncs tools to the underlying McpServer during its own 
-    # run() loop. Since we are running the server manually, we must sync.
-    if hasattr(mcp, '_tool_manager') and hasattr(mcp, 'server'):
-        registered_tools = mcp._tool_manager.list_tools()
-        print(f"TELEMETRY: Syncing {len(registered_tools)} tools to Low-Level Server...", flush=True)
-        for tool in registered_tools:
-            # We use register_tool on the McpServer instance
-            mcp.server.register_tool(tool)
-        print(f"TELEMETRY: Sync complete. Low-Level Registry: {len(mcp.server._tools)}", flush=True)
-    
 except Exception as e:
     print(f"CRITICAL ERROR during sync: {e}", flush=True)
 
-# ── Manual SSE Transport Binding ──────────────────────────────────────────
-# We use /message as the message-posting endpoint.
-sse = SseServerTransport("/message")
+async def ensure_synced():
+    """Lazily synchronize tools from FastMCP to the low-level McpServer."""
+    try:
+        if hasattr(mcp, '_tool_manager') and hasattr(mcp, 'server'):
+            registered_tools = mcp._tool_manager.list_tools()
+            low_level_names = set(mcp.server._tools.keys())
+            
+            # If we haven't synced yet, or new tools arrived
+            for tool in registered_tools:
+                # 1. Register base name
+                if tool.name not in low_level_names:
+                    print(f"TELEMETRY: Syncing tool: {tool.name}", flush=True)
+                    mcp.server.register_tool(tool)
+                
+                # 2. Register with 'ifc.' prefix for Supabase Proxy compatibility
+                prefixed_name = f"ifc.{tool.name}"
+                if prefixed_name not in low_level_names:
+                    # We create a shallow copy with the new name
+                    from mcp.types import Tool
+                    prefixed_tool = Tool(
+                        name=prefixed_name,
+                        description=tool.description,
+                        inputSchema=tool.inputSchema
+                    )
+                    mcp.server.register_tool(prefixed_tool)
+            
+    except Exception as e:
+        print(f"TELEMETRY: Lazy sync error: {e}", flush=True)
 
 async def handle_sse(request):
     print(f"TELEMETRY: Incoming SSE connection at {request.url.path}", flush=True)
+    await ensure_synced()
     async with sse.connect_scope(request.scope, request.receive, request.send) as (read_stream, write_stream):
-        # We run the ALREADY SYNCED mcp.server
         await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
 
 async def handle_messages(request):
-    # Log the session ID if present
+    await ensure_synced()
     session_id = request.query_params.get("sessionId")
     print(f"TELEMETRY: Incoming POST at /message. Session: {session_id}", flush=True)
     await sse.handle_post_request(request.scope, request.receive, request.send)
