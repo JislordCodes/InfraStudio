@@ -1,15 +1,13 @@
 """
-MCP SSE HTTP Server with explicit tool synchronization and dual-route support.
+MCP HTTP Server using FastMCP's native Streamable HTTP transport.
+The Supabase proxy sends POST /mcp - this handles it correctly.
+Tools are registered with 'ifc.' prefix so 'ifc.create_wall' works.
 """
 import os
 import sys
 import time
 import logging
 import socket as _socket
-from starlette.applications import Starlette
-from starlette.routing import Route
-from starlette.responses import JSONResponse
-from mcp.server.sse import SseServerTransport
 
 print("TELEMETRY: server starting...", flush=True)
 
@@ -32,9 +30,11 @@ def wait_for_blender(host, port, timeout=120):
         try:
             s = _socket.create_connection((host, port), timeout=2)
             s.close()
+            print(f"TELEMETRY: Blender socket ready on {host}:{port}", flush=True)
             return True
         except (ConnectionRefusedError, OSError):
             time.sleep(3)
+    print(f"TELEMETRY: WARNING - Blender not ready after {timeout}s, proceeding anyway", flush=True)
     return False
 
 wait_for_blender(BLENDER_HOST, BLENDER_PORT)
@@ -44,71 +44,42 @@ try:
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
+    print(f"TELEMETRY: Modules imported. FastMCP id={id(mcp)}", flush=True)
 except Exception as e:
-    print(f"CRITICAL ERROR during sync: {e}", flush=True)
+    print(f"CRITICAL ERROR importing modules: {e}", flush=True)
+    raise
 
-async def ensure_synced():
-    """Lazily synchronize tools from FastMCP to the low-level McpServer."""
-    try:
-        if hasattr(mcp, '_tool_manager') and hasattr(mcp, 'server'):
-            registered_tools = mcp._tool_manager.list_tools()
-            low_level_names = set(mcp.server._tools.keys())
-            
-            # If we haven't synced yet, or new tools arrived
-            for tool in registered_tools:
-                # 1. Register base name
-                if tool.name not in low_level_names:
-                    print(f"TELEMETRY: Syncing tool: {tool.name}", flush=True)
-                    mcp.server.register_tool(tool)
-                
-                # 2. Register with 'ifc.' prefix for Supabase Proxy compatibility
-                prefixed_name = f"ifc.{tool.name}"
-                if prefixed_name not in low_level_names:
-                    # We create a shallow copy with the new name
-                    from mcp.types import Tool
-                    prefixed_tool = Tool(
-                        name=prefixed_name,
-                        description=tool.description,
-                        inputSchema=tool.inputSchema
-                    )
-                    mcp.server.register_tool(prefixed_tool)
-            
-    except Exception as e:
-        print(f"TELEMETRY: Lazy sync error: {e}", flush=True)
+# ── Add ifc. prefix aliases for Supabase MCP proxy compatibility ──────────
+# The Supabase proxy calls tools as 'ifc.create_wall' etc.
+# We wrap every tool to also be reachable with the 'ifc.' prefix.
+try:
+    original_tools = list(mcp._tool_manager._tools.items())
+    for tool_name, tool_fn in original_tools:
+        prefixed_name = f"ifc.{tool_name}"
+        if prefixed_name not in mcp._tool_manager._tools:
+            # Re-register with prefix by aliasing the same function
+            mcp._tool_manager._tools[prefixed_name] = tool_fn
+    
+    total = len(mcp._tool_manager._tools)
+    print(f"TELEMETRY: Tool registry has {total} entries (includes ifc. prefixed aliases)", flush=True)
+except Exception as e:
+    print(f"TELEMETRY: prefix alias error: {e}", flush=True)
 
-async def handle_sse(request):
-    print(f"TELEMETRY: Incoming SSE connection at {request.url.path}", flush=True)
-    await ensure_synced()
-    async with sse.connect_scope(request.scope, request.receive, request.send) as (read_stream, write_stream):
-        await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
-
-async def handle_messages(request):
-    await ensure_synced()
-    session_id = request.query_params.get("sessionId")
-    print(f"TELEMETRY: Incoming POST at /message. Session: {session_id}", flush=True)
-    await sse.handle_post_request(request.scope, request.receive, request.send)
-
-# ── DUAL ROUTE SUPPORT ──────────────────────────────────────────────────
-# We support both /sse and /mcp as connection endpoints to be safe.
-app = Starlette(
-    routes=[
-        Route("/sse", endpoint=handle_sse),
-        Route("/mcp", endpoint=handle_sse), # Backward shim
-        Route("/message", endpoint=handle_messages, methods=["POST"]),
-        Route("/ping", endpoint=lambda r: JSONResponse({"status": "ok"}), methods=["GET", "HEAD"]),
-        Route("/", endpoint=lambda r: JSONResponse({"status": "ok", "message": "Synced Blender MCP Server"}), methods=["GET"]),
-    ]
-)
-
-# Host check bypass
+# ── Host security bypass ──────────────────────────────────────────────────
 try:
     from mcp.server.transport_security import TransportSecurityMiddleware
     TransportSecurityMiddleware._validate_host = lambda self, host: True
     print("TELEMETRY: TransportSecurityMiddleware patched.", flush=True)
-except ImportError:
+except (ImportError, AttributeError):
     pass
 
+# ── Use FastMCP's native HTTP transport (handles POST /mcp correctly) ─────
 if __name__ == "__main__":
-    import uvicorn
-    print(f"TELEMETRY: Starting Starlette on {MCP_PORT}. Support for /sse and /message.", flush=True)
-    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
+    print(f"TELEMETRY: Starting FastMCP native HTTP server on port {MCP_PORT}...", flush=True)
+    mcp.run(
+        transport="streamable-http",
+        host=MCP_HOST,
+        port=MCP_PORT,
+        path="/mcp",
+        log_level="info",
+    )
