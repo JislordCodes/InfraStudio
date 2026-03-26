@@ -90,7 +90,7 @@ async def handle_messages(request):
     await ensure_synced()
     session_id = request.query_params.get("sessionId")
     print(f"TELEMETRY: Incoming POST at /mcp. Session: {session_id}", flush=True)
-    await sse.handle_post_request(request.scope, request.receive, request.send)
+    await sse.handle_post_message(request.scope, request.receive, request.send)
 
 app = Starlette(
     routes=[
