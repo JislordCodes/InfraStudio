@@ -1,5 +1,5 @@
 """
-MCP SSE HTTP Server using explicit SseServerTransport for verified endpoint control.
+MCP SSE HTTP Server with explicit tool synchronization and dual-route support.
 """
 import os
 import sys
@@ -44,31 +44,46 @@ try:
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
-    tool_count = len(mcp._tool_manager._tools) if hasattr(mcp, '_tool_manager') else 'N/A'
-    print(f"TELEMETRY: Modules imported. Tools: {tool_count}", flush=True)
+    
+    # ── CRITICAL: Manual Tool Synchronization ──────────────────────────────
+    # FastMCP only syncs tools to the underlying McpServer during its own 
+    # run() loop. Since we are running the server manually, we must sync.
+    if hasattr(mcp, '_tool_manager') and hasattr(mcp, 'server'):
+        registered_tools = mcp._tool_manager.list_tools()
+        print(f"TELEMETRY: Syncing {len(registered_tools)} tools to Low-Level Server...", flush=True)
+        for tool in registered_tools:
+            # We use register_tool on the McpServer instance
+            mcp.server.register_tool(tool)
+        print(f"TELEMETRY: Sync complete. Low-Level Registry: {len(mcp.server._tools)}", flush=True)
+    
 except Exception as e:
-    print(f"CRITICAL ERROR: {e}", flush=True)
+    print(f"CRITICAL ERROR during sync: {e}", flush=True)
 
 # ── Manual SSE Transport Binding ──────────────────────────────────────────
-# Instead of streamable_http_app(), we manually bind SseServerTransport
-# to the Starlette app to ensure absolute control over /sse and /message paths.
+# We use /message as the message-posting endpoint.
 sse = SseServerTransport("/message")
 
 async def handle_sse(request):
-    print("TELEMETRY: Incoming SSE connection at /sse", flush=True)
+    print(f"TELEMETRY: Incoming SSE connection at {request.url.path}", flush=True)
     async with sse.connect_scope(request.scope, request.receive, request.send) as (read_stream, write_stream):
+        # We run the ALREADY SYNCED mcp.server
         await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
 
 async def handle_messages(request):
-    print("TELEMETRY: Incoming POST at /message", flush=True)
+    # Log the session ID if present
+    session_id = request.query_params.get("sessionId")
+    print(f"TELEMETRY: Incoming POST at /message. Session: {session_id}", flush=True)
     await sse.handle_post_request(request.scope, request.receive, request.send)
 
+# ── DUAL ROUTE SUPPORT ──────────────────────────────────────────────────
+# We support both /sse and /mcp as connection endpoints to be safe.
 app = Starlette(
     routes=[
         Route("/sse", endpoint=handle_sse),
+        Route("/mcp", endpoint=handle_sse), # Backward shim
         Route("/message", endpoint=handle_messages, methods=["POST"]),
         Route("/ping", endpoint=lambda r: JSONResponse({"status": "ok"}), methods=["GET", "HEAD"]),
-        Route("/", endpoint=lambda r: JSONResponse({"status": "ok", "message": "Blender MCP SSE Server"}), methods=["GET"]),
+        Route("/", endpoint=lambda r: JSONResponse({"status": "ok", "message": "Synced Blender MCP Server"}), methods=["GET"]),
     ]
 )
 
@@ -82,5 +97,5 @@ except ImportError:
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"TELEMETRY: Starting Starlette on {MCP_PORT}. SSE at /sse. Messages at /message", flush=True)
+    print(f"TELEMETRY: Starting Starlette on {MCP_PORT}. Support for /sse and /message.", flush=True)
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
