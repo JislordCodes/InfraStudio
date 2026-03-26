@@ -80,30 +80,34 @@ async def ensure_synced():
 # Supabase proxy expects to GET /mcp and POST /mcp.
 sse = SseServerTransport("/mcp")
 
-async def handle_sse(request):
-    print(f"TELEMETRY: Incoming SSE connection at {request.url.path}", flush=True)
-    await ensure_synced()
-    async with sse.connect_scope(request.scope, request.receive, request.send) as (read_stream, write_stream):
-        await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
-
-async def handle_messages(request):
-    await ensure_synced()
-    session_id = request.query_params.get("sessionId")
-    print(f"TELEMETRY: Incoming POST at /mcp. Session: {session_id}", flush=True)
-    await sse.handle_post_message(request.scope, request.receive, request.send)
-
+# Basic routes for healthchecks
 app = Starlette(
     routes=[
-        Route("/mcp", endpoint=handle_sse, methods=["GET"]),
-        Route("/mcp", endpoint=handle_messages, methods=["POST"]),
-        # Keep pure SSE route just in case
-        Route("/sse", endpoint=handle_sse, methods=["GET"]),
-        Route("/message", endpoint=handle_messages, methods=["POST"]),
-        
         Route("/ping", endpoint=lambda r: JSONResponse({"status": "ok"}), methods=["GET", "HEAD"]),
         Route("/", endpoint=lambda r: JSONResponse({"status": "ok", "message": "Synced Blender MCP Server"}), methods=["GET"]),
     ]
 )
+
+async def mcp_asgi_app(scope, receive, send):
+    """Raw ASGI wrapper to route /mcp natively to the SSE transport."""
+    if scope["type"] == "http":
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+        
+        if path in ("/mcp", "/sse", "/message"):
+            await ensure_synced()
+            if method == "GET":
+                print(f"TELEMETRY: Incoming SSE connection at {path}", flush=True)
+                async with sse.connect_scope(scope, receive, send) as (read_stream, write_stream):
+                    await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
+                return
+            elif method == "POST":
+                print(f"TELEMETRY: Incoming POST at {path}.", flush=True)
+                await sse.handle_post_message(scope, receive, send)
+                return
+
+    # Fallback to basic healthcheck app
+    await app(scope, receive, send)
 
 # Host check bypass
 try:
@@ -115,5 +119,5 @@ except ImportError:
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"TELEMETRY: Starting Starlette on {MCP_PORT}. Support for /mcp.", flush=True)
-    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
+    print(f"TELEMETRY: Starting ASGI Server on {MCP_PORT}. Support for /mcp.", flush=True)
+    uvicorn.run(mcp_asgi_app, host=MCP_HOST, port=MCP_PORT, log_level="info")
