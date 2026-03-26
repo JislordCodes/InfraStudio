@@ -98,7 +98,7 @@ async def mcp_asgi_app(scope, receive, send):
             await ensure_synced()
             if method == "GET":
                 print(f"TELEMETRY: Incoming SSE connection at {path}", flush=True)
-                async with sse.connect_scope(scope, receive, send) as (read_stream, write_stream):
+                async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
                     await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
                 return
             elif method == "POST":
