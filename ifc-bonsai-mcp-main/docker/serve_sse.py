@@ -41,10 +41,6 @@ wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 
 try:
     from blender_mcp.mcp_instance import mcp  # type: ignore
-    print("TELEMETRY: FastMCP instance attributes start", flush=True)
-    for attr in dir(mcp):
-        print(f"ATTR: {attr}", flush=True)
-    print("TELEMETRY: FastMCP instance attributes end", flush=True)
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
@@ -54,16 +50,16 @@ except Exception as e:
 async def ensure_synced():
     """Lazily synchronize tools from FastMCP to the low-level McpServer."""
     try:
-        if hasattr(mcp, '_tool_manager') and hasattr(mcp, '_server'):
+        if hasattr(mcp, '_tool_manager') and hasattr(mcp, '_mcp_server'):
             registered_tools = mcp._tool_manager.list_tools()
-            low_level_names = set(mcp._server._tools.keys())
+            low_level_names = set(mcp._mcp_server._tools.keys())
             
             # If we haven't synced yet, or new tools arrived
             if len(registered_tools) > 0 and len(low_level_names) < len(registered_tools):
                 for tool in registered_tools:
                     # 1. Register base name
                     if tool.name not in low_level_names:
-                        mcp._server.register_tool(tool)
+                        mcp._mcp_server.register_tool(tool)
                     
                     # 2. Register with 'ifc.' prefix for Supabase Proxy compatibility
                     prefixed_name = f"ifc.{tool.name}"
@@ -74,9 +70,9 @@ async def ensure_synced():
                             description=tool.description,
                             inputSchema=tool.inputSchema
                         )
-                        mcp._server.register_tool(prefixed_tool)
+                        mcp._mcp_server.register_tool(prefixed_tool)
                 
-                print(f"TELEMETRY: Sync complete. {len(mcp._server._tools.keys())} total tools.", flush=True)
+                print(f"TELEMETRY: Sync complete. {len(mcp._mcp_server._tools.keys())} total tools.", flush=True)
             
     except Exception as e:
         print(f"TELEMETRY: Lazy sync error: {e}", flush=True)
@@ -103,7 +99,7 @@ async def mcp_asgi_app(scope, receive, send):
             if method == "GET":
                 print(f"TELEMETRY: Incoming SSE connection at {path}", flush=True)
                 async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-                    await mcp._server.run(read_stream, write_stream, mcp._server.create_initialization_options())
+                    await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
                 return
             elif method == "POST":
                 # Check for sessionId in query params
@@ -149,11 +145,11 @@ async def mcp_asgi_app(scope, receive, send):
                     
                     # 2. Process via FastMCP's internal low-level server
                     # Force initialized state for stateless calls
-                    mcp._server._initialized = True 
+                    mcp._mcp_server._initialized = True 
                     
                     # handle_request handles tool calls, resource list, etc.
                     # It returns a JSONRPCResponse Pydantic model or dict
-                    response = await mcp._server.handle_request(request_dict)
+                    response = await mcp._mcp_server.handle_request(request_dict)
                     
                     # 3. Serialize and send back
                     if response is not None:
