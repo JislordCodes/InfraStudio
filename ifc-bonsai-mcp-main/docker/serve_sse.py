@@ -40,7 +40,11 @@ def wait_for_blender(host, port, timeout=120):
 wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 
 try:
-    from blender_mcp.mcp_instance import mcp  # type: ignore
+    import mcp
+    import importlib.metadata
+    print(f"TELEMETRY: mcp version: {importlib.metadata.version('mcp')}", flush=True)
+    from blender_mcp.mcp_instance import mcp as mcp_inst  # type: ignore
+    mcp = mcp_inst
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
