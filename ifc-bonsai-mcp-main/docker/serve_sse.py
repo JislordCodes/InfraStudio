@@ -102,6 +102,24 @@ async def mcp_asgi_app(scope, receive, send):
                     await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
                 return
             elif method == "POST":
+                # HACK: If sessionId is missing from query string, try to find an active session.
+                # The Supabase MCP Proxy often fails to include the sessionId on POST requests.
+                from urllib.parse import parse_qs
+                query_string = scope.get("query_string", b"").decode()
+                params = parse_qs(query_string)
+                
+                if "sessionId" not in params and "session_id" not in params:
+                    # Access internal sessions of SseServerTransport
+                    if hasattr(sse, "_sessions") and sse._sessions:
+                        # Use the most recent session ID
+                        session_id = list(sse._sessions.keys())[-1]
+                        separator = "&" if query_string else ""
+                        new_qs = f"{query_string}{separator}sessionId={session_id}"
+                        scope["query_string"] = new_qs.encode()
+                        print(f"TELEMETRY: POST at {path}: Injected sessionId {session_id} into query params.", flush=True)
+                    else:
+                        print(f"WARNING: POST at {path} received without sessionId and NO ACTIVE SESSIONS found.", flush=True)
+
                 print(f"TELEMETRY: Incoming POST at {path}.", flush=True)
                 await sse.handle_post_message(scope, receive, send)
                 return
