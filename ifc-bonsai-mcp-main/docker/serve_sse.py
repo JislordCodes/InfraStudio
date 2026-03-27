@@ -220,18 +220,7 @@ async def mcp_asgi_app(scope, receive, send):
                     # mcp.list_tools() is the FastMCP public async method.
                     # Returns list[mcp.types.Tool] (Pydantic models).
                     tools = await mcp.list_tools()
-                    # Add ifc. prefixed aliases so Supabase proxy can find them
-                    from mcp.types import Tool as MCPTool
-                    prefixed = [
-                        MCPTool(
-                            name=f"ifc.{t.name}",
-                            description=t.description,
-                            inputSchema=t.inputSchema,
-                        )
-                        for t in tools
-                    ]
-                    all_tools = tools + prefixed
-                    result_data = {"tools": [_to_json_safe(t) for t in all_tools]}
+                    result_data = {"tools": [_to_json_safe(t) for t in tools]}
 
                 elif rpc_method == "tools/call":
                     tool_name = rpc_params.get("name", "")
