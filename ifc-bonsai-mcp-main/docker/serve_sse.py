@@ -40,26 +40,7 @@ def wait_for_blender(host, port, timeout=120):
 wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 
 try:
-    import mcp
-    import importlib.metadata
-    import inspect
-    print(f"TELEMETRY: mcp version: {importlib.metadata.version('mcp')}", flush=True)
-    from blender_mcp.mcp_instance import mcp as mcp_inst  # type: ignore
-    mcp = mcp_inst
-    
-    print("TELEMETRY: Inspecting _mcp_server methods", flush=True)
-    if hasattr(mcp, '_mcp_server'):
-        svr = mcp._mcp_server
-        for name in dir(svr):
-            if 'handle' in name.lower() or 'request' in name.lower():
-                attr = getattr(svr, name)
-                if callable(attr):
-                    try:
-                        sig = inspect.signature(attr)
-                        print(f"SVR_METHOD: {name}{sig}", flush=True)
-                    except:
-                        print(f"SVR_METHOD: {name} (no signature)", flush=True)
-    
+    from blender_mcp.mcp_instance import mcp  # type: ignore
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
@@ -131,7 +112,6 @@ async def mcp_asgi_app(scope, receive, send):
                 has_active_sessions = hasattr(sse, "_sessions") and sse._sessions
                 
                 # MODE A: Session-based (Standard MCP SSE)
-                # If the client provides a session ID, or we have an active session to hijack
                 if has_session_param or has_active_sessions:
                     if not has_session_param:
                         session_id = list(sse._sessions.keys())[-1]
@@ -145,10 +125,9 @@ async def mcp_asgi_app(scope, receive, send):
                     return
                 
                 # MODE B: Stateless Bridge (For Supabase Edge Functions / one-shot fetch)
-                # If no session exists, we process the JSON-RPC request directly via the server logic.
                 print(f"TELEMETRY: Incoming POST at {path} (Stateless Bridge Mode).", flush=True)
                 try:
-                    # 1. Read full body
+                    # 1. Read body
                     body_bytes = b""
                     while True:
                         msg = await receive()
@@ -162,40 +141,58 @@ async def mcp_asgi_app(scope, receive, send):
                         
                     request_dict = json.loads(body_bytes)
                     
-                    # 2. Process via FastMCP's internal low-level server
-                    # Force initialized state for stateless calls
-                    mcp._mcp_server._initialized = True 
+                    # 2. Manual Dispatch to avoid Session requirements
+                    svr_method = request_dict.get("method")
+                    svr_params = request_dict.get("params", {})
+                    result = None
                     
-                    # _handle_request handles tool calls, resource list, etc.
-                    # It returns a JSONRPCResponse Pydantic model or dict
-                    response = await mcp._mcp_server._handle_request(request_dict)
-                    
-                    # 3. Serialize and send back
-                    if response is not None:
-                        # Handle Pydantic models (common in mcp-sdk)
-                        resp_data = response if isinstance(response, dict) else response.model_dump()
-                        
-                        await send({
-                            "type": "http.response.start",
-                            "status": 200,
-                            "headers": [(b"content-type", b"application/json")],
-                        })
-                        await send({
-                            "type": "http.response.body",
-                            "body": json.dumps(resp_data).encode(),
-                        })
-                        return
+                    if svr_method == "tools/list":
+                        result = await mcp._mcp_server.list_tools()
+                    elif svr_method == "tools/call":
+                        result = await mcp._mcp_server.call_tool(svr_params.get("name"), svr_params.get("arguments"))
+                    elif svr_method == "resources/list":
+                        result = await mcp._mcp_server.list_resources()
+                    elif svr_method == "prompts/list":
+                        result = await mcp._mcp_server.list_prompts()
+                    elif svr_method == "initialize":
+                        # Return static capabilities to satisfy clients
+                        result = {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+                            "serverInfo": {"name": "ifc-bonsai-mcp", "version": "1.0.0"}
+                        }
                     else:
-                        # Notification or empty response
-                        await send({"type": "http.response.start", "status": 202, "headers": []})
-                        await send({"type": "http.response.body", "body": b""})
-                        return
+                        print(f"TELEMETRY: Method {svr_method} not natively supported in stateless bridge, skipping.", flush=True)
+                    
+                    # 3. Format result (dump Pydantic if needed)
+                    if hasattr(result, "model_dump"):
+                        result_data = result.model_dump()
+                    else:
+                        result_data = result
+                        
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": request_dict.get("id"),
+                        "result": result_data
+                    }
+                    
+                    await send({
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"application/json")],
+                    })
+                    await send({
+                        "type": "http.response.body",
+                        "body": json.dumps(response).encode(),
+                    })
+                    return
 
                 except Exception as e:
                     print(f"CRITICAL ERROR in stateless POST bridge: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    error_resp = {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}}
+                    error_id = request_dict.get("id") if 'request_dict' in locals() else None
+                    error_resp = {"jsonrpc": "2.0", "id": error_id, "error": {"code": -32603, "message": str(e)}}
                     await send({
                         "type": "http.response.start",
                         "status": 500,
