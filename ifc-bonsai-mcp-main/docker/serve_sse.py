@@ -41,6 +41,11 @@ wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 
 try:
     from blender_mcp.mcp_instance import mcp  # type: ignore
+    print("TELEMETRY: FastMCP _mcp_server attributes start", flush=True)
+    if hasattr(mcp, '_mcp_server'):
+        for attr in dir(mcp._mcp_server):
+            print(f"SVR_ATTR: {attr}", flush=True)
+    print("TELEMETRY: FastMCP _mcp_server attributes end", flush=True)
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
