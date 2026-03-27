@@ -40,6 +40,31 @@ def initialize_project(project_name: str = "My Project") -> dict:
         ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=site, products=[building])
         ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
         
+        # 3b. Create geometric representation contexts (required for all geometry creation)
+        model_context = ifcopenshell.api.run(
+            "context.add_context", ifc_file,
+            context_type="Model",
+        )
+        body_context = ifcopenshell.api.run(
+            "context.add_context", ifc_file,
+            context_type="Model",
+            context_identifier="Body",
+            target_view="MODEL_VIEW",
+            parent=model_context,
+        )
+        plan_context = ifcopenshell.api.run(
+            "context.add_context", ifc_file,
+            context_type="Plan",
+        )
+        axis_context = ifcopenshell.api.run(
+            "context.add_context", ifc_file,
+            context_type="Plan",
+            context_identifier="Axis",
+            target_view="GRAPH_VIEW",
+            parent=plan_context,
+        )
+        logger.info(f"Created geometric contexts: Model={model_context.id()}, Body={body_context.id()}, Plan={plan_context.id()}, Axis={axis_context.id()}")
+        
         # 4. Set as active file in Bonsai
         IfcStore.file = ifc_file
         IfcStore.path = "new_project.ifc"
