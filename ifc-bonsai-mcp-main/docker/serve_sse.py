@@ -112,15 +112,23 @@ _health_app = Starlette(
 
 
 # ── Helper: serialise any Pydantic model or list thereof ─────────────────────
+def _sanitize_gemini_schema(obj):
+    if isinstance(obj, dict):
+        obj.pop("additionalProperties", None)
+        return {k: _sanitize_gemini_schema(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_gemini_schema(item) for item in obj]
+    return obj
+
 def _to_json_safe(obj):
     if obj is None:
         return None
     if isinstance(obj, list):
         return [_to_json_safe(item) for item in obj]
     if hasattr(obj, "model_dump"):
-        return obj.model_dump()
+        return _sanitize_gemini_schema(obj.model_dump())
     if isinstance(obj, dict):
-        return obj
+        return _sanitize_gemini_schema(obj)
     return str(obj)
 
 
