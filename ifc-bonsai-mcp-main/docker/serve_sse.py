@@ -41,11 +41,6 @@ wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 
 try:
     from blender_mcp.mcp_instance import mcp  # type: ignore
-    print("TELEMETRY: FastMCP _mcp_server attributes start", flush=True)
-    if hasattr(mcp, '_mcp_server'):
-        for attr in dir(mcp._mcp_server):
-            print(f"SVR_ATTR: {attr}", flush=True)
-    print("TELEMETRY: FastMCP _mcp_server attributes end", flush=True)
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
@@ -152,9 +147,9 @@ async def mcp_asgi_app(scope, receive, send):
                     # Force initialized state for stateless calls
                     mcp._mcp_server._initialized = True 
                     
-                    # handle_request handles tool calls, resource list, etc.
+                    # _handle_request handles tool calls, resource list, etc.
                     # It returns a JSONRPCResponse Pydantic model or dict
-                    response = await mcp._mcp_server.handle_request(request_dict)
+                    response = await mcp._mcp_server._handle_request(request_dict)
                     
                     # 3. Serialize and send back
                     if response is not None:
