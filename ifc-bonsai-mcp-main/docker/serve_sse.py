@@ -102,27 +102,91 @@ async def mcp_asgi_app(scope, receive, send):
                     await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
                 return
             elif method == "POST":
-                # HACK: If sessionId is missing from query string, try to find an active session.
-                # The Supabase MCP Proxy often fails to include the sessionId on POST requests.
+                # Check for sessionId in query params
                 from urllib.parse import parse_qs
+                import json
                 query_string = scope.get("query_string", b"").decode()
                 params = parse_qs(query_string)
                 
-                if "sessionId" not in params and "session_id" not in params:
-                    # Access internal sessions of SseServerTransport
-                    if hasattr(sse, "_sessions") and sse._sessions:
-                        # Use the most recent session ID
+                has_session_param = ("sessionId" in params or "session_id" in params)
+                has_active_sessions = hasattr(sse, "_sessions") and sse._sessions
+                
+                # MODE A: Session-based (Standard MCP SSE)
+                # If the client provides a session ID, or we have an active session to hijack
+                if has_session_param or has_active_sessions:
+                    if not has_session_param:
                         session_id = list(sse._sessions.keys())[-1]
                         separator = "&" if query_string else ""
                         new_qs = f"{query_string}{separator}sessionId={session_id}"
                         scope["query_string"] = new_qs.encode()
-                        print(f"TELEMETRY: POST at {path}: Injected sessionId {session_id} into query params.", flush=True)
+                        print(f"TELEMETRY: POST at {path}: Auto-hijacking session {session_id}", flush=True)
+                    
+                    print(f"TELEMETRY: Incoming POST at {path} (Session Mode).", flush=True)
+                    await sse.handle_post_message(scope, receive, send)
+                    return
+                
+                # MODE B: Stateless Bridge (For Supabase Edge Functions / one-shot fetch)
+                # If no session exists, we process the JSON-RPC request directly via the server logic.
+                print(f"TELEMETRY: Incoming POST at {path} (Stateless Bridge Mode).", flush=True)
+                try:
+                    # 1. Read full body
+                    body_bytes = b""
+                    while True:
+                        msg = await receive()
+                        if msg["type"] == "http.request":
+                            body_bytes += msg.get("body", b"")
+                            if not msg.get("more_body", False):
+                                break
+                    
+                    if not body_bytes:
+                        raise ValueError("Empty request body")
+                        
+                    request_dict = json.loads(body_bytes)
+                    
+                    # 2. Process via FastMCP's internal low-level server
+                    # Force initialized state for stateless calls
+                    mcp.server._initialized = True 
+                    
+                    # handle_request handles tool calls, resource list, etc.
+                    # It returns a JSONRPCResponse Pydantic model or dict
+                    response = await mcp.server.handle_request(request_dict)
+                    
+                    # 3. Serialize and send back
+                    if response is not None:
+                        # Handle Pydantic models (common in mcp-sdk)
+                        resp_data = response if isinstance(response, dict) else response.model_dump()
+                        
+                        await send({
+                            "type": "http.response.start",
+                            "status": 200,
+                            "headers": [(b"content-type", b"application/json")],
+                        })
+                        await send({
+                            "type": "http.response.body",
+                            "body": json.dumps(resp_data).encode(),
+                        })
+                        return
                     else:
-                        print(f"WARNING: POST at {path} received without sessionId and NO ACTIVE SESSIONS found.", flush=True)
+                        # Notification or empty response
+                        await send({"type": "http.response.start", "status": 202, "headers": []})
+                        await send({"type": "http.response.body", "body": b""})
+                        return
 
-                print(f"TELEMETRY: Incoming POST at {path}.", flush=True)
-                await sse.handle_post_message(scope, receive, send)
-                return
+                except Exception as e:
+                    print(f"CRITICAL ERROR in stateless POST bridge: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    error_resp = {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}}
+                    await send({
+                        "type": "http.response.start",
+                        "status": 500,
+                        "headers": [(b"content-type", b"application/json")],
+                    })
+                    await send({
+                        "type": "http.response.body",
+                        "body": json.dumps(error_resp).encode(),
+                    })
+                    return
 
     # Fallback to basic healthcheck app
     await app(scope, receive, send)
