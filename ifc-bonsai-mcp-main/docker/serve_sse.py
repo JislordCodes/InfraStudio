@@ -1,11 +1,25 @@
 """
-MCP SSE HTTP Server with explicit tool synchronization and dual-route support.
+MCP Server — Stateless JSON-RPC Bridge for Supabase Edge Functions.
+
+Architecture:
+  GET  /mcp → SSE stream  (traditional MCP clients with session)
+  POST /mcp → Stateless JSON-RPC  (Supabase Edge Functions, one-shot)
+  GET  /     → Health check
+  GET  /ping → Health check
+
+Root-cause fix: use FastMCP's public async methods (mcp.list_tools(),
+mcp.call_tool()) instead of the low-level _mcp_server handlers which
+require a live ServerSession and cannot be called statelessly.
 """
+
 import os
 import sys
 import time
+import json
 import logging
 import socket as _socket
+import traceback
+
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.responses import JSONResponse
@@ -13,209 +27,292 @@ from mcp.server.sse import SseServerTransport
 
 print("TELEMETRY: server starting...", flush=True)
 
+# ── Path setup ────────────────────────────────────────────────────────────────
 _current_dir = os.path.dirname(os.path.abspath(__file__))
-_src_dir = os.path.normpath(os.path.join(_current_dir, '..', 'src'))
+_src_dir = os.path.normpath(os.path.join(_current_dir, "..", "src"))
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-logger = logging.getLogger('serve_sse')
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("serve_sse")
 
-BLENDER_HOST = os.environ.get('BLENDER_MCP_HOST', '127.0.0.1')
-BLENDER_PORT = int(os.environ.get('BLENDER_PORT', '9876'))
-MCP_HOST = os.environ.get('HOST', '0.0.0.0')
-MCP_PORT = int(os.environ.get('PORT', '8000'))
+# ── Config ────────────────────────────────────────────────────────────────────
+BLENDER_HOST = os.environ.get("BLENDER_MCP_HOST", "127.0.0.1")
+BLENDER_PORT = int(os.environ.get("BLENDER_PORT", "9876"))
+MCP_HOST = os.environ.get("HOST", "0.0.0.0")
+MCP_PORT = int(os.environ.get("PORT", "8000"))
 
-def wait_for_blender(host, port, timeout=120):
+
+def wait_for_blender(host: str, port: int, timeout: int = 120) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             s = _socket.create_connection((host, port), timeout=2)
             s.close()
+            print(f"TELEMETRY: Blender is up at {host}:{port}", flush=True)
             return True
         except (ConnectionRefusedError, OSError):
             time.sleep(3)
+    print(f"TELEMETRY: Blender NOT reachable after {timeout}s — continuing anyway", flush=True)
     return False
+
 
 wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 
+# ── Import the FastMCP instance and all tool modules ─────────────────────────
+mcp = None
+_import_error = None
 try:
-    from blender_mcp.mcp_instance import mcp  # type: ignore
-    import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
-    import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
-    import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
-except Exception as e:
-    print(f"CRITICAL ERROR during sync: {e}", flush=True)
+    from blender_mcp.mcp_instance import mcp  # type: ignore  # noqa: E402
+    import blender_mcp.mcp_functions.api_tools as _api_tools  # type: ignore  # noqa: E402, F401
+    import blender_mcp.mcp_functions.analysis_tools as _analysis_tools  # type: ignore  # noqa: E402, F401
+    import blender_mcp.mcp_functions.prompts as _prompts  # type: ignore  # noqa: E402, F401
+    _tool_count = len(mcp._tool_manager.list_tools())
+    print(f"TELEMETRY: MCP ready — {_tool_count} tools registered.", flush=True)
+except Exception as _e:
+    _import_error = _e
+    print(f"CRITICAL: import failure: {_e}", flush=True)
+    traceback.print_exc()
 
-async def ensure_synced():
-    """Lazily synchronize tools from FastMCP to the low-level McpServer."""
-    try:
-        if hasattr(mcp, '_tool_manager') and hasattr(mcp, '_mcp_server'):
-            registered_tools = mcp._tool_manager.list_tools()
-            low_level_names = set(mcp._mcp_server._tools.keys())
-            
-            # If we haven't synced yet, or new tools arrived
-            if len(registered_tools) > 0 and len(low_level_names) < len(registered_tools):
-                for tool in registered_tools:
-                    # 1. Register base name
-                    if tool.name not in low_level_names:
-                        mcp._mcp_server.register_tool(tool)
-                    
-                    # 2. Register with 'ifc.' prefix for Supabase Proxy compatibility
-                    prefixed_name = f"ifc.{tool.name}"
-                    if prefixed_name not in low_level_names:
-                        from mcp.types import Tool
-                        prefixed_tool = Tool(
-                            name=prefixed_name,
-                            description=tool.description,
-                            inputSchema=tool.inputSchema
-                        )
-                        mcp._mcp_server.register_tool(prefixed_tool)
-                
-                print(f"TELEMETRY: Sync complete. {len(mcp._mcp_server._tools.keys())} total tools.", flush=True)
-            
-    except Exception as e:
-        print(f"TELEMETRY: Lazy sync error: {e}", flush=True)
-
-# Supabase proxy expects to GET /mcp and POST /mcp.
-sse = SseServerTransport("/mcp")
-
-# Basic routes for healthchecks
-app = Starlette(
-    routes=[
-        Route("/ping", endpoint=lambda r: JSONResponse({"status": "ok"}), methods=["GET", "HEAD"]),
-        Route("/", endpoint=lambda r: JSONResponse({"status": "ok", "message": "Synced Blender MCP Server"}), methods=["GET"]),
-    ]
-)
-
-async def mcp_asgi_app(scope, receive, send):
-    """Raw ASGI wrapper to route /mcp natively to the SSE transport."""
-    if scope["type"] == "http":
-        path = scope.get("path", "")
-        method = scope.get("method", "")
-        
-        if path in ("/mcp", "/sse", "/message"):
-            await ensure_synced()
-            if method == "GET":
-                print(f"TELEMETRY: Incoming SSE connection at {path}", flush=True)
-                async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-                    await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
-                return
-            elif method == "POST":
-                # Check for sessionId in query params
-                from urllib.parse import parse_qs
-                import json
-                query_string = scope.get("query_string", b"").decode()
-                params = parse_qs(query_string)
-                
-                has_session_param = ("sessionId" in params or "session_id" in params)
-                has_active_sessions = hasattr(sse, "_sessions") and sse._sessions
-                
-                # MODE A: Session-based (Standard MCP SSE)
-                if has_session_param or has_active_sessions:
-                    if not has_session_param:
-                        session_id = list(sse._sessions.keys())[-1]
-                        separator = "&" if query_string else ""
-                        new_qs = f"{query_string}{separator}sessionId={session_id}"
-                        scope["query_string"] = new_qs.encode()
-                        print(f"TELEMETRY: POST at {path}: Auto-hijacking session {session_id}", flush=True)
-                    
-                    print(f"TELEMETRY: Incoming POST at {path} (Session Mode).", flush=True)
-                    await sse.handle_post_message(scope, receive, send)
-                    return
-                
-                # MODE B: Stateless Bridge (For Supabase Edge Functions / one-shot fetch)
-                print(f"TELEMETRY: Incoming POST at {path} (Stateless Bridge Mode).", flush=True)
-                try:
-                    # 1. Read body
-                    body_bytes = b""
-                    while True:
-                        msg = await receive()
-                        if msg["type"] == "http.request":
-                            body_bytes += msg.get("body", b"")
-                            if not msg.get("more_body", False):
-                                break
-                    
-                    if not body_bytes:
-                        raise ValueError("Empty request body")
-                        
-                    request_dict = json.loads(body_bytes)
-                    
-                    # 2. Manual Dispatch to avoid Session requirements
-                    svr_method = request_dict.get("method")
-                    svr_params = request_dict.get("params", {})
-                    result = None
-                    
-                    if svr_method == "tools/list":
-                        result = await mcp._mcp_server.list_tools()
-                    elif svr_method == "tools/call":
-                        result = await mcp._mcp_server.call_tool(svr_params.get("name"), svr_params.get("arguments"))
-                    elif svr_method == "resources/list":
-                        result = await mcp._mcp_server.list_resources()
-                    elif svr_method == "prompts/list":
-                        result = await mcp._mcp_server.list_prompts()
-                    elif svr_method == "initialize":
-                        # Return static capabilities to satisfy clients
-                        result = {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
-                            "serverInfo": {"name": "ifc-bonsai-mcp", "version": "1.0.0"}
-                        }
-                    else:
-                        print(f"TELEMETRY: Method {svr_method} not natively supported in stateless bridge, skipping.", flush=True)
-                    
-                    # 3. Format result (dump Pydantic if needed)
-                    if hasattr(result, "model_dump"):
-                        result_data = result.model_dump()
-                    else:
-                        result_data = result
-                        
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": request_dict.get("id"),
-                        "result": result_data
-                    }
-                    
-                    await send({
-                        "type": "http.response.start",
-                        "status": 200,
-                        "headers": [(b"content-type", b"application/json")],
-                    })
-                    await send({
-                        "type": "http.response.body",
-                        "body": json.dumps(response).encode(),
-                    })
-                    return
-
-                except Exception as e:
-                    print(f"CRITICAL ERROR in stateless POST bridge: {e}", flush=True)
-                    import traceback
-                    traceback.print_exc()
-                    error_id = request_dict.get("id") if 'request_dict' in locals() else None
-                    error_resp = {"jsonrpc": "2.0", "id": error_id, "error": {"code": -32603, "message": str(e)}}
-                    await send({
-                        "type": "http.response.start",
-                        "status": 500,
-                        "headers": [(b"content-type", b"application/json")],
-                    })
-                    await send({
-                        "type": "http.response.body",
-                        "body": json.dumps(error_resp).encode(),
-                    })
-                    return
-
-    # Fallback to basic healthcheck app
-    await app(scope, receive, send)
-
-# Host check bypass
+# ── Patch transport-security to allow App Runner's internal hostnames ─────────
 try:
-    from mcp.server.transport_security import TransportSecurityMiddleware
+    from mcp.server.transport_security import TransportSecurityMiddleware  # type: ignore
     TransportSecurityMiddleware._validate_host = lambda self, host: True
     print("TELEMETRY: TransportSecurityMiddleware patched.", flush=True)
 except ImportError:
     pass
 
+# ── SSE transport (used for GET /mcp — traditional SSE clients) ───────────────
+sse = SseServerTransport("/mcp")
+
+# ── Minimal health-check Starlette app ───────────────────────────────────────
+_health_app = Starlette(
+    routes=[
+        Route(
+            "/ping",
+            endpoint=lambda r: JSONResponse({"status": "ok"}),
+            methods=["GET", "HEAD"],
+        ),
+        Route(
+            "/",
+            endpoint=lambda r: JSONResponse(
+                {
+                    "status": "ok",
+                    "message": "Blender MCP Server",
+                    "tools": len(mcp._tool_manager.list_tools()) if mcp else 0,
+                }
+            ),
+            methods=["GET"],
+        ),
+    ]
+)
+
+
+# ── Helper: serialise any Pydantic model or list thereof ─────────────────────
+def _to_json_safe(obj):
+    if obj is None:
+        return None
+    if isinstance(obj, list):
+        return [_to_json_safe(item) for item in obj]
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if isinstance(obj, dict):
+        return obj
+    return str(obj)
+
+
+# ── Main ASGI handler ─────────────────────────────────────────────────────────
+async def mcp_asgi_app(scope, receive, send):
+    if scope["type"] != "http":
+        await _health_app(scope, receive, send)
+        return
+
+    path = scope.get("path", "")
+    method = scope.get("method", "").upper()
+
+    # ── /mcp route ────────────────────────────────────────────────────────────
+    if path == "/mcp":
+
+        if mcp is None:
+            _err_body = json.dumps({
+                "jsonrpc": "2.0", "id": None,
+                "error": {"code": -32603, "message": f"Server failed to start: {_import_error}"}
+            }).encode()
+            await send({"type": "http.response.start", "status": 503,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": _err_body})
+            return
+
+        # ── GET /mcp → SSE session ─────────────────────────────────────────
+        if method == "GET":
+            print("TELEMETRY: Incoming SSE connection at /mcp", flush=True)
+            async with sse.connect_sse(scope, receive, send) as (r, w):
+                await mcp._mcp_server.run(
+                    r, w, mcp._mcp_server.create_initialization_options()
+                )
+            return
+
+        # ── POST /mcp → Stateless JSON-RPC bridge ─────────────────────────
+        if method == "POST":
+            request_id = None
+            try:
+                # 1. Check for a live SSE session — if present, relay via SSE
+                from urllib.parse import parse_qs
+                qs = scope.get("query_string", b"").decode()
+                params = parse_qs(qs)
+                has_session = "sessionId" in params or "session_id" in params
+                live_sessions = hasattr(sse, "_sessions") and bool(sse._sessions)
+
+                if has_session or live_sessions:
+                    # Inject session_id if missing (auto-hijack the only live session)
+                    if not has_session and live_sessions:
+                        sid = list(sse._sessions.keys())[-1]
+                        sep = "&" if qs else ""
+                        scope["query_string"] = f"{qs}{sep}sessionId={sid}".encode()
+                        print(f"TELEMETRY: Auto-hijacking SSE session {sid}", flush=True)
+                    print("TELEMETRY: Routing POST to SSE session handler", flush=True)
+                    await sse.handle_post_message(scope, receive, send)
+                    return
+
+                # 2. Stateless bridge — read full body
+                print("TELEMETRY: Stateless bridge mode", flush=True)
+                body_bytes = b""
+                while True:
+                    msg = await receive()
+                    if msg["type"] == "http.request":
+                        body_bytes += msg.get("body", b"")
+                        if not msg.get("more_body", False):
+                            break
+
+                if not body_bytes:
+                    raise ValueError("Empty request body")
+
+                req = json.loads(body_bytes)
+                request_id = req.get("id")
+                rpc_method = req.get("method", "")
+                rpc_params = req.get("params") or {}
+
+                print(f"TELEMETRY: Stateless RPC method={rpc_method} id={request_id}", flush=True)
+
+                # 3. Dispatch using FastMCP's own async public methods
+                #    These are the CORRECT API — not _mcp_server internal methods.
+                result_data = None
+
+                if rpc_method == "initialize":
+                    result_data = {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+                        "serverInfo": {"name": "ifc-bonsai-mcp", "version": "1.0.0"},
+                    }
+
+                elif rpc_method == "tools/list":
+                    # mcp.list_tools() is the FastMCP public async method.
+                    # Returns list[mcp.types.Tool] (Pydantic models).
+                    tools = await mcp.list_tools()
+                    # Add ifc. prefixed aliases so Supabase proxy can find them
+                    from mcp.types import Tool as MCPTool
+                    prefixed = [
+                        MCPTool(
+                            name=f"ifc.{t.name}",
+                            description=t.description,
+                            inputSchema=t.inputSchema,
+                        )
+                        for t in tools
+                    ]
+                    all_tools = tools + prefixed
+                    result_data = {"tools": [_to_json_safe(t) for t in all_tools]}
+
+                elif rpc_method == "tools/call":
+                    tool_name = rpc_params.get("name", "")
+                    tool_args = rpc_params.get("arguments") or {}
+                    # Strip ifc. prefix — tools are stored without it
+                    if tool_name.startswith("ifc."):
+                        tool_name = tool_name[4:]
+                    # mcp.call_tool() is the FastMCP public async method.
+                    # Internally handles context injection & result conversion.
+                    content = await mcp.call_tool(tool_name, tool_args)
+                    result_data = {
+                        "content": [_to_json_safe(c) for c in content],
+                        "isError": False,
+                    }
+
+                elif rpc_method == "resources/list":
+                    resources = await mcp.list_resources()
+                    result_data = {"resources": [_to_json_safe(r) for r in resources]}
+
+                elif rpc_method == "prompts/list":
+                    prompts_list = await mcp.list_prompts()
+                    result_data = {"prompts": [_to_json_safe(p) for p in prompts_list]}
+
+                elif rpc_method == "notifications/initialized":
+                    # Client notification — no response body needed
+                    await send({"type": "http.response.start", "status": 204, "headers": []})
+                    await send({"type": "http.response.body", "body": b""})
+                    return
+
+                else:
+                    raise ValueError(f"Unsupported method in stateless mode: {rpc_method}")
+
+                # 4. Send response
+                response_body = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": result_data,
+                }).encode()
+                await send({
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"access-control-allow-origin", b"*"),
+                    ],
+                })
+                await send({"type": "http.response.body", "body": response_body})
+                print(f"TELEMETRY: Stateless response OK for {rpc_method}", flush=True)
+                return
+
+            except Exception as exc:
+                print(f"CRITICAL: Stateless bridge error: {exc}", flush=True)
+                traceback.print_exc()
+                err_body = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32603, "message": str(exc)},
+                }).encode()
+                await send({
+                    "type": "http.response.start",
+                    "status": 500,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"access-control-allow-origin", b"*"),
+                    ],
+                })
+                await send({"type": "http.response.body", "body": err_body})
+                return
+
+        # ── OPTIONS /mcp → CORS pre-flight ────────────────────────────────
+        if method == "OPTIONS":
+            await send({
+                "type": "http.response.start",
+                "status": 204,
+                "headers": [
+                    (b"access-control-allow-origin", b"*"),
+                    (b"access-control-allow-methods", b"GET, POST, OPTIONS"),
+                    (b"access-control-allow-headers", b"content-type, authorization"),
+                ],
+            })
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+    # ── Fallback: health checks ───────────────────────────────────────────────
+    await _health_app(scope, receive, send)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    print(f"TELEMETRY: Starting ASGI Server on {MCP_PORT}. Support for /mcp.", flush=True)
+    print(f"TELEMETRY: Starting ASGI Server on {MCP_HOST}:{MCP_PORT}", flush=True)
     uvicorn.run(mcp_asgi_app, host=MCP_HOST, port=MCP_PORT, log_level="info")
