@@ -42,9 +42,24 @@ wait_for_blender(BLENDER_HOST, BLENDER_PORT)
 try:
     import mcp
     import importlib.metadata
+    import inspect
     print(f"TELEMETRY: mcp version: {importlib.metadata.version('mcp')}", flush=True)
     from blender_mcp.mcp_instance import mcp as mcp_inst  # type: ignore
     mcp = mcp_inst
+    
+    print("TELEMETRY: Inspecting _mcp_server methods", flush=True)
+    if hasattr(mcp, '_mcp_server'):
+        svr = mcp._mcp_server
+        for name in dir(svr):
+            if 'handle' in name.lower() or 'request' in name.lower():
+                attr = getattr(svr, name)
+                if callable(attr):
+                    try:
+                        sig = inspect.signature(attr)
+                        print(f"SVR_METHOD: {name}{sig}", flush=True)
+                    except:
+                        print(f"SVR_METHOD: {name} (no signature)", flush=True)
+    
     import blender_mcp.mcp_functions.api_tools as api_tools  # type: ignore
     import blender_mcp.mcp_functions.analysis_tools as analysis_tools  # type: ignore
     import blender_mcp.mcp_functions.prompts as prompts  # type: ignore
