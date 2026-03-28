@@ -12,7 +12,11 @@ interface Message {
 const toGeminiRole = (role: 'user' | 'assistant') =>
   role === 'assistant' ? 'model' : 'user';
 
-export const AIChat: React.FC = () => {
+interface AIChatProps {
+  onLoadIfcUrl?: (url: string) => void;
+}
+
+export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', role: 'assistant', content: "Hello! I'm your BIM Assistant powered by Gemini AI. Ask me anything about this model." }
   ]);
@@ -54,6 +58,12 @@ export const AIChat: React.FC = () => {
       });
 
       if (error) throw error;
+
+      // If the response includes an IFC file URL, auto-load it in the viewer
+      if (data.ifc_url && onLoadIfcUrl) {
+        console.log('Auto-loading IFC model from:', data.ifc_url);
+        onLoadIfcUrl(data.ifc_url);
+      }
 
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),

@@ -5,6 +5,7 @@ import Stats from 'stats.js';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
+  loadIfcFromUrl: (url: string) => Promise<void>;
 }
 
 export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
@@ -174,6 +175,36 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       } catch (error) {
         console.error('Error loading IFC file:', error);
         alert('Failed to load IFC file. Check the console for details.');
+      } finally {
+        setIsLoadingFile(false);
+      }
+    },
+
+    loadIfcFromUrl: async (url: string) => {
+      if (!ifcLoaderRef.current) return;
+      setIsLoadingFile(true);
+      try {
+        if (initPromiseRef.current) {
+          await initPromiseRef.current;
+        }
+
+        console.log(`Fetching IFC from URL: ${url}`);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+        const data = new Uint8Array(await response.arrayBuffer());
+        console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);
+
+        const modelId = `supabase-model-${Date.now()}`;
+        await ifcLoaderRef.current.load(data, false, modelId, {
+          processData: {
+            progressCallback: (progress: number) =>
+              console.log(`IFC loading progress: ${Math.round(progress * 100)}%`),
+          },
+        });
+        console.log('IFC model loaded from URL successfully');
+      } catch (error) {
+        console.error('Error loading IFC from URL:', error);
       } finally {
         setIsLoadingFile(false);
       }

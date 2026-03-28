@@ -11,6 +11,10 @@ function App() {
     viewerRef.current?.loadIfc(file);
   };
 
+  const handleLoadIfcUrl = (url: string) => {
+    viewerRef.current?.loadIfcFromUrl(url);
+  };
+
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-neutral-900">
 
@@ -29,7 +33,7 @@ function App() {
 
         {/* Floating chat — bottom-center, small message-box style */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-xl z-20 px-4">
-          <AIChat />
+          <AIChat onLoadIfcUrl={handleLoadIfcUrl} />
         </div>
       </div>
     </div>

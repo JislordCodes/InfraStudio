@@ -3138,3 +3138,46 @@ def get_trimesh_examples(ctx: Context) -> str:
     }
     
     return json.dumps(examples, indent=2)
+
+
+@mcp.tool()
+def export_ifc(
+    ctx: Context,
+    session_id: str = "default"
+) -> str:
+    """
+    Export the current IFC model and upload it to Supabase Storage.
+
+    This tool reads the current IFC file from disk and uploads it to a
+    Supabase Storage bucket, returning a public URL that can be used to
+    download and display the model in the frontend 3D viewer.
+
+    Call this tool after making changes to the IFC model to make the
+    updated model available for viewing.
+
+    Args:
+        ctx (Context): The MCP context (not used directly).
+        session_id (str): Session identifier for namespacing uploads (default: "default").
+
+    Returns:
+        str: JSON containing:
+            - "success" (bool): Whether the upload succeeded
+            - "file_url" (str): Public URL of the uploaded IFC file
+            - "storage_path" (str): Path within the storage bucket
+            - "file_size" (int): Size of the uploaded file in bytes
+            - "error" (str): Error message if upload failed
+
+    Examples:
+        # Export current model
+        export_ifc()
+
+        # Export with session identifier
+        export_ifc(session_id="user-123")
+    """
+    try:
+        from ..supabase_uploader import upload_ifc_to_supabase
+        result = upload_ifc_to_supabase(session_id=session_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error exporting IFC: {e}")
+        return json.dumps({"success": False, "error": f"Error exporting IFC: {e}"}, indent=2)
