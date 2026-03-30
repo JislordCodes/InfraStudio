@@ -3181,3 +3181,41 @@ def export_ifc(
     except Exception as e:
         logger.error(f"Error exporting IFC: {e}")
         return json.dumps({"success": False, "error": f"Error exporting IFC: {e}"}, indent=2)
+
+
+@mcp.tool()
+def initialize_project(
+    ctx: Context,
+    project_name: str = "InfraStudio Session"
+) -> str:
+    """
+    Reset the IFC project to a fresh, empty state.
+
+    Creates a brand-new IFC4 file with a standard spatial hierarchy
+    (Project → Site → Building → Storey) and all required geometric
+    representation contexts.  The previous in-memory IFC data and the
+    on-disk file (new_project.ifc) are replaced.
+
+    Call this tool at the start of every new design session so that
+    elements from previous prompts do not accumulate.
+
+    Args:
+        ctx (Context): The MCP context.
+        project_name (str): Name for the new IFC project
+                            (default: "InfraStudio Session").
+
+    Returns:
+        str: JSON with success status, project GUID, and schema version.
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command("initialize_project", {
+            "project_name": project_name
+        })
+        if result.get("status") == "error":
+            return json.dumps({"success": False, "error": result.get("result", "Unknown error")})
+        return json.dumps(result.get("result", {"success": True, "message": "Project initialized"}), indent=2)
+    except Exception as e:
+        logger.error(f"Error initializing project: {e}")
+        return json.dumps({"success": False, "error": f"Error initializing project: {e}"}, indent=2)
+
