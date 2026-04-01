@@ -116,51 +116,32 @@ async function ragFindFunction(operation: string, objectType: string): Promise<s
 }
 
 // ═══════════════════════════════════════════
-// EXECUTE BLENDER CODE - Universal Fallback
+// CODE EXECUTION - Universal Fallback
 // ═══════════════════════════════════════════
 async function execBlenderCode(code: string): Promise<Record<string, unknown>> {
   log("EXEC_CODE (" + code.length + " chars)");
   return await mcpTool("execute_blender_code", { code });
 }
 
-// Create opening in wall via direct Python execution
-async function createOpeningViaCode(
+// Create opening in wall via native MCP tool
+async function createOpening(
   wallGuid: string, width: number, height: number, depth: number,
   location: [number, number, number], name: string
 ): Promise<string | undefined> {
-  const code = `
-import json
-from blender_addon.api.feature import create_opening
-result = create_opening(
-    width=${width}, height=${height}, depth=${depth},
-    location=[${location.join(",")}],
-    wall_guid="${wallGuid}",
-    opening_type="OPENING",
-    name="${name}"
-)
-print(json.dumps(result))
-`;
-  const r = await execBlenderCode(code);
-  // Extract opening_guid from printed output
-  const raw = r.output as string || r.raw as string || JSON.stringify(r);
-  const m = raw.match(/"opening_guid"\s*:\s*"([^"]+)"/);
-  if (m) { log("Opening GUID: " + m[1]); return m[1]; }
-  // Try parsing the result directly
+  const r = await mcpTool("create_opening", {
+    wall_guid: wallGuid, width, height, depth, location, name, opening_type: "OPENING"
+  });
   const guid = getGuid(r, "opening_guid", "guid");
   if (guid) return guid;
   log("WARN: Opening created but GUID not captured");
   return undefined;
 }
 
-// Fill opening with element via direct Python execution
-async function fillOpeningViaCode(openingGuid: string, elementGuid: string): Promise<boolean> {
-  const code = `
-import json
-from blender_addon.api.feature import fill_opening
-result = fill_opening(opening_guid="${openingGuid}", element_guid="${elementGuid}")
-print(json.dumps(result))
-`;
-  const r = await execBlenderCode(code);
+// Fill opening with element via native MCP tool
+async function fillOpening(openingGuid: string, elementGuid: string): Promise<boolean> {
+  const r = await mcpTool("fill_opening", {
+    opening_guid: openingGuid, element_guid: elementGuid
+  });
   const raw = JSON.stringify(r);
   return raw.includes('"success": true') || raw.includes('"success":true');
 }
@@ -185,7 +166,7 @@ CREATION TOOLS:
 - create_trimesh_ifc(vertices, faces, name, ifc_class) - Custom mesh geometry
 - create_mesh_ifc(vertices, faces, name) - Simple mesh
 
-OPENINGS (via execute_blender_code - Blender addon commands):
+OPENING TOOLS:
 - create_opening(width, height, depth, location, wall_guid) - Cut void in wall
 - fill_opening(opening_guid, element_guid) - Place door/window in void
 
@@ -336,8 +317,8 @@ async function execute(plan: BuildingPlan): Promise<{ summary: string; steps: st
       const pos = openingWorldPos(w.start, w.end, op.offset, sill);
 
       try {
-        // Step A: Cut void in wall via execute_blender_code (Strategy C - code fallback)
-        const openingGuid = await createOpeningViaCode(
+        // Step A: Cut void in wall via native MCP tool
+        const openingGuid = await createOpening(
           wg, op.width, op.height, w.thickness + 0.1, pos, op.name + " Opening"
         );
 
@@ -362,9 +343,9 @@ async function execute(plan: BuildingPlan): Promise<{ summary: string; steps: st
           elemGuid = getGuid(wr, "window_guid", "guid");
         }
 
-        // Step C: Fill opening with element (Strategy C - code fallback)
+        // Step C: Fill opening with element via native MCP tool
         if (openingGuid && elemGuid) {
-          const filled = await fillOpeningViaCode(openingGuid, elemGuid);
+          const filled = await fillOpening(openingGuid, elemGuid);
           if (filled) {
             steps.push("✓ " + (op.type === "door" ? "Door" : "Window") + " '" + op.name + "' in wall '" + w.name + "' (opening + fill)");
           } else {
