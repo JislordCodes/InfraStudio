@@ -1,0 +1,3 @@
+class BoundingBoxer extends Component implements Disposable_2 {
+    static readonly uuid: "d1444724-dba6-4cdd-a0c7-68ee1450d166";
+    /** {@link Component.enabled}

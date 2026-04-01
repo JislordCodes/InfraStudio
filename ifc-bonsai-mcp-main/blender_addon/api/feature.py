@@ -213,6 +213,10 @@ def create_opening(
         return {"success": False, "error": str(e)}
 
 
+# Aliases for backward compatibility with window.py imports
+create_opening_llm = create_opening
+
+
 @register_command('fill_opening', description="Fill an opening with an element (door, window, etc.)")
 def fill_opening(
     opening_guid: str,
@@ -270,6 +274,10 @@ def fill_opening(
         
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# Alias for backward compatibility with window.py imports
+fill_opening_llm = fill_opening
 
 
 @register_command('remove_opening', description="Remove opening and optionally its filling")

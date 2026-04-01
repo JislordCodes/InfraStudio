@@ -1899,6 +1899,107 @@ def create_window(
 
 
 @mcp.tool()
+def create_opening(
+    ctx: Context,
+    width: float = 1.0,
+    height: float = 2.0,
+    depth: float = 0.3,
+    location: Optional[List[float]] = None,
+    rotation: Optional[List[float]] = None,
+    element_guid: Optional[str] = None,
+    wall_guid: Optional[str] = None,
+    slab_guid: Optional[str] = None,
+    opening_type: str = "OPENING",
+    name: Optional[str] = None,
+    verbose: bool = False
+) -> str:
+    """
+    Create a rectangular opening (void) in an element like a wall or slab.
+    
+    This is essential for placing doors and windows properly in walls.
+    The opening cuts a void in the target element, which can then be filled
+    with a door or window using fill_opening().
+    
+    Workflow:
+        1. create_opening(wall_guid=...) → cuts void → returns opening_guid
+        2. create_door/create_window → creates element → returns element_guid  
+        3. fill_opening(opening_guid, element_guid) → places element in void
+    
+    Parameters:
+        width (float): Opening width in meters (default: 1.0)
+        height (float): Opening height in meters (default: 2.0)
+        depth (float): Opening depth - should be slightly larger than wall thickness (default: 0.3)
+        location (List[float]): [x, y, z] position of opening center
+        rotation (List[float]): [rx, ry, rz] rotation angles in degrees
+        element_guid (str): GUID of element to create opening in
+        wall_guid (str): Alias for element_guid (for walls)
+        slab_guid (str): Alias for element_guid (for slabs)
+        opening_type (str): Type: "OPENING", "RECESS", "NOTDEFINED", "USERDEFINED"
+        name (str): Optional opening name
+        verbose (bool): Enable debug logging
+    
+    Returns:
+        str: JSON with opening_guid, element_guid, void_relationship_guid
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "width": width,
+            "height": height,
+            "depth": depth,
+            "location": location,
+            "rotation": rotation,
+            "element_guid": element_guid,
+            "wall_guid": wall_guid,
+            "slab_guid": slab_guid,
+            "opening_type": opening_type,
+            "name": name,
+            "verbose": verbose
+        }
+        result = blender.send_command("create_opening", params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating opening: {e}")
+        return json.dumps({"success": False, "error": f"Error creating opening: {e}"})
+
+
+@mcp.tool()
+def fill_opening(
+    ctx: Context,
+    opening_guid: str,
+    element_guid: str,
+    verbose: bool = False
+) -> str:
+    """
+    Fill an opening with an element like a door or window.
+    
+    Places a door or window element into a previously created opening void.
+    This creates the proper IFC relationship (IfcRelFillsElement) between
+    the opening and the filling element.
+    
+    Parameters:
+        opening_guid (str): GUID of the opening to fill
+        element_guid (str): GUID of the element (door/window) to place in the opening
+        verbose (bool): Enable debug logging
+    
+    Returns:
+        str: JSON with opening_guid, element_guid, filling_relationship_guid
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "opening_guid": opening_guid,
+            "element_guid": element_guid,
+            "verbose": verbose
+        }
+        result = blender.send_command("fill_opening", params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error filling opening: {e}")
+        return json.dumps({"success": False, "error": f"Error filling opening: {e}"})
+
+
+@mcp.tool()
 def update_window(
     ctx: Context,
     window_guid: str,

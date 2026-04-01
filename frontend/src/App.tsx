@@ -24,6 +24,7 @@ function App() {
           <div className="w-5 h-5 bg-blue-600 rounded-sm" />
           BIM<span className="text-neutral-500 font-light">Viewer</span>
         </h1>
+        <button onClick={() => handleLoadIfcUrl('/test.ifc')} className="bg-red-500 text-white px-4 py-2 font-bold z-50 rounded">TEST LOAD</button>
         <Uploader onFileUpload={handleFileUpload} />
       </div>
 

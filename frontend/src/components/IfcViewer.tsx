@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 're
 import * as OBC from '@thatopen/components';
 import * as THREE from 'three';
 import Stats from 'stats.js';
+import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box } from 'lucide-react';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -14,8 +15,12 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const ifcLoaderRef = useRef<OBC.IfcLoader | null>(null);
   const initPromiseRef = useRef<Promise<void> | null>(null);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
+  const modelBboxRef = useRef<THREE.Box3 | null>(null);
+  const cameraRef = useRef<OBC.OrthoPerspectiveCamera | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
     if (!containerRef.current) return;
     const container = containerRef.current;
 
@@ -35,6 +40,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
     world.renderer = new OBC.SimpleRenderer(components, container);
     world.camera = new OBC.OrthoPerspectiveCamera(components);
+    cameraRef.current = world.camera;
 
     // ── 2. Init engine BEFORE accessing any component APIs ──────────────────
     components.init();
@@ -67,62 +73,64 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     resizeObserver.observe(container);
 
     // ── 6. FragmentsManager + IfcLoader — async init ─────────────────────────
-    //
-    // Correct order from official docs:
-    //   a) Call fragments.init(workerUrl)          ← synchronous call, no await needed
-    //   b) Register camera update listener on core  ← after init
-    //   c) Register fragments.list.onItemSet        ← NOT onFragmentsLoaded
-    //   d) Register material z-fighting listener    ← after init
-    //   e) await ifcLoader.setup(...)               ← must await, needs autoSetWasm: false
-    //
     const fragments = components.get(OBC.FragmentsManager);
     const ifcLoader = components.get(OBC.IfcLoader);
     ifcLoaderRef.current = ifcLoader;
 
     const initAsync = async () => {
-      // Fetch the fragments web-worker
-      const githubUrl = 'https://thatopen.github.io/engine_fragment/resources/worker.mjs';
-      const fetchedUrl = await fetch(githubUrl);
-      const workerBlob = await fetchedUrl.blob();
-      const workerFile = new File([workerBlob], 'worker.mjs', { type: 'text/javascript' });
-      const workerUrl = URL.createObjectURL(workerFile);
-
-      // Init fragments — this is NOT awaited in the official docs
-      fragments.init(workerUrl);
+      // Initialize Fragments Manager with Blob worker approach
+      try {
+        const fetchedUrl = await fetch('/fragments-worker.mjs');
+        const workerBlob = await fetchedUrl.blob();
+        const workerFile = new File([workerBlob], "worker.mjs", { type: "text/javascript" });
+        const localWorkerUrl = URL.createObjectURL(workerFile);
+        console.log('Initializing FragmentsManager worker from blob...');
+        fragments.init(localWorkerUrl);
+      } catch (e) {
+        console.warn('Failed to load fragments-worker.mjs from local origin, skipping worker init', e);
+      }
 
       // Camera update loop
-      world.camera.controls.addEventListener('update', () => fragments.core.update());
+      world.camera.controls.addEventListener('update', () => {
+        if (isMounted) fragments.core.update();
+      });
 
       // When a model is loaded → add it to the scene + center the camera orbit on it
       fragments.list.onItemSet.add(({ value: model }) => {
+        console.log('FragmentsModel received in onItemSet, adding to scene...');
         model.useCamera(world.camera!.three);
         world.scene!.three.add(model.object);
         fragments.core.update(true);
+        console.log('FragmentsModel added to scene and updated core.');
 
         // --- Center camera on loaded model ---
-        // Compute the bounding box of the model's 3D object in world space
-        const bbox = new THREE.Box3().setFromObject(model.object);
+        const bbox = new THREE.Box3();
+        bbox.setFromObject(model.object, true);
+        console.log('Model Bounding Box (computed):', bbox.isEmpty() ? 'EMPTY' : JSON.stringify(bbox));
 
         if (!bbox.isEmpty()) {
           const center = new THREE.Vector3();
           bbox.getCenter(center);
+          
+          modelBboxRef.current = bbox;
 
-          // Set the orbit pivot exactly to the model center so rotating
-          // never changes apparent distance (zoom stays locked)
-          world.camera!.controls.setTarget(center.x, center.y, center.z, false);
-
-          // Fit camera so the whole model is visible, with a bit of padding
-          world.camera!.controls.fitToBox(bbox, true, {
-            paddingTop:    0.1,
-            paddingBottom: 0.1,
-            paddingLeft:   0.1,
-            paddingRight:  0.1,
-          });
+          if (isMounted && world.camera) {
+            world.camera.controls.setTarget(center.x, center.y, center.z, false);
+            world.camera.controls.fitToBox(bbox, true, {
+              paddingTop: 0.1, paddingBottom: 0.1, paddingLeft: 0.1, paddingRight: 0.1,
+            });
+          }
+        } else {
+          console.warn('Manual bbox still empty — using scene fallback camera position');
+          if (isMounted && world.camera) {
+            world.camera.controls.setLookAt(30, 30, 30, 0, 0, 0, true);
+          }
         }
       });
 
       // Remove z-fighting on new materials
       fragments.core.models.materials.list.onItemSet.add(({ value: material }) => {
+        if (!isMounted) return;
         if (!('isLodMaterial' in material && material.isLodMaterial)) {
           material.polygonOffset = true;
           material.polygonOffsetUnits = 1;
@@ -130,23 +138,23 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         }
       });
 
-      // Configure web-ifc wasm — must await, autoSetWasm: false, version must match installed web-ifc
-      await ifcLoader.setup({
-        autoSetWasm: false,
-        wasm: {
-          path: 'https://unpkg.com/web-ifc@0.0.66/',
-          absolute: true,
-        },
-      });
+      if (!isMounted) return;
 
-      setIsLoaded(true);
+      console.log('Setting up web-ifc WASM defaults...');
+      await ifcLoader.setup();
+      console.log('Finished setting up ifcLoader WASM');
+
+      if (isMounted) setIsLoaded(true);
     };
 
     initPromiseRef.current = initAsync().catch((e) => {
+      if (!isMounted) return; // Ignore errors caused naturally by dismounting
       console.error('IFC Viewer init failed:', e);
+      setInitError(e instanceof Error ? e.message : String(e));
     });
 
     return () => {
+      isMounted = false;
       resizeObserver.disconnect();
       components.dispose();
       stats.dom.remove();
@@ -165,16 +173,14 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
         const data = new Uint8Array(await file.arrayBuffer());
 
-        // Correct signature: load(buffer, useWorker, modelId, options?)
-        await ifcLoaderRef.current.load(data, false, file.name, {
-          processData: {
-            progressCallback: (progress: number) =>
-              console.log(`IFC loading progress: ${Math.round(progress * 100)}%`),
-          },
-        });
+        // useWorker: false — process on main thread / without web-ifc-mt.worker.js
+        console.log('Starting IFC load, file size:', data.byteLength, 'bytes');
+        const model = await ifcLoaderRef.current.load(data, true, file.name);
+        console.log('IFC load() resolved successfully', !!model);
+        
       } catch (error) {
         console.error('Error loading IFC file:', error);
-        alert('Failed to load IFC file. Check the console for details.');
+        alert(`Failed to load IFC file. Error: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         setIsLoadingFile(false);
       }
@@ -196,15 +202,12 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);
 
         const modelId = `supabase-model-${Date.now()}`;
-        await ifcLoaderRef.current.load(data, false, modelId, {
-          processData: {
-            progressCallback: (progress: number) =>
-              console.log(`IFC loading progress: ${Math.round(progress * 100)}%`),
-          },
-        });
-        console.log('IFC model loaded from URL successfully');
+        const model = await ifcLoaderRef.current.load(data, true, modelId);
+        console.log('IFC model loaded from URL successfully', !!model);
+
       } catch (error) {
         console.error('Error loading IFC from URL:', error);
+        alert(`Failed to load IFC URL. Error: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         setIsLoadingFile(false);
       }
@@ -227,8 +230,87 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       )}
 
       {/* Engine status badge */}
-      <div className="absolute top-4 right-4 z-10 text-white font-mono text-xs opacity-50 pointer-events-none bg-black/50 px-2 py-1 rounded">
-        {isLoaded ? 'Engine Ready' : 'Initializing Engine...'}
+      <div className="absolute top-4 right-4 z-10 text-white font-mono text-xs pointer-events-none bg-black/50 px-2 py-1 rounded">
+        <div className={isLoaded ? 'opacity-50' : 'text-yellow-400'}>
+          {isLoaded ? 'Engine Ready' : 'Initializing Engine...'}
+        </div>
+        {initError && (
+          <div className="text-red-400 mt-1 max-w-xs break-words">
+            Error: {initError}
+          </div>
+        )}
+      </div>
+
+      {/* Action Toolbar - Vertical, right side */}
+      <div className="absolute top-1/2 right-3 -translate-y-1/2 z-50 flex flex-col items-center gap-1.5 px-1.5 py-2.5 bg-neutral-900/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.5)] pointer-events-auto">
+        <button 
+          onClick={() => cameraRef.current?.controls.dolly(5, true)}
+          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          title="Zoom In"
+        >
+          <ZoomIn size={18} strokeWidth={2.5} />
+        </button>
+        
+        <button 
+          onClick={() => cameraRef.current?.controls.dolly(-5, true)}
+          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          title="Zoom Out"
+        >
+          <ZoomOut size={18} strokeWidth={2.5} />
+        </button>
+
+        <div className="h-px w-6 bg-white/15 my-0.5 rounded-full" />
+
+        <button 
+          onClick={() => {
+            if (cameraRef.current && modelBboxRef.current) {
+              cameraRef.current.controls.fitToBox(modelBboxRef.current, true, {
+                paddingTop: 0.1, paddingBottom: 0.1, paddingLeft: 0.1, paddingRight: 0.1
+              });
+            }
+          }}
+          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          title="Fit to View"
+        >
+          <Maximize size={18} strokeWidth={2.5} />
+        </button>
+
+        <button 
+          onClick={() => {
+            if (cameraRef.current && modelBboxRef.current) {
+              const center = new THREE.Vector3();
+              modelBboxRef.current.getCenter(center);
+              cameraRef.current.controls.setLookAt(
+                center.x + 20, center.y + 20, center.z + 20, 
+                center.x, center.y, center.z, 
+                true
+              );
+            }
+          }}
+          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          title="Reset Orbit Angle"
+        >
+          <RotateCcw size={18} strokeWidth={2.5} />
+        </button>
+
+        <div className="h-px w-6 bg-white/15 my-0.5 rounded-full" />
+
+        <button 
+          onClick={() => {
+            if (cameraRef.current) {
+               const current = cameraRef.current.projection.current;
+               const next = current === 'Perspective' ? 'Orthographic' : 'Perspective';
+               cameraRef.current.projection.set(next);
+               if (modelBboxRef.current) {
+                  cameraRef.current.controls.fitToBox(modelBboxRef.current, false);
+               }
+            }
+          }}
+          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          title="Toggle Perspective / Orthographic"
+        >
+          <Box size={18} strokeWidth={2.5} />
+        </button>
       </div>
     </div>
   );

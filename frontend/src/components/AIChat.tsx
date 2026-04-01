@@ -59,23 +59,38 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
 
       if (error) throw error;
 
+      // Debug: log full response
+      console.log('Full AI response:', JSON.stringify(data, null, 2));
+      if (data.debug) console.log('DEBUG LOG:', data.debug);
+      if (data.steps) console.log('STEPS:', data.steps);
+
       // If the response includes an IFC file URL, auto-load it in the viewer
       if (data.ifc_url && onLoadIfcUrl) {
         console.log('Auto-loading IFC model from:', data.ifc_url);
         onLoadIfcUrl(data.ifc_url);
       }
 
+      // Build reply with step details if available
+      let replyText = data.reply ?? 'Sorry, I could not generate a response.';
+      if (data.steps && data.steps.length > 0) {
+        replyText += '\n\n' + data.steps.join('\n');
+      }
+
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.reply ?? 'Sorry, I could not generate a response.',
+        content: replyText,
       }]);
     } catch (err) {
       console.error('Gemini chat error:', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      const isTimeout = detail.toLowerCase().includes('timeout') || detail.toLowerCase().includes('aborted');
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: '⚠️ Failed to get a response. Please try again.',
+        content: isTimeout
+          ? '⏱️ The request took too long. Try a simpler prompt (e.g. "Create a wall") or try again.'
+          : `⚠️ Failed to get a response: ${detail.slice(0, 200)}`,
       }]);
     } finally {
       setIsLoading(false);
@@ -121,7 +136,17 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                       : 'bg-white/10 text-neutral-100 rounded-bl-sm'
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === 'assistant' ? (
+                    <div className="space-y-1">
+                      {msg.content.split('\n').map((line, i) => {
+                        if (line.startsWith('✓')) return <div key={i} className="text-emerald-400 text-xs font-mono">{line}</div>;
+                        if (line.startsWith('⚠')) return <div key={i} className="text-amber-400 text-xs font-mono">{line}</div>;
+                        if (line.startsWith('✗')) return <div key={i} className="text-red-400 text-xs font-mono">{line}</div>;
+                        if (line.trim() === '') return null;
+                        return <div key={i}>{line}</div>;
+                      })}
+                    </div>
+                  ) : msg.content}
                 </div>
               </div>
             ))}
