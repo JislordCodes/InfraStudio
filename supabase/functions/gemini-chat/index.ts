@@ -149,310 +149,174 @@ async function fillOpening(openingGuid: string, elementGuid: string): Promise<bo
 // ═══════════════════════════════════════════
 // PLANNER - Gemini with Full Tool Awareness
 // ═══════════════════════════════════════════
-const PLANNER_PROMPT = `You are a BIM Planning Engine for InfraStudio. Convert user building requests into structured JSON.
+const PLANNER_PROMPT = `You are a highly capable BIM Agent for InfraStudio.
+You have access to 56 backend MCP tools via a single generic function: call_mcp_tool(tool_name, arguments)
 
-You have access to 54 MCP tools including:
+Your Goal: Fulfill the user's design or query requests by actively chaining together tools.
 
-CREATION TOOLS:
-- initialize_project(project_name) - Init new IFC project
-- create_wall(name, length, height, thickness, location, rotation) - One-point wall
-- create_two_point_wall(name, start_point, end_point, height, thickness) - Two-point wall
-- create_polyline_walls(name, points, height, thickness) - Multi-segment walls
-- create_door(name, dimensions{width,height}, location, operation_type) - Standalone door
-- create_window(name, dimensions{width,height}, location, partition_type) - Standalone window
-- create_slab(name, outline_points, thickness) - Floor/ceiling slab
-- create_roof(name, polyline, roof_type, angle, thickness) - Roof element
-- create_stairs(name, location, num_risers, riser_height, tread_depth, width) - Stairs
-- create_trimesh_ifc(vertices, faces, name, ifc_class) - Custom mesh geometry
-- create_mesh_ifc(vertices, faces, name) - Simple mesh
+HOW TO USE TOOLS:
+- Always pass the EXACT tool name as "tool_name", and its parameters as a JSON object in "arguments".
+- Example: to create a wall, call_mcp_tool("create_two_point_wall", { "start_point": [0,0,0], "end_point": [5,0,0], "height": 3, "thickness": 0.2, "name": "W1" })
+- Wait for the result before making the next call. The system will process your call and hand you the result.
+- ALWAYS use metric units (meters).
+- If creating an opening, first use create_opening, get the opening_guid, then use create_door/create_window to get the element_guid, then fill_opening(opening_guid, element_guid).
 
-OPENING TOOLS:
-- create_opening(width, height, depth, location, wall_guid) - Cut void in wall
-- fill_opening(opening_guid, element_guid) - Place door/window in void
+AVAILABLE TOOLS:
+--- CREATION ---
+- initialize_project(project_name)
+- create_wall(name, length, height, thickness, location, rotation)
+- create_two_point_wall(name, start_point, end_point, height, thickness)
+- create_polyline_walls(name, points, height, thickness)
+- create_door(name, dimensions{width,height}, location, operation_type)
+- create_window(name, dimensions{width,height}, location, partition_type)
+- create_slab(name, outline_points, thickness)
+- create_roof(name, polyline, roof_type, angle, thickness)
+- create_stairs(name, location, num_risers, riser_height, tread_depth, width)
+- create_mesh_ifc(vertices, faces, name)
+- create_trimesh_ifc(vertices, faces, name, ifc_class)
 
-STYLE TOOLS:
-- create_surface_style(name, surface_color, transparency) - Create color style
-- create_pbr_style(name, base_color, metallic, roughness) - PBR material
-- apply_style_to_object(object_guids, style_name) - Apply style
-- apply_style_to_material(material_name, style_name) - Apply to material
-- list_styles() - List all styles
-- update_style(style_name, ...) - Update style
-- remove_style(style_name) - Remove style
+--- OPENINGS ---
+- create_opening(width, height, depth, location, wall_guid, opening_type, name)
+- fill_opening(opening_guid, element_guid)
 
-QUERY/UPDATE TOOLS:
-- get_scene_info() - Scene overview
-- get_ifc_scene_overview() - IFC model overview
+--- STYLES ---
+- create_surface_style(name, surface_color, transparency)
+- create_pbr_style(name, base_color, metallic, roughness)
+- apply_style_to_object(object_guids, style_name)
+- apply_style_to_material(material_name, style_name)
+- list_styles()
+- update_style(style_name, ...)
+- remove_style(style_name)
+
+--- QUERY & UPDATE ---
+- get_scene_info()
+- get_ifc_scene_overview()
+- get_blender_object_info(object_name)
+- get_selected_objects()
+- get_object_info(object_name)
 - get_wall_properties(wall_guid) / update_wall(wall_guid, ...)
 - get_door_properties(door_guid) / update_door(door_guid, ...)
 - get_window_properties(window_guid) / update_window(window_guid, ...)
 - get_slab_properties(slab_guid) / update_slab(slab_guid, ...)
 - get_door_operation_types() / get_window_partition_types() / get_stairs_types() / get_roof_types()
-- list_ifc_entities(ifc_class) - List entities by type
+- list_ifc_entities(ifc_class)
+- delete_stairs(stairs_guids) / delete_roof(...)
 
-RAG TOOLS (IFC Knowledge Base):
-- search_ifc_knowledge(query) - Semantic search IFC docs
-- find_ifc_function(operation, object_type) - Find functions by operation
-- get_ifc_function_details(function_name) - Get function signatures
-- get_ifc_module_info(module_name) - Module documentation
+--- RAG / KNOWLEDGE ---
+- search_ifc_knowledge(query, max_results)
+- find_ifc_function(operation, object_type)
+- get_ifc_function_details(function_name)
+- get_ifc_module_info(module_name)
 
-CODE EXECUTION:
-- execute_blender_code(code) - Run Python in Blender
-- execute_ifc_code_tool(code) - Run IFC Python code
+--- FALLBACK CODE EXECUTION ---
+- execute_blender_code(code) - Raw Python in Blender
+- execute_ifc_code_tool(code) - IFC OpenShell context
 
-EXPORT:
-- export_ifc(session_id) - Export and upload IFC file
+WHEN TO STOP:
+Once you have executed all necessary tool calls and completed the user's intent, return a final text response explaining what you did. Do NOT return text if you are still building.`;
 
-RULES:
-1. Non-building messages: {"type":"chat","reply":"..."}
-2. Building requests: {"type":"building","plan":{...}}
-3. Return ONLY valid JSON. No markdown.
-4. Metric dimensions (meters). Infer sensible defaults.
-5. Walls: use start/end 3D points. Openings: offset from wall start, sill_height for windows.
-6. Styles: {"name":"...","color":[r,g,b]} with 0-1 float values.
-7. For openings in walls: specify them inside the wall's "openings" array. The executor will handle creating the void, the door/window element, and filling the opening automatically.
-
-SCHEMA:
-{"type":"building","plan":{"project_name":"str","description":"str","elements":[{"type":"wall","name":"W1","start":[0,0,0],"end":[8,0,0],"height":3,"thickness":0.2,"openings":[{"type":"door","name":"D1","width":0.9,"height":2.1,"offset":3.55,"sill_height":0},{"type":"window","name":"Win1","width":1.2,"height":1.0,"offset":1.0,"sill_height":1.0}],"style":{"name":"Brick","color":[0.7,0.3,0.2]}},{"type":"slab","name":"Floor","outline":[[0,0,0],[8,0,0],[8,6,0],[0,6,0]],"thickness":0.3},{"type":"roof","name":"Roof","outline":[[0,0,3],[8,0,3],[8,6,3],[0,6,3]],"roof_type":"GABLE_ROOF","angle":30,"thickness":0.25},{"type":"stairs","name":"S1","location":[2,3,0],"num_risers":15,"riser_height":0.2,"tread_depth":0.28,"width":1.0}]}}
-
-Return ONLY JSON.`;
-
-async function plan(msg: string): Promise<PlanResponse> {
-  const res = await fetch(GEMINI_URL, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: PLANNER_PROMPT }] },
-      contents: [{ role: "user", parts: [{ text: msg }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 }
-    }),
-    signal: AbortSignal.timeout(60000)
-  });
-  if (!res.ok) throw new Error("Gemini " + res.status);
-  const json = await res.json();
-  const text = json?.candidates?.[0]?.content?.parts?.filter((p: { text?: string }) => p.text)?.map((p: { text?: string }) => p.text)?.join("")?.trim() ?? "";
-  log("Plan raw: " + text.slice(0, 300));
-  let c = text;
-  if (c.startsWith("```")) c = c.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  try {
-    const p = JSON.parse(c);
-    if (p.type === "chat") return { type: "chat", reply: p.reply };
-    if (p.type === "building" && p.plan) return { type: "building", plan: p.plan };
-    if (p.elements) return { type: "building", plan: p as BuildingPlan };
-    return { type: "chat", reply: p.reply || c };
-  } catch { return { type: "chat", reply: c || "I didn't understand that." }; }
-}
-
-// ═══════════════════════════════════════════
-// VALIDATOR
-// ═══════════════════════════════════════════
-function validate(plan: BuildingPlan): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-  if (!plan.elements?.length) { errors.push("No elements"); return { valid: false, errors }; }
-  for (const el of plan.elements) {
-    if (el.type === "wall") {
-      const w = el as WallElement;
-      const dx = w.end[0] - w.start[0], dy = w.end[1] - w.start[1], len = Math.sqrt(dx * dx + dy * dy);
-      if (len < 0.1) errors.push("Wall '" + w.name + "' zero length");
-      if (w.openings) for (const o of w.openings) {
-        if (o.offset < 0) o.offset = 0;
-        if (o.offset + o.width > len + 0.01) o.offset = Math.max(0, len - o.width - 0.1);
-        if (o.height > w.height) o.height = w.height - 0.1;
-      }
+// Define the generic tool for Gemini
+const GEMINI_TOOLS = [{
+  functionDeclarations: [{
+    name: "call_mcp_tool",
+    description: "Call an MCP backend tool by its name. Use this to create or query BIM objects, run RAG, etc. It returns the raw result.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        tool_name: { type: "STRING", description: "The exact name of the tool (e.g. create_two_point_wall)" },
+        arguments: { type: "OBJECT", description: "A JSON object of arguments keyed by name." }
+      },
+      required: ["tool_name", "arguments"]
     }
-    if (el.type === "roof" && (!((el as RoofElement).outline) || (el as RoofElement).outline.length < 3)) errors.push("Roof needs 3+ pts");
-    if (el.type === "slab" && (!((el as SlabElement).outline) || (el as SlabElement).outline.length < 3)) errors.push("Slab needs 3+ pts");
-  }
-  return { valid: errors.length === 0, errors };
-}
+  }]
+}];
 
 // ═══════════════════════════════════════════
-// SMART EXECUTOR - 3 Strategy System
+// AGENT EXECUTION LOOP
 // ═══════════════════════════════════════════
-function openingWorldPos(s: [number, number, number], e: [number, number, number], offset: number, sill: number): [number, number, number] {
-  const dx = e[0] - s[0], dy = e[1] - s[1], len = Math.sqrt(dx * dx + dy * dy);
-  if (len === 0) return [s[0], s[1], sill];
-  const r = offset / len;
-  return [s[0] + dx * r, s[1] + dy * r, sill];
-}
-
-async function execute(plan: BuildingPlan): Promise<{ summary: string; steps: string[]; count: number }> {
+async function executeAgentLoop(history: any[]): Promise<{ reply: string; steps: string[]; hasChanges: boolean }> {
   const steps: string[] = [];
-  let count = 0;
-  const wallGuids = new Map<string, string>();
-  const elemGuids = new Map<string, string>();
-  const styles: { el: string; style: ElementStyle }[] = [];
-
-  // ── Phase 1: Initialize ──
-  await mcpTool("initialize_project", { project_name: plan.project_name || "Build" });
-  steps.push("✓ Project initialized");
-
-  // ── Phase 2: Create Walls ──
-  const walls = plan.elements.filter(e => e.type === "wall") as WallElement[];
-  for (const w of walls) {
-    try {
-      const r = await mcpTool("create_two_point_wall", {
-        start_point: w.start, end_point: w.end, name: w.name,
-        thickness: w.thickness, height: w.height
-      });
-      const g = getGuid(r, "wall_guid", "guid", "GlobalId");
-      if (g) {
-        wallGuids.set(w.name, g);
-        elemGuids.set(w.name, g);
-        steps.push("✓ Wall '" + w.name + "'");
-        count++;
-      } else {
-        steps.push("⚠ Wall '" + w.name + "' created but no GUID captured");
-      }
-      if (w.style) styles.push({ el: w.name, style: w.style });
-    } catch (e) { steps.push("✗ Wall '" + w.name + "': " + String(e).slice(0, 80)); }
-  }
-
-  // ── Phase 3: Create Openings (3-step: void → element → fill) ──
-  for (const w of walls) {
-    if (!w.openings?.length) continue;
-    const wg = wallGuids.get(w.name);
-    if (!wg) { steps.push("⚠ Skip openings for '" + w.name + "' — no wall GUID"); continue; }
-
-    for (const op of w.openings) {
-      const sill = op.sill_height ?? (op.type === "window" ? 1.0 : 0);
-      const pos = openingWorldPos(w.start, w.end, op.offset, sill);
-
-      try {
-        // Step A: Cut void in wall via native MCP tool
-        const openingGuid = await createOpening(
-          wg, op.width, op.height, w.thickness + 0.1, pos, op.name + " Opening"
-        );
-
-        // Step B: Create door/window element (Strategy A - direct MCP tool)
-        let elemGuid: string | undefined;
-        if (op.type === "door") {
-          const dr = await mcpTool("create_door", {
-            name: op.name,
-            dimensions: { height: op.height, width: op.width },
-            location: [pos[0], pos[1], 0],
-            operation_type: "SINGLE_SWING_LEFT"
-          });
-          elemGuid = getGuid(dr, "door_guid", "guid");
-        } else {
-          // Create window WITHOUT wall_guid to avoid broken import
-          const wr = await mcpTool("create_window", {
-            name: op.name,
-            dimensions: { width: op.width, height: op.height },
-            location: pos,
-            partition_type: "SINGLE_PANEL"
-          });
-          elemGuid = getGuid(wr, "window_guid", "guid");
-        }
-
-        // Step C: Fill opening with element via native MCP tool
-        if (openingGuid && elemGuid) {
-          const filled = await fillOpening(openingGuid, elemGuid);
-          if (filled) {
-            steps.push("✓ " + (op.type === "door" ? "Door" : "Window") + " '" + op.name + "' in wall '" + w.name + "' (opening + fill)");
-          } else {
-            steps.push("⚠ " + op.type + " '" + op.name + "' created but fill_opening failed");
-          }
-        } else if (elemGuid) {
-          steps.push("⚠ " + op.type + " '" + op.name + "' placed at wall (standalone, opening void failed)");
-        } else {
-          steps.push("✗ " + op.type + " '" + op.name + "' element creation failed");
-          continue;
-        }
-
-        if (elemGuid) elemGuids.set(op.name, elemGuid);
-        count++;
-      } catch (e) {
-        // Strategy B: RAG fallback - search for alternative approach
-        log("Opening failed, trying RAG: " + String(e).slice(0, 80));
+  let modelHistory = [...history];
+  let loopCount = 0;
+  let hasChanges = false;
+  
+  while (loopCount < 20) {
+    loopCount++;
+    log(`--- Agent Turn ${loopCount} ---`);
+    
+    const res = await fetch(GEMINI_URL, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: PLANNER_PROMPT }] },
+        contents: modelHistory,
+        tools: GEMINI_TOOLS,
+        generationConfig: { temperature: 0.2, maxOutputTokens: 8192 }
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+    
+    if (!res.ok) throw new Error(`Gemini API Error: ${res.status}`);
+    const json = await res.json();
+    const candidate = json?.candidates?.[0];
+    if (!candidate || !candidate.content) break;
+    
+    modelHistory.push(candidate.content);
+    
+    const parts = candidate.content.parts || [];
+    const textPart = parts.find((p: any) => p.text);
+    const fnCallPart = parts.find((p: any) => p.functionCall);
+    
+    if (fnCallPart && fnCallPart.functionCall) {
+      const call = fnCallPart.functionCall;
+      log(`AI Wants to call: ${call.name}`);
+      
+      let callResult: any;
+      if (call.name === "call_mcp_tool") {
+        const tName = call.args?.tool_name?.toString() || "unknown";
+        const tArgs = call.args?.arguments || {};
+        
         try {
-          const ragResult = await ragSearch("create opening in wall for " + op.type);
-          log("RAG suggestion: " + ragResult.slice(0, 200));
-          // Even if RAG gives info, create standalone element as minimum
-          if (op.type === "door") {
-            const dr = await mcpTool("create_door", {
-              name: op.name, dimensions: { height: op.height, width: op.width },
-              location: [pos[0], pos[1], 0], operation_type: "SINGLE_SWING_LEFT"
-            });
-            const g = getGuid(dr, "door_guid", "guid");
-            if (g) { elemGuids.set(op.name, g); count++; }
+          const mRes = await mcpTool(tName, tArgs);
+          callResult = mRes;
+          
+          if (mRes.success === false || mRes.error) {
+            steps.push(`✗ Failed: ${tName}`);
           } else {
-            const wr = await mcpTool("create_window", {
-              name: op.name, dimensions: { width: op.width, height: op.height },
-              location: pos, partition_type: "SINGLE_PANEL"
-            });
-            const g = getGuid(wr, "window_guid", "guid");
-            if (g) { elemGuids.set(op.name, g); count++; }
+            steps.push(`✓ Used: ${tName}`);
+            if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_")) {
+              hasChanges = true;
+            }
           }
-          steps.push("⚠ " + op.type + " '" + op.name + "' (standalone, RAG-assisted fallback)");
-        } catch (e2) {
-          steps.push("✗ " + op.type + " '" + op.name + "': all strategies failed");
+        } catch(e) {
+          log(`Tool Execution Error: ${e}`);
+          callResult = { success: false, error: String(e) };
+          steps.push(`✗ Error: ${tName}`);
         }
+      } else {
+        callResult = { error: "Unknown function" };
       }
-    }
-  }
-
-  // ── Phase 4: Create Slabs ──
-  for (const s of plan.elements.filter(e => e.type === "slab") as SlabElement[]) {
-    try {
-      const r = await mcpTool("create_slab", { name: s.name, outline_points: s.outline, thickness: s.thickness });
-      const g = getGuid(r, "slab_guid", "guid");
-      if (g) elemGuids.set(s.name, g);
-      steps.push("✓ Slab '" + s.name + "'"); count++;
-      if (s.style) styles.push({ el: s.name, style: s.style });
-    } catch (e) { steps.push("✗ Slab '" + s.name + "': " + String(e).slice(0, 80)); }
-  }
-
-  // ── Phase 5: Create Roofs ──
-  for (const r of plan.elements.filter(e => e.type === "roof") as RoofElement[]) {
-    try {
-      const res = await mcpTool("create_roof", {
-        name: r.name, polyline: r.outline, roof_type: r.roof_type || "FLAT",
-        angle: r.angle || 30, thickness: r.thickness || 0.25
+      
+      modelHistory.push({
+        role: "function",
+        parts: [{
+          functionResponse: {
+            name: call.name,
+            response: callResult
+          }
+        }]
       });
-      const g = getGuid(res, "roof_guid", "guid");
-      if (g) elemGuids.set(r.name, g);
-      steps.push("✓ Roof '" + r.name + "'"); count++;
-      if (r.style) styles.push({ el: r.name, style: r.style });
-    } catch (e) { steps.push("✗ Roof '" + r.name + "': " + String(e).slice(0, 80)); }
-  }
-
-  // ── Phase 6: Create Stairs ──
-  for (const s of plan.elements.filter(e => e.type === "stairs") as StairsElement[]) {
-    try {
-      await mcpTool("create_stairs", {
-        name: s.name, location: s.location, num_risers: s.num_risers,
-        riser_height: s.riser_height, tread_depth: s.tread_depth, width: s.width
-      });
-      steps.push("✓ Stairs '" + s.name + "'"); count++;
-    } catch (e) { steps.push("✗ Stairs '" + s.name + "': " + String(e).slice(0, 80)); }
-  }
-
-  // ── Phase 7: Apply Styles ──
-  if (styles.length > 0) {
-    const created = new Set<string>();
-    for (const { el, style } of styles) {
-      try {
-        if (!created.has(style.name)) {
-          await mcpTool("create_surface_style", {
-            name: style.name, surface_color: style.color,
-            transparency: style.transparency ?? 0
-          });
-          created.add(style.name);
-        }
-        const g = elemGuids.get(el);
-        if (g) {
-          await mcpTool("apply_style_to_object", { object_guids: g, style_name: style.name });
-          steps.push("✓ Style '" + style.name + "' → '" + el + "'");
-        }
-      } catch (e) { steps.push("⚠ Style: " + String(e).slice(0, 60)); }
+      continue;
     }
+    
+    if (textPart && textPart.text) {
+      log(`Final AI Answer: ${textPart.text.substring(0, 100)}...`);
+      return { reply: textPart.text, steps, hasChanges };
+    }
+    
+    break;
   }
-
-  const okItems = steps.filter(s => s.startsWith("✓")).map(s => s.slice(2));
-  return {
-    summary: (plan.description || "Built") + ". Created " + count + " elements: " + okItems.join(", ") + ".",
-    steps,
-    count
-  };
+  
+  return { reply: "I completed my logic loop but did not return a final text response.", steps, hasChanges };
 }
 
 // ═══════════════════════════════════════════
@@ -465,37 +329,32 @@ Deno.serve(async (req: Request) => {
   debugLog.length = 0;
   mcpSessionId = "";
   try {
-    const { messages } = await req.json() as { messages: { role: string; content: string }[] };
-    const last = messages?.filter(m => m.role === "user").pop();
-    if (!last) return new Response(JSON.stringify({ error: "No message" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
-    log("User: " + last.content.slice(0, 200));
+    const payloadMsgs = (await req.json() as any).messages || [];
+    if (!payloadMsgs.length) return new Response(JSON.stringify({ error: "No messages" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
+    
+    // Convert incoming [role: user/assistant] payload into Gemini [role: user/model] history
+    const history = payloadMsgs.map((m: any) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content || "" }]
+    }));
 
-    // 1. Plan
-    const p = await plan(last.content);
-    if (p.type === "chat") return new Response(JSON.stringify({ reply: p.reply }), { headers: { ...CORS, "Content-Type": "application/json" } });
-
-    // 2. Validate
-    const v = validate(p.plan!);
-    if (!v.valid) return new Response(JSON.stringify({ reply: "Validation failed: " + v.errors.join(". "), debug: debugLog }), { headers: { ...CORS, "Content-Type": "application/json" } });
-
-    // 3. Connect MCP
     await mcpInit();
 
-    // 4. Execute with all strategies
-    const r = await execute(p.plan!);
-    log("Done: " + r.count + " elements");
+    const result = await executeAgentLoop(history);
 
-    // 5. Export
     let ifc_url: string | undefined;
-    if (r.count > 0) {
+    if (result.hasChanges) {
       try {
+        log("Changes detected, exporting IFC...");
         const ex = await mcpTool("export_ifc", { session_id: mcpSessionId || "default" });
-        if ((ex as Record<string, unknown>).success && (ex as Record<string, unknown>).file_url)
-          ifc_url = (ex as Record<string, unknown>).file_url as string;
+        if ((ex as any).success && (ex as any).file_url) {
+          ifc_url = (ex as any).file_url as string;
+          log("Export success");
+        }
       } catch (e) { log("Export err: " + e); }
     }
 
-    const body: Record<string, unknown> = { reply: r.summary, steps: r.steps, debug: debugLog };
+    const body: Record<string, unknown> = { reply: result.reply, steps: result.steps, debug: debugLog };
     if (ifc_url) body.ifc_url = ifc_url;
     return new Response(JSON.stringify(body), { headers: { ...CORS, "Content-Type": "application/json" } });
   } catch (err) {
