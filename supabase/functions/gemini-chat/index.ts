@@ -212,6 +212,15 @@ AVAILABLE TOOLS:
 - execute_blender_code(code) - Raw Python in Blender
 - execute_ifc_code_tool(code) - IFC OpenShell context
 
+CRITICAL RULES FOR YOU:
+1. OPENINGS ALIGNMENT: 
+   When creating an opening void in a wall via create_opening, you MUST use the exact SAME \`location\` coordinates when subsequently calling create_door or create_window. If you create the door at [0,0,0] but the opening is at [2,0,0], the door will not fit! Compute the 3D Math offset correctly.
+2. STYLING:
+   If the user asks for a specific color (like a 'red wall' or 'wooden surface'):
+   a. Create the wall/object first.
+   b. Call create_surface_style(name, color, transparency) with the [R,G,B] requested.
+   c. Call apply_style_to_object(object_guids=[...], style_name) on the GUID!
+
 WHEN TO STOP:
 Once you have executed all necessary tool calls and completed the user's intent, return a final text response explaining what you did. Do NOT return text if you are still building.`;
 
