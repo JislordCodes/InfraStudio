@@ -222,6 +222,8 @@ CRITICAL RULES FOR YOU:
    c. Call apply_style_to_object(object_guids=[...], style_name) on the GUID!
 3. STRICT VECTOR TYPES:
    Any argument named 'location', 'rotation', 'start_point', or 'end_point' MUST be an array of floats (e.g., [0.0, 0.0, 0.0]). NEVER pass a single scalar integer/float (e.g. rotation: 0), as it will trigger a validation crash in the MCP typed schema!
+4. UNKNOWN TOOLS / RAG FALLBACK:
+   If the user asks you to create a specific architectural element (e.g., Column, Beam, Duct) and there is no dedicated tool for it listed above (unlike create_wall or create_door), DO NOT fake it using another tool. Instead, you MUST first use the RAG tools (search_ifc_knowledge or find_ifc_function) to search for how to do it natively, and then apply that knowledge using execute_blender_code or execute_ifc_code_tool!
 
 WHEN TO STOP:
 Once you have executed all necessary tool calls and completed the user's intent, return a final text response explaining what you did. Do NOT return text if you are still building.`;
