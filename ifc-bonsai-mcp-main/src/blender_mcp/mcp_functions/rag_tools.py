@@ -366,12 +366,7 @@ def search_ifc_knowledge(
         Call ensure_ifc_knowledge_ready() first to initialize the system for instant performance.
     """
     if not _is_fully_ready():
-        return json.dumps({
-            'status': 'not_ready',
-            'error': 'System not initialized. Call ensure_ifc_knowledge_ready() first.',
-            'query': query,
-            'ready_for_instant_operations': False
-        })
+        ensure_ifc_knowledge_ready()
     
     start_time = time.time()
     
@@ -551,10 +546,7 @@ def find_ifc_function(
         Call ensure_ifc_knowledge_ready() first to initialize the system for instant performance.
     """
     if not _is_fully_ready():
-        return json.dumps({
-            'error': 'System not ready. Call ensure_ifc_knowledge_ready() first.',
-            'ready_for_instant_operations': False
-        })
+        ensure_ifc_knowledge_ready()
     
     start_time = time.time()
     
@@ -666,6 +658,8 @@ def get_ifc_module_info(module_name: str) -> str:
     Note:
         Call ensure_ifc_knowledge_ready() first to initialize the system for instant performance.
     """
+    if not _is_fully_ready():
+        ensure_ifc_knowledge_ready()
     if not _is_fully_ready():
         return json.dumps({
             'error': 'System not ready. Call ensure_ifc_knowledge_ready() first.',

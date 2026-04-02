@@ -1445,6 +1445,7 @@ def get_door_operation_types(ctx: Context) -> str:
         return f"Error getting door operation types: {e}"
 
 
+
 @mcp.tool()
 def create_door(
     ctx: Context,
