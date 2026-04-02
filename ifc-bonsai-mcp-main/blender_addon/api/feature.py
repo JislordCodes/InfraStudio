@@ -255,6 +255,19 @@ def fill_opening(
             element=element
         )
         
+        # Enforce strict hierarchy for Web-IFC / That Open Engine
+        if hasattr(element, "ObjectPlacement") and hasattr(opening, "ObjectPlacement"):
+            element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement
+            # Since the element is now relative to the opening, set its local offset to origin 
+            # (Assuming the AI supplied matching absolute coords earlier, the door should just snap directly)
+            try:
+                if hasattr(element.ObjectPlacement, "RelativePlacement"):
+                    rel_placement = element.ObjectPlacement.RelativePlacement
+                    if hasattr(rel_placement, "Location"):
+                        rel_placement.Location.Coordinates = (0.0, 0.0, 0.0)
+            except Exception as e:
+                if verbose: print(f"Could not reset relative placement coordinates: {e}")
+        
         save_and_load_ifc()
         
         result = {

@@ -330,6 +330,28 @@ def apply_style_to_object(
                             styles=[style]
                         )
                         styled_items.extend(styled_items_rep)
+
+                # For Web-IFC / That Open Engine compatibility, forcefully create and assign a Material
+                material_name = f"Material_{style.Name}"
+                material = None
+                for mat in ifc_file.by_type("IfcMaterial"):
+                    if getattr(mat, 'Name', '') == material_name:
+                        material = mat
+                        break
+                if not material:
+                    material = ifc_file.createIfcMaterial(material_name)
+                    # We need the context for assigning the style to the material
+                    try:
+                        from .ifc_utils import get_or_create_body_context
+                        context = get_or_create_body_context(ifc_file, "Body")
+                        ifcopenshell.api.run("style.assign_material_style", ifc_file, material=material, style=style, context=context)
+                    except Exception as e:
+                        if verbose: print(f"Could not assign style to material: {e}")
+                
+                try:
+                    ifcopenshell.api.run("material.assign_material", ifc_file, products=[obj], material=material)
+                except Exception as e:
+                    if verbose: print(f"Could not assign material to object: {e}")
                 
                 successful_objects.append({
                     "guid": object_guid,
