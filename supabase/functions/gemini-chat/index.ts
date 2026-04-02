@@ -180,8 +180,8 @@ AVAILABLE TOOLS:
 - fill_opening(opening_guid, element_guid)
 
 --- STYLES ---
-- create_surface_style(name, surface_color, transparency)
-- create_pbr_style(name, base_color, metallic, roughness)
+- create_surface_style(name, color[r,g,b], transparency)
+- create_pbr_style(name, diffuse_color[r,g,b], metallic, roughness)
 - apply_style_to_object(object_guids, style_name)
 - apply_style_to_material(material_name, style_name)
 - list_styles()
