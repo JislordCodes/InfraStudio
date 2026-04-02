@@ -510,8 +510,8 @@ def create_wall(
     ctx: Context,
     name: str = "New Wall",
     dimensions: Optional[Dict[str, float]] = None,
-    location: Optional[List[float]] = None,
-    rotation: Optional[List[float]] = None,
+    location: Optional[Union[List[float], float]] = None,
+    rotation: Optional[Union[List[float], float]] = None,
     geometry_properties: Optional[Dict[str, Any]] = None,
     transformation_matrix: Optional[List[List[float]]] = None,
     material: Optional[str] = None,
@@ -561,11 +561,16 @@ def create_wall(
     """
     try:
         blender = get_blender_connection()
+        
+        # Convert scalars to proper lists if AI sent them wrong
+        safe_location = [0.0, 0.0, float(location)] if isinstance(location, (int, float)) else location
+        safe_rotation = [0.0, 0.0, float(rotation)] if isinstance(rotation, (int, float)) else rotation
+            
         params = {
             "name": name,
             "dimensions": dimensions,
-            "location": location,
-            "rotation": rotation,
+            "location": safe_location,
+            "rotation": safe_rotation,
             "geometry_properties": geometry_properties,
             "transformation_matrix": transformation_matrix,
             "material": material,
