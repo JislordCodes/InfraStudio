@@ -29,9 +29,7 @@ BLACKLISTED_MODULES = {
     'importlib', 'pickle', 'shelve', 'dbm', 'sqlite3',
     'http', 'urllib', 'ftplib', 'poplib', 'imaplib', 'smtplib',
     'telnetlib', 'xmlrpc', 'ssl', 'socketserver', 'http.server', 'xmlrpc.server',
-    'threading', 'multiprocessing', 'concurrent', 'asyncio',
-    'bpy', 'bmesh', 'gpu', 'aud', 'bgl', 'blf',
-    'bpy_extras', 'keyingsets_utils'
+    'threading', 'multiprocessing', 'concurrent', 'asyncio'
 }
 
 BLACKLISTED_CALLS = {
@@ -145,10 +143,7 @@ class _ThreatVisitor(ast.NodeVisitor):
                 self.issues.append(f"Call to dangerous function '{node.func.id}()' not allowed")
         elif isinstance(node.func, ast.Attribute):
             full_name = self._get_attribute_chain(node.func)
-            if full_name:
-                func_root = full_name.split('.')[0]
-                if func_root in {'bpy', 'bmesh', 'gpu', 'aud', 'mathutils'}:
-                    self.issues.append(f"Call to Blender API function '{full_name}()' not allowed")
+            # Blender API calls are now ALLOWED as this is a Blender server.
         self.generic_visit(node)
 
     def visit_Attribute(self, node):
