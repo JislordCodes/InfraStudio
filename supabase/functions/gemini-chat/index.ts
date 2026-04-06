@@ -100,7 +100,11 @@ async function fetchToolCatalog(): Promise<string> {
 // ═══════════════════════════════════════════
 // SYSTEM PROMPT - Minimal, RAG-Driven
 // ═══════════════════════════════════════════
-function buildSystemPrompt(toolCatalog: string): string {
+function buildSystemPrompt(toolCatalog: string, ragContext: string = ""): string {
+  const ragSection = ragContext
+    ? `\nIFC API KNOWLEDGE (pre-fetched from RAG for your request — USE THIS in your code):\n${ragContext}\nUse the API patterns and function signatures shown above in your execute_ifc_code_tool script.\n`
+    : "";
+
   return `You are a BIM Agent for InfraStudio. You create and manage IFC building models.
 
 HOW TO USE TOOLS:
@@ -117,24 +121,22 @@ DECISION LOGIC:
    Use the individual MCP tools directly. Example: create_wall, create_door, create_slab, etc.
 
 2. COMPLEX STRUCTURES (buildings, columns, beams, grids, multi-storey, structural systems):
-   These have NO individual tools. You MUST:
-   a) First call search_ifc_knowledge or find_ifc_function to learn HOW to create the element via ifcopenshell.api
-   b) Then use execute_ifc_code_tool to run a SINGLE Python script that creates everything at once
-   c) If you don't know the exact ifcopenshell API call, use search_ifc_knowledge("create column representation") or similar
+   These have NO individual tools. You MUST use execute_ifc_code_tool to run a SINGLE Python script.
+   If RAG knowledge is provided below, use it. Otherwise call search_ifc_knowledge or find_ifc_function first.
 
 3. UNKNOWN ELEMENTS (anything not in the tool list above):
    Use search_ifc_knowledge(query) or find_ifc_function(operation, object_type) to discover how to build it.
    Then use execute_ifc_code_tool with the discovered API calls.
-
+${ragSection}
 RULES FOR execute_ifc_code_tool — CRITICAL, READ CAREFULLY:
 
-⛔ FORBIDDEN — NEVER DO THESE:
+FORBIDDEN — NEVER DO THESE:
 - NEVER call ifcopenshell.api.run("project.create_file") — a project already exists
 - NEVER create IfcProject, IfcSite, or IfcBuilding — they already exist
 - NEVER call ifc_file.write("...") — use save_and_load_ifc() instead
 - NEVER call ifcopenshell.api.run("context.add_context") — use get_or_create_body_context() instead
 
-✅ MANDATORY — ALWAYS DO THESE:
+MANDATORY — ALWAYS DO THESE:
 - Start EVERY script with: ifc_file = get_ifc_file()
 - Get body context with: body_ctx = get_or_create_body_context(ifc_file)
 - Get existing building with: building = ifc_file.by_type("IfcBuilding")[0]
@@ -306,7 +308,38 @@ Deno.serve(async (req: Request) => {
     
     // Fetch tool catalog from MCP backend (cached after first call)
     const toolCatalog = await fetchToolCatalog();
-    const systemPrompt = buildSystemPrompt(toolCatalog);
+    
+    // Auto-detect complex requests and pre-fetch RAG knowledge
+    const lastMsg = payloadMsgs[payloadMsgs.length - 1]?.content?.toLowerCase() || "";
+    const complexKeywords = ["building", "storey", "story", "floor", "column", "beam", "grid", "structure", "structural", "framework", "multi", "house", "office"];
+    const isComplex = complexKeywords.some(k => lastMsg.includes(k));
+    
+    let ragContext = "";
+    if (isComplex) {
+      log("Complex request detected — auto-fetching RAG knowledge");
+      try {
+        // Search for relevant IFC API knowledge based on the user's request
+        const ragResult = await mcpTool("search_ifc_knowledge", { query: lastMsg, max_results: 5 });
+        if (ragResult && ragResult.status === "not_ready") {
+          log("RAG not ready, initializing...");
+          await mcpTool("ensure_ifc_knowledge_ready", { timeout_seconds: 15 });
+          const retryResult = await mcpTool("search_ifc_knowledge", { query: lastMsg, max_results: 5 });
+          ragContext = JSON.stringify(retryResult, null, 2);
+        } else {
+          ragContext = JSON.stringify(ragResult, null, 2);
+        }
+        log("RAG knowledge fetched: " + ragContext.slice(0, 300));
+        
+        // Also search for specific functions
+        const fnResult = await mcpTool("find_ifc_function", { operation: "create", object_type: "column" });
+        ragContext += "\n\nRELEVANT IFC FUNCTIONS:\n" + JSON.stringify(fnResult, null, 2);
+        log("RAG functions fetched");
+      } catch (e) {
+        log("RAG pre-fetch warning: " + e);
+      }
+    }
+    
+    const systemPrompt = buildSystemPrompt(toolCatalog, ragContext);
 
     const result = await executeAgentLoop(history, systemPrompt);
 
