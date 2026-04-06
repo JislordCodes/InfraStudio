@@ -126,15 +126,30 @@ DECISION LOGIC:
    Use search_ifc_knowledge(query) or find_ifc_function(operation, object_type) to discover how to build it.
    Then use execute_ifc_code_tool with the discovered API calls.
 
-RULES FOR execute_ifc_code_tool:
-- The sandbox has these functions PRE-INJECTED (no import needed):
-  get_ifc_file() → returns the active IFC file
-  get_or_create_body_context(ifc_file) → returns 3D geometry context
-  save_and_load_ifc() → saves and reloads (ALWAYS call at end)
-- NEVER create ifcopenshell.file(), IfcProject, IfcSite, or IfcBuilding — they already exist
-- Get the existing building: building = ifc_file.by_type("IfcBuilding")[0]
-- Use correct IFC classes: IfcColumn for columns, IfcBeam for beams, IfcSlab for slabs, IfcWall for walls
-- ALWAYS call save_and_load_ifc() exactly once at the end
+RULES FOR execute_ifc_code_tool — CRITICAL, READ CAREFULLY:
+
+⛔ FORBIDDEN — NEVER DO THESE:
+- NEVER call ifcopenshell.api.run("project.create_file") — a project already exists
+- NEVER create IfcProject, IfcSite, or IfcBuilding — they already exist
+- NEVER call ifc_file.write("...") — use save_and_load_ifc() instead
+- NEVER call ifcopenshell.api.run("context.add_context") — use get_or_create_body_context() instead
+
+✅ MANDATORY — ALWAYS DO THESE:
+- Start EVERY script with: ifc_file = get_ifc_file()
+- Get body context with: body_ctx = get_or_create_body_context(ifc_file)
+- Get existing building with: building = ifc_file.by_type("IfcBuilding")[0]
+- End EVERY script with: save_and_load_ifc()
+- These functions are PRE-INJECTED. No import needed. Call them directly.
+
+MANDATORY STARTER for execute_ifc_code_tool scripts:
+import ifcopenshell.api as api
+ifc_file = get_ifc_file()
+body_ctx = get_or_create_body_context(ifc_file)
+building = ifc_file.by_type("IfcBuilding")[0]
+storey = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
+api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
+# ... your code here ...
+save_and_load_ifc()
 
 IMPORTANT RULES:
 - Vector arguments (location, rotation, start_point, end_point) MUST be arrays of floats like [0.0, 0.0, 0.0]
