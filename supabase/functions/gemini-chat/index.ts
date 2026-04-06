@@ -160,9 +160,11 @@ matrix = np.eye(4); matrix[:, 3] = [0.0, 0.0, 0.0, 1.0]
 api.run("geometry.edit_object_placement", ifc_file, product=wall, matrix=matrix)
 api.run("spatial.assign_container", ifc_file, relating_structure=storey, products=[wall])
 
-# === SLAB (use add_slab_representation) ===
+# === SLAB (use add_wall_representation as flat extrusion for sized slabs) ===
+# NOTE: add_slab_representation only takes depth — it does NOT accept length or width.
+# For a slab with specific XY dimensions, use add_wall_representation as a flat shape:
 slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="FloorSlab")
-rep = api.run("geometry.add_slab_representation", ifc_file, context=body_ctx, depth=0.25)
+rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=10.0, height=10.0, thickness=0.25)
 api.run("geometry.assign_representation", ifc_file, product=slab, representation=rep)
 matrix = np.eye(4); matrix[:, 3] = [0.0, 0.0, 0.0, 1.0]
 api.run("geometry.edit_object_placement", ifc_file, product=slab, matrix=matrix)
@@ -273,7 +275,7 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
       
       let callResult: any;
       if (call.name === "call_mcp_tool") {
-        let tName = call.args?.tool_name?.toString() || "unknown";
+        let tName = call.args?.tool_name?.toString() || "";
         let tArgs = call.args?.arguments || {};
         
         // Guard: AI sometimes double-wraps — call_mcp_tool(call_mcp_tool(...))
@@ -284,22 +286,29 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
           tArgs = (tArgs as any).arguments || {};
         }
         
-        try {
-          const mRes = await mcpTool(tName, tArgs);
-          callResult = mRes;
-          
-          if (mRes.success === false || mRes.error) {
-            steps.push(`✗ Failed: ${tName}`);
-          } else {
-            steps.push(`✓ Used: ${tName}`);
-            if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_") || tName === "execute_ifc_code_tool") {
-              hasChanges = true;
+        // Skip if tool name is empty or invalid
+        if (!tName || tName === "unknown" || tName === "call_mcp_tool") {
+          log(`Skipping invalid tool name: "${tName}"`);
+          callResult = { success: false, error: `Invalid tool name: "${tName}". Use a specific tool name like execute_ifc_code_tool, create_wall, etc.` };
+          steps.push(`✗ Skipped: invalid tool name`);
+        } else {
+          try {
+            const mRes = await mcpTool(tName, tArgs);
+            callResult = mRes;
+            
+            if (mRes.success === false || mRes.error) {
+              steps.push(`✗ Failed: ${tName}`);
+            } else {
+              steps.push(`✓ Used: ${tName}`);
+              if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_") || tName === "execute_ifc_code_tool") {
+                hasChanges = true;
+              }
             }
+          } catch(e) {
+            log(`Tool Execution Error: ${e}`);
+            callResult = { success: false, error: String(e) };
+            steps.push(`✗ Error: ${tName}`);
           }
-        } catch(e) {
-          log(`Tool Execution Error: ${e}`);
-          callResult = { success: false, error: String(e) };
-          steps.push(`✗ Error: ${tName}`);
         }
       } else {
         callResult = { error: "Unknown function" };
