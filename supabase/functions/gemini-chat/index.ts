@@ -202,8 +202,16 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
       
       let callResult: any;
       if (call.name === "call_mcp_tool") {
-        const tName = call.args?.tool_name?.toString() || "unknown";
-        const tArgs = call.args?.arguments || {};
+        let tName = call.args?.tool_name?.toString() || "unknown";
+        let tArgs = call.args?.arguments || {};
+        
+        // Guard: AI sometimes double-wraps — call_mcp_tool(call_mcp_tool(...))
+        // Unwrap it so the real tool name reaches the backend
+        while (tName === "call_mcp_tool" && tArgs && (tArgs as any).tool_name) {
+          log(`Unwrapping nested call_mcp_tool → ${(tArgs as any).tool_name}`);
+          tName = (tArgs as any).tool_name.toString();
+          tArgs = (tArgs as any).arguments || {};
+        }
         
         try {
           const mRes = await mcpTool(tName, tArgs);
