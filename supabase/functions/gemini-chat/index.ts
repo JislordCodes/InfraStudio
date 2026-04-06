@@ -100,11 +100,103 @@ async function fetchToolCatalog(): Promise<string> {
 // ═══════════════════════════════════════════
 // SYSTEM PROMPT - Minimal, RAG-Driven
 // ═══════════════════════════════════════════
-function buildSystemPrompt(toolCatalog: string, ragContext: string = ""): string {
+function buildSystemPrompt(toolCatalog: string, ragContext: string = "", isComplex: boolean = false): string {
   const ragSection = ragContext
-    ? `\nIFC API KNOWLEDGE (pre-fetched from RAG for your request — USE THIS in your code):\n${ragContext}\nUse the API patterns and function signatures shown above in your execute_ifc_code_tool script.\n`
+    ? `\nIFC API KNOWLEDGE (pre-fetched from RAG — USE THESE API CALLS in your code):\n${ragContext}\n`
     : "";
 
+  if (isComplex) {
+    // COMPLEX MODE: Force a single execute_ifc_code_tool script for entire building
+    return `You are a BIM Agent for InfraStudio. You create IFC building models.
+
+HOW TO CALL TOOLS:
+Call call_mcp_tool(tool_name, arguments) with a JSON arguments object.
+Always use metric units (meters).
+
+FOR THIS REQUEST: You MUST create the ENTIRE building in ONE execute_ifc_code_tool call.
+Do NOT use individual tools like create_wall, create_slab, create_door.
+Write a SINGLE Python script that creates ALL elements at once.
+${ragSection}
+WORKING EXAMPLE — A complete building script using the REAL ifcopenshell API:
+
+import ifcopenshell.api as api
+import numpy as np
+
+ifc_file = get_ifc_file()
+body_ctx = get_or_create_body_context(ifc_file)
+building = ifc_file.by_type("IfcBuilding")[0]
+
+storey = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
+api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
+
+# === COLUMN (use profile + profile_representation) ===
+profile = api.run("profile.add_parameterized_profile", ifc_file, ifc_class="IfcRectangleProfileDef")
+profile.XDim = 0.3
+profile.YDim = 0.3
+col = api.run("root.create_entity", ifc_file, ifc_class="IfcColumn", name="Col1")
+rep = api.run("geometry.add_profile_representation", ifc_file, context=body_ctx, profile=profile, depth=3.5)
+api.run("geometry.assign_representation", ifc_file, product=col, representation=rep)
+matrix = np.eye(4); matrix[:, 3] = [0.0, 0.0, 0.0, 1.0]
+api.run("geometry.edit_object_placement", ifc_file, product=col, matrix=matrix)
+api.run("spatial.assign_container", ifc_file, relating_structure=storey, products=[col])
+
+# === BEAM (use profile + profile_representation with horizontal orientation) ===
+bprofile = api.run("profile.add_parameterized_profile", ifc_file, ifc_class="IfcRectangleProfileDef")
+bprofile.XDim = 0.3
+bprofile.YDim = 0.3
+beam = api.run("root.create_entity", ifc_file, ifc_class="IfcBeam", name="Beam1")
+rep = api.run("geometry.add_profile_representation", ifc_file, context=body_ctx, profile=bprofile, depth=5.0,
+    placement_zx_axes=([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]))
+api.run("geometry.assign_representation", ifc_file, product=beam, representation=rep)
+matrix = np.eye(4); matrix[:, 3] = [0.0, 0.0, 3.5, 1.0]
+api.run("geometry.edit_object_placement", ifc_file, product=beam, matrix=matrix)
+api.run("spatial.assign_container", ifc_file, relating_structure=storey, products=[beam])
+
+# === WALL (use add_wall_representation) ===
+wall = api.run("root.create_entity", ifc_file, ifc_class="IfcWall", name="Wall1")
+rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=5.0, height=3.0, thickness=0.2)
+api.run("geometry.assign_representation", ifc_file, product=wall, representation=rep)
+matrix = np.eye(4); matrix[:, 3] = [0.0, 0.0, 0.0, 1.0]
+api.run("geometry.edit_object_placement", ifc_file, product=wall, matrix=matrix)
+api.run("spatial.assign_container", ifc_file, relating_structure=storey, products=[wall])
+
+# === SLAB (use add_slab_representation) ===
+slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="FloorSlab")
+rep = api.run("geometry.add_slab_representation", ifc_file, context=body_ctx, depth=0.25)
+api.run("geometry.assign_representation", ifc_file, product=slab, representation=rep)
+matrix = np.eye(4); matrix[:, 3] = [0.0, 0.0, 0.0, 1.0]
+api.run("geometry.edit_object_placement", ifc_file, product=slab, matrix=matrix)
+api.run("spatial.assign_container", ifc_file, relating_structure=storey, products=[slab])
+
+save_and_load_ifc()
+
+CRITICAL RULES FOR execute_ifc_code_tool:
+
+PRE-INJECTED FUNCTIONS (call directly, no import needed):
+- get_ifc_file() → returns the active IFC file
+- get_or_create_body_context(ifc_file) → returns the Body/MODEL_VIEW context
+- save_and_load_ifc() → saves and reloads the model (ALWAYS call at the end)
+
+FORBIDDEN:
+- NEVER call api.run("project.create_file") — project already exists
+- NEVER create IfcProject, IfcSite, or IfcBuilding — they already exist
+- NEVER call ifc_file.write("...") — use save_and_load_ifc() instead
+- NEVER call api.run("context.add_context") — use get_or_create_body_context() instead
+- NEVER invent functions like create_extruded_box or create_matrix — they do NOT exist
+
+MANDATORY:
+- Start with: ifc_file = get_ifc_file() and body_ctx = get_or_create_body_context(ifc_file)
+- End with: save_and_load_ifc()
+- Use api.run("geometry.add_wall_representation", ...) for walls
+- Use api.run("geometry.add_profile_representation", ...) for columns/beams
+- Use api.run("geometry.add_slab_representation", ...) for slabs
+- Use api.run("geometry.edit_object_placement", ..., matrix=np.eye(4)) for placement
+- Use api.run("spatial.assign_container", ..., products=[element]) to assign to storey
+
+WHEN DONE: Return a text response explaining what you built.`;
+  }
+
+  // SIMPLE MODE: individual MCP tools for single elements
   return `You are a BIM Agent for InfraStudio. You create and manage IFC building models.
 
 HOW TO USE TOOLS:
@@ -115,49 +207,11 @@ Always use metric units (meters).
 AVAILABLE MCP TOOLS (from backend):
 ${toolCatalog}
 
-DECISION LOGIC:
-
-1. SIMPLE SINGLE ELEMENTS (wall, door, window, slab, stairs, roof):
-   Use the individual MCP tools directly. Example: create_wall, create_door, create_slab, etc.
-
-2. COMPLEX STRUCTURES (buildings, columns, beams, grids, multi-storey, structural systems):
-   These have NO individual tools. You MUST use execute_ifc_code_tool to run a SINGLE Python script.
-   If RAG knowledge is provided below, use it. Otherwise call search_ifc_knowledge or find_ifc_function first.
-
-3. UNKNOWN ELEMENTS (anything not in the tool list above):
-   Use search_ifc_knowledge(query) or find_ifc_function(operation, object_type) to discover how to build it.
-   Then use execute_ifc_code_tool with the discovered API calls.
-${ragSection}
-RULES FOR execute_ifc_code_tool — CRITICAL, READ CAREFULLY:
-
-FORBIDDEN — NEVER DO THESE:
-- NEVER call ifcopenshell.api.run("project.create_file") — a project already exists
-- NEVER create IfcProject, IfcSite, or IfcBuilding — they already exist
-- NEVER call ifc_file.write("...") — use save_and_load_ifc() instead
-- NEVER call ifcopenshell.api.run("context.add_context") — use get_or_create_body_context() instead
-
-MANDATORY — ALWAYS DO THESE:
-- Start EVERY script with: ifc_file = get_ifc_file()
-- Get body context with: body_ctx = get_or_create_body_context(ifc_file)
-- Get existing building with: building = ifc_file.by_type("IfcBuilding")[0]
-- End EVERY script with: save_and_load_ifc()
-- These functions are PRE-INJECTED. No import needed. Call them directly.
-
-MANDATORY STARTER for execute_ifc_code_tool scripts:
-import ifcopenshell.api as api
-ifc_file = get_ifc_file()
-body_ctx = get_or_create_body_context(ifc_file)
-building = ifc_file.by_type("IfcBuilding")[0]
-storey = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
-api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
-# ... your code here ...
-save_and_load_ifc()
-
-IMPORTANT RULES:
+RULES:
 - Vector arguments (location, rotation, start_point, end_point) MUST be arrays of floats like [0.0, 0.0, 0.0]
 - For openings: create_opening first, then create_door/create_window, then fill_opening
 - Styles: create_surface_style first, then apply_style_to_object with IFC GUIDs
-- NEVER use execute_blender_code to create visible geometry — only IFC entities appear in the viewer
+- If the requested element has no individual tool, use search_ifc_knowledge or find_ifc_function first, then execute_ifc_code_tool.
 
 WHEN DONE: Return a text response explaining what you built.`;
 }
@@ -318,28 +372,41 @@ Deno.serve(async (req: Request) => {
     if (isComplex) {
       log("Complex request detected — auto-fetching RAG knowledge");
       try {
-        // Search for relevant IFC API knowledge based on the user's request
-        const ragResult = await mcpTool("search_ifc_knowledge", { query: lastMsg, max_results: 5 });
-        if (ragResult && ragResult.status === "not_ready") {
-          log("RAG not ready, initializing...");
-          await mcpTool("ensure_ifc_knowledge_ready", { timeout_seconds: 15 });
-          const retryResult = await mcpTool("search_ifc_knowledge", { query: lastMsg, max_results: 5 });
-          ragContext = JSON.stringify(retryResult, null, 2);
-        } else {
-          ragContext = JSON.stringify(ragResult, null, 2);
-        }
-        log("RAG knowledge fetched: " + ragContext.slice(0, 300));
+        // Make TARGETED RAG queries for the specific APIs needed for buildings
+        const queries = [
+          { query: "create column profile representation geometry", max_results: 3 },
+          { query: "add wall representation length height thickness", max_results: 3 },
+          { query: "edit object placement matrix position", max_results: 3 },
+          { query: "add slab representation depth", max_results: 2 },
+          { query: "spatial assign container storey", max_results: 2 },
+        ];
         
-        // Also search for specific functions
-        const fnResult = await mcpTool("find_ifc_function", { operation: "create", object_type: "column" });
-        ragContext += "\n\nRELEVANT IFC FUNCTIONS:\n" + JSON.stringify(fnResult, null, 2);
-        log("RAG functions fetched");
+        const ragParts: string[] = [];
+        for (const q of queries) {
+          try {
+            const result = await mcpTool("search_ifc_knowledge", q);
+            if (result && (result as any).status === "success" && (result as any).results) {
+              for (const r of (result as any).results as any[]) {
+                if (r.description) ragParts.push(r.description);
+                if (r.signature) ragParts.push(`Signature: ${r.signature}`);
+                if (r.examples && r.examples.length > 0) ragParts.push(`Example:\n${r.examples[0]}`);
+              }
+            }
+          } catch (e) {
+            log(`RAG query warning for "${q.query}": ${e}`);
+          }
+        }
+        
+        if (ragParts.length > 0) {
+          ragContext = ragParts.join("\n\n---\n\n");
+        }
+        log(`RAG knowledge fetched: ${ragParts.length} results, ${ragContext.length} chars`);
       } catch (e) {
         log("RAG pre-fetch warning: " + e);
       }
     }
     
-    const systemPrompt = buildSystemPrompt(toolCatalog, ragContext);
+    const systemPrompt = buildSystemPrompt(toolCatalog, ragContext, isComplex);
 
     const result = await executeAgentLoop(history, systemPrompt);
 
