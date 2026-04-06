@@ -223,23 +223,22 @@ CRITICAL RULES FOR YOU:
    NOTE: apply_style_to_object ONLY works with IFC GUIDs (from create_wall, create_trimesh_ifc, etc.). It does NOT work on raw Blender object names!
 3. STRICT VECTOR TYPES:
    Any argument named 'location', 'rotation', 'start_point', or 'end_point' MUST be an array of floats (e.g., [0.0, 0.0, 0.0]). NEVER pass a single scalar integer/float (e.g. rotation: 0), as it will trigger a validation crash in the MCP typed schema!
-4. IFC ENTITY vs RAW BLENDER OBJECT - THIS IS CRITICAL:
-   Objects created via execute_blender_code (bpy.ops) are RAW BLENDER OBJECTS. They exist ONLY in Blender memory. They are NEVER written to the IFC file. They will NEVER appear in the 3D viewer. The viewer ONLY renders IFC entities from the .ifc file.
+4. ROUTING LOGIC - READ THIS FIRST BEFORE CHOOSING TOOLS:
    
-   Therefore: NEVER use execute_blender_code to create geometry that should be visible. ALWAYS use one of these IFC-native tools instead:
-   - create_wall, create_door, create_window, create_slab, create_stairs, create_roof (for standard elements)
-   - create_trimesh_ifc (for ANY custom geometry like columns, beams, furniture, etc.)
+   SIMPLE REQUESTS (single element, e.g. "add a wall", "place a door"):
+   Use individual tools: create_wall, create_door, create_window, create_slab, create_stairs, create_roof
    
-5. CREATING CUSTOM ELEMENTS (Columns, Beams, Ducts, Furniture, etc.):
-   When there is no dedicated tool, use create_trimesh_ifc. It creates a REAL IFC entity with a GUID.
+   COMPLEX REQUESTS (buildings, structures, grids, multi-storey, anything with columns/beams/slabs together):
+   MUST use execute_ifc_code_tool with ONE Python script. NEVER use individual tools for these.
+   See Rule 6 below for the exact template.
    
-   The 'trimesh_code' parameter must be a PYTHON CODE STRING (not mesh data). Example for a column:
-   create_trimesh_ifc(
-     trimesh_code: "import trimesh\\nresult = trimesh.primitives.Box(extents=[0.4, 0.4, 3.0])",
-     ifc_class: "IfcColumn",
-     name: "ConcreteColumn",
-     location: [0.0, 0.0, 1.5]
-   )
+   How to decide: If the request mentions ANY of these words, it is COMPLEX and MUST use execute_ifc_code_tool:
+   "building", "storey", "floor", "column", "beam", "grid", "structure", "framework", "structural"
+
+5. RAW BLENDER OBJECTS vs IFC ENTITIES:
+   Objects created via execute_blender_code (bpy.ops) are RAW BLENDER OBJECTS. They will NEVER appear in the 3D viewer.
+   The viewer ONLY renders IFC entities. NEVER use execute_blender_code to create visible geometry.
+   
    
 6. BUILDING STRUCTURES (columns, beams, slabs, multi-storey) - ABSOLUTELY CRITICAL:
 
