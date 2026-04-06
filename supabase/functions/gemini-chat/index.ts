@@ -12,19 +12,6 @@ const CORS = {
 };
 
 // ═══════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════
-interface Opening { type: "door" | "window"; name: string; width: number; height: number; offset: number; sill_height?: number; }
-interface ElementStyle { name: string; color: [number, number, number]; transparency?: number; }
-interface WallElement { type: "wall"; name: string; start: [number, number, number]; end: [number, number, number]; height: number; thickness: number; openings?: Opening[]; style?: ElementStyle; }
-interface SlabElement { type: "slab"; name: string; outline: [number, number, number][]; thickness: number; style?: ElementStyle; }
-interface RoofElement { type: "roof"; name: string; outline: [number, number, number][]; roof_type: string; angle: number; thickness: number; style?: ElementStyle; }
-interface StairsElement { type: "stairs"; name: string; location: [number, number, number]; num_risers: number; riser_height: number; tread_depth: number; width: number; direction?: [number, number, number]; }
-type BuildingElement = WallElement | SlabElement | RoofElement | StairsElement;
-interface BuildingPlan { project_name: string; description: string; elements: BuildingElement[]; }
-interface PlanResponse { type: "chat" | "building"; reply?: string; plan?: BuildingPlan; }
-
-// ═══════════════════════════════════════════
 // MCP CLIENT
 // ═══════════════════════════════════════════
 let mcpSessionId = "";
@@ -59,7 +46,7 @@ async function mcpPost(body: unknown): Promise<unknown> {
 }
 
 async function mcpInit(): Promise<void> {
-  await mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "3.0" } } });
+  await mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "4.0" } } });
   await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }).catch(() => {});
   log("MCP ready");
 }
@@ -80,232 +67,93 @@ async function mcpTool(name: string, args: Record<string, unknown>): Promise<Rec
   return { raw: JSON.stringify(res?.result ?? "done") };
 }
 
-function getGuid(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const k of keys) { if (typeof obj[k] === "string" && (obj[k] as string).length > 5) return obj[k] as string; }
-  for (const k of ["result", "wall", "data"]) {
-    const nested = obj[k] as Record<string, unknown> | undefined;
-    if (nested) { for (const kk of keys) { if (typeof nested[kk] === "string") return nested[kk] as string; } }
-  }
-  return undefined;
-}
+// ═══════════════════════════════════════════
+// DYNAMIC TOOL DISCOVERY
+// ═══════════════════════════════════════════
+let cachedToolCatalog = "";
 
-// ═══════════════════════════════════════════
-// RAG SERVICE - IFC Knowledge Fallback
-// ═══════════════════════════════════════════
-async function ragSearch(query: string): Promise<string> {
+async function fetchToolCatalog(): Promise<string> {
+  if (cachedToolCatalog) return cachedToolCatalog;
   try {
-    const r = await mcpTool("search_ifc_knowledge", { query, max_results: 3 });
-    if (r.status === "not_ready") {
-      log("RAG not ready, trying init...");
-      await mcpTool("ensure_ifc_knowledge_ready", { timeout_seconds: 10 });
-      const r2 = await mcpTool("search_ifc_knowledge", { query, max_results: 3 });
-      return JSON.stringify(r2);
-    }
-    return JSON.stringify(r);
+    const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) as Record<string, unknown>;
+    const result = res?.result as Record<string, unknown>;
+    const tools = (result?.tools || []) as Array<Record<string, unknown>>;
+    
+    const catalog = tools.map((t: Record<string, unknown>) => {
+      const name = t.name as string;
+      const desc = ((t.description as string) || "").slice(0, 150);
+      const schema = t.inputSchema as Record<string, unknown>;
+      const props = schema?.properties as Record<string, unknown> || {};
+      const params = Object.keys(props).join(", ");
+      return `- ${name}(${params}): ${desc}`;
+    }).join("\n");
+    
+    cachedToolCatalog = catalog;
+    log(`Fetched ${tools.length} tools from MCP backend`);
+    return catalog;
   } catch (e) {
-    log("RAG unavailable: " + String(e).slice(0, 100));
-    return "RAG unavailable";
+    log("Failed to fetch tool catalog: " + e);
+    return "Tool catalog unavailable. Use search_ifc_knowledge to discover available operations.";
   }
 }
 
-async function ragFindFunction(operation: string, objectType: string): Promise<string> {
-  try {
-    const r = await mcpTool("find_ifc_function", { operation, object_type: objectType });
-    return JSON.stringify(r);
-  } catch { return "RAG unavailable"; }
-}
-
 // ═══════════════════════════════════════════
-// CODE EXECUTION - Universal Fallback
+// SYSTEM PROMPT - Minimal, RAG-Driven
 // ═══════════════════════════════════════════
-async function execBlenderCode(code: string): Promise<Record<string, unknown>> {
-  log("EXEC_CODE (" + code.length + " chars)");
-  return await mcpTool("execute_blender_code", { code });
-}
-
-// Create opening in wall via native MCP tool
-async function createOpening(
-  wallGuid: string, width: number, height: number, depth: number,
-  location: [number, number, number], name: string
-): Promise<string | undefined> {
-  const r = await mcpTool("create_opening", {
-    wall_guid: wallGuid, width, height, depth, location, name, opening_type: "OPENING"
-  });
-  const guid = getGuid(r, "opening_guid", "guid");
-  if (guid) return guid;
-  log("WARN: Opening created but GUID not captured");
-  return undefined;
-}
-
-// Fill opening with element via native MCP tool
-async function fillOpening(openingGuid: string, elementGuid: string): Promise<boolean> {
-  const r = await mcpTool("fill_opening", {
-    opening_guid: openingGuid, element_guid: elementGuid
-  });
-  const raw = JSON.stringify(r);
-  return raw.includes('"success": true') || raw.includes('"success":true');
-}
-
-// ═══════════════════════════════════════════
-// PLANNER - Gemini with Full Tool Awareness
-// ═══════════════════════════════════════════
-const PLANNER_PROMPT = `You are a highly capable BIM Agent for InfraStudio.
-You have access to 56 backend MCP tools via a single generic function: call_mcp_tool(tool_name, arguments)
-
-Your Goal: Fulfill the user's design or query requests by actively chaining together tools.
+function buildSystemPrompt(toolCatalog: string): string {
+  return `You are a BIM Agent for InfraStudio. You create and manage IFC building models.
 
 HOW TO USE TOOLS:
-- Always pass the EXACT tool name as "tool_name", and its parameters as a JSON object in "arguments".
-- Example: to create a wall, call_mcp_tool("create_two_point_wall", { "start_point": [0,0,0], "end_point": [5,0,0], "height": 3, "thickness": 0.2, "name": "W1" })
-- Wait for the result before making the next call. The system will process your call and hand you the result.
-- ALWAYS use metric units (meters).
-- If creating an opening, first use create_opening, get the opening_guid, then use create_door/create_window to get the element_guid, then fill_opening(opening_guid, element_guid).
+Call call_mcp_tool(tool_name, arguments) with the exact tool name and a JSON arguments object.
+Example: call_mcp_tool("create_wall", { "name": "W1", "length": 5.0, "height": 3.0, "thickness": 0.2, "location": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0] })
+Always use metric units (meters).
 
-AVAILABLE TOOLS:
---- CREATION ---
-- initialize_project(project_name)
-- create_wall(name, length, height, thickness, location, rotation)
-- create_two_point_wall(name, start_point, end_point, height, thickness)
-- create_polyline_walls(name, points, height, thickness)
-- create_door(name, dimensions{width,height}, location, operation_type)
-- create_window(name, dimensions{width,height}, location, partition_type)
-- create_slab(name, outline_points, thickness)
-- create_roof(name, polyline, roof_type, angle, thickness)
-- create_stairs(name, location, num_risers, riser_height, tread_depth, width)
-- create_mesh_ifc(vertices, faces, name)
-- create_trimesh_ifc(vertices, faces, name, ifc_class)
+AVAILABLE MCP TOOLS (from backend):
+${toolCatalog}
 
---- OPENINGS ---
-- create_opening(width, height, depth, location, wall_guid, opening_type, name)
-- fill_opening(opening_guid, element_guid)
+DECISION LOGIC:
 
---- STYLES ---
-- create_surface_style(name, color[r,g,b], transparency)
-- create_pbr_style(name, diffuse_color[r,g,b], metallic, roughness)
-- apply_style_to_object(object_guids, style_name)
-- apply_style_to_material(material_name, style_name)
-- list_styles()
-- update_style(style_name, ...)
-- remove_style(style_name)
+1. SIMPLE SINGLE ELEMENTS (wall, door, window, slab, stairs, roof):
+   Use the individual MCP tools directly. Example: create_wall, create_door, create_slab, etc.
 
---- QUERY & UPDATE ---
-- get_scene_info()
-- get_ifc_scene_overview()
-- get_blender_object_info(object_name)
-- get_selected_objects()
-- get_object_info(object_name)
-- get_wall_properties(wall_guid) / update_wall(wall_guid, ...)
-- get_door_properties(door_guid) / update_door(door_guid, ...)
-- get_window_properties(window_guid) / update_window(window_guid, ...)
-- get_slab_properties(slab_guid) / update_slab(slab_guid, ...)
-- get_door_operation_types() / get_window_partition_types() / get_stairs_types() / get_roof_types()
-- list_ifc_entities(ifc_class)
-- delete_stairs(stairs_guids) / delete_roof(...)
+2. COMPLEX STRUCTURES (buildings, columns, beams, grids, multi-storey, structural systems):
+   These have NO individual tools. You MUST:
+   a) First call search_ifc_knowledge or find_ifc_function to learn HOW to create the element via ifcopenshell.api
+   b) Then use execute_ifc_code_tool to run a SINGLE Python script that creates everything at once
+   c) If you don't know the exact ifcopenshell API call, use search_ifc_knowledge("create column representation") or similar
 
---- RAG / KNOWLEDGE ---
-- search_ifc_knowledge(query, max_results)
-- find_ifc_function(operation, object_type)
-- get_ifc_function_details(function_name)
-- get_ifc_module_info(module_name)
+3. UNKNOWN ELEMENTS (anything not in the tool list above):
+   Use search_ifc_knowledge(query) or find_ifc_function(operation, object_type) to discover how to build it.
+   Then use execute_ifc_code_tool with the discovered API calls.
 
---- FALLBACK CODE EXECUTION ---
-- execute_blender_code(code) - Raw Python in Blender
-- execute_ifc_code_tool(code) - IFC OpenShell context
+RULES FOR execute_ifc_code_tool:
+- The sandbox has these functions PRE-INJECTED (no import needed):
+  get_ifc_file() → returns the active IFC file
+  get_or_create_body_context(ifc_file) → returns 3D geometry context
+  save_and_load_ifc() → saves and reloads (ALWAYS call at end)
+- NEVER create ifcopenshell.file(), IfcProject, IfcSite, or IfcBuilding — they already exist
+- Get the existing building: building = ifc_file.by_type("IfcBuilding")[0]
+- Use correct IFC classes: IfcColumn for columns, IfcBeam for beams, IfcSlab for slabs, IfcWall for walls
+- ALWAYS call save_and_load_ifc() exactly once at the end
 
-CRITICAL RULES FOR YOU:
-1. OPENINGS ALIGNMENT: 
-   When creating an opening void in a wall via create_opening, you MUST use the exact SAME 'location' coordinates when subsequently calling create_door or create_window. If you create the door at [0,0,0] but the opening is at [2,0,0], the door will not fit! Compute the 3D Math offset correctly.
-2. STYLING:
-   If the user asks for a specific color (like a 'red wall' or 'wooden surface'):
-   a. Create the wall/object first.
-   b. Call create_surface_style(name, color, transparency) with the [R,G,B] requested.
-   c. Call apply_style_to_object(object_guids=[...], style_name) on the GUID!
-   NOTE: apply_style_to_object ONLY works with IFC GUIDs (from create_wall, create_trimesh_ifc, etc.). It does NOT work on raw Blender object names!
-3. STRICT VECTOR TYPES:
-   Any argument named 'location', 'rotation', 'start_point', or 'end_point' MUST be an array of floats (e.g., [0.0, 0.0, 0.0]). NEVER pass a single scalar integer/float (e.g. rotation: 0), as it will trigger a validation crash in the MCP typed schema!
-4. ROUTING LOGIC - READ THIS FIRST BEFORE CHOOSING TOOLS:
-   
-   SIMPLE REQUESTS (single element, e.g. "add a wall", "place a door"):
-   Use individual tools: create_wall, create_door, create_window, create_slab, create_stairs, create_roof
-   
-   COMPLEX REQUESTS (buildings, structures, grids, multi-storey, anything with columns/beams/slabs together):
-   MUST use execute_ifc_code_tool with ONE Python script. NEVER use individual tools for these.
-   See Rule 6 below for the exact template.
-   
-   How to decide: If the request mentions ANY of these words, it is COMPLEX and MUST use execute_ifc_code_tool:
-   "building", "storey", "floor", "column", "beam", "grid", "structure", "framework", "structural"
+IMPORTANT RULES:
+- Vector arguments (location, rotation, start_point, end_point) MUST be arrays of floats like [0.0, 0.0, 0.0]
+- For openings: create_opening first, then create_door/create_window, then fill_opening
+- Styles: create_surface_style first, then apply_style_to_object with IFC GUIDs
+- NEVER use execute_blender_code to create visible geometry — only IFC entities appear in the viewer
 
-5. RAW BLENDER OBJECTS vs IFC ENTITIES:
-   Objects created via execute_blender_code (bpy.ops) are RAW BLENDER OBJECTS. They will NEVER appear in the 3D viewer.
-   The viewer ONLY renders IFC entities. NEVER use execute_blender_code to create visible geometry.
-   
-   
-6. BUILDING STRUCTURES (columns, beams, slabs, multi-storey) - ABSOLUTELY CRITICAL:
-
-   RULE A: ANY request involving columns, beams, grids, multi-storey, or structural systems MUST use execute_ifc_code_tool with a SINGLE Python script. NEVER use individual tool calls (create_wall, create_slab, etc.) for these.
-
-   RULE B: NEVER use create_wall to make columns or beams. Columns are IfcColumn. Beams are IfcBeam. Walls are IfcWall. Using the wrong IFC class produces broken geometry.
-
-   RULE C: If execute_ifc_code_tool fails, DO NOT fall back to individual tools. Instead, fix the script and try execute_ifc_code_tool again.
-
-   RULE D: NEVER create a new ifcopenshell.file(). NEVER create IfcProject, IfcSite, or IfcBuilding - they already exist.
-
-   RULE E: The functions get_ifc_file(), get_or_create_body_context(), save_and_load_ifc() are PRE-INJECTED into the sandbox. Call them directly. No import from blender_addon needed.
-
-   RULE F: ALWAYS use geometry.add_wall_representation for ANY box geometry (columns, beams, slabs). It creates a solid 3D box. Parameters: length, thickness, height.
-   - Column 0.3x0.3x3.5m: length=0.3, thickness=0.3, height=3.5
-   - Slab 15x15x0.25m: length=15.0, thickness=15.0, height=0.25
-   - Beam 5x0.3x0.4m: length=5.0, thickness=0.3, height=0.4
-
-   RULE G: ALWAYS call save_and_load_ifc() exactly ONCE at the very end. Never in the middle.
-
-   RULE H: For slabs, ALWAYS define proper dimensions. Never leave polyline or dimensions as None.
-
-   PYTHON SCRIPT TEMPLATE (follow this exactly):
-   import ifcopenshell.api as api
-
-   ifc_file = get_ifc_file()
-   body_ctx = get_or_create_body_context(ifc_file)
-   building = ifc_file.by_type("IfcBuilding")[0]
-
-   storey = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
-   api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
-
-   for x in range(3):
-       for y in range(3):
-           col = api.run("root.create_entity", ifc_file, ifc_class="IfcColumn", name=f"Col_{x}_{y}")
-           api.run("spatial.assign_container", ifc_file, products=[col], relating_structure=storey)
-           rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=0.3, thickness=0.3, height=3.5)
-           api.run("geometry.assign_representation", ifc_file, product=col, representation=rep)
-           api.run("geometry.edit_object_placement", ifc_file, product=col, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[float(x*5.0), float(y*5.0), 0.0, 1.0]])
-
-   ground_slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="Ground Slab")
-   api.run("spatial.assign_container", ifc_file, products=[ground_slab], relating_structure=storey)
-   slab_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=10.0, thickness=10.0, height=0.25)
-   api.run("geometry.assign_representation", ifc_file, product=ground_slab, representation=slab_rep)
-   api.run("geometry.edit_object_placement", ifc_file, product=ground_slab, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0, 0.0, 0.0, 1.0]])
-
-   roof_slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="Roof Slab")
-   api.run("spatial.assign_container", ifc_file, products=[roof_slab], relating_structure=storey)
-   roof_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=10.0, thickness=10.0, height=0.25)
-   api.run("geometry.assign_representation", ifc_file, product=roof_slab, representation=roof_rep)
-   api.run("geometry.edit_object_placement", ifc_file, product=roof_slab, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0, 0.0, 3.5, 1.0]])
-
-   save_and_load_ifc()
-   END OF TEMPLATE
-
-WHEN TO STOP:
-Once you have executed all necessary tool calls and completed the user's intent, return a final text response explaining what you did. Do NOT return text if you are still building.`;
+WHEN DONE: Return a text response explaining what you built.`;
+}
 
 // Define the generic tool for Gemini
 const GEMINI_TOOLS = [{
   functionDeclarations: [{
     name: "call_mcp_tool",
-    description: "Call an MCP backend tool by its name. Use this to create or query BIM objects, run RAG, etc. It returns the raw result.",
+    description: "Call an MCP backend tool by its name. Use this to create or query BIM objects, search the IFC knowledge base via RAG, execute IFC code, etc. It returns the raw result.",
     parameters: {
       type: "OBJECT",
       properties: {
-        tool_name: { type: "STRING", description: "The exact name of the tool (e.g. create_two_point_wall)" },
+        tool_name: { type: "STRING", description: "The exact name of the tool (e.g. create_wall, search_ifc_knowledge, execute_ifc_code_tool)" },
         arguments: { type: "OBJECT", description: "A JSON object of arguments keyed by name." }
       },
       required: ["tool_name", "arguments"]
@@ -316,7 +164,7 @@ const GEMINI_TOOLS = [{
 // ═══════════════════════════════════════════
 // AGENT EXECUTION LOOP
 // ═══════════════════════════════════════════
-async function executeAgentLoop(history: any[]): Promise<{ reply: string; steps: string[]; hasChanges: boolean }> {
+async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{ reply: string; steps: string[]; hasChanges: boolean }> {
   const steps: string[] = [];
   let modelHistory = [...history];
   let loopCount = 0;
@@ -329,7 +177,7 @@ async function executeAgentLoop(history: any[]): Promise<{ reply: string; steps:
     const res = await fetch(GEMINI_URL, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: PLANNER_PROMPT }] },
+        systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: modelHistory,
         tools: GEMINI_TOOLS,
         generationConfig: { temperature: 0.2, maxOutputTokens: 8192 }
@@ -365,7 +213,7 @@ async function executeAgentLoop(history: any[]): Promise<{ reply: string; steps:
             steps.push(`✗ Failed: ${tName}`);
           } else {
             steps.push(`✓ Used: ${tName}`);
-            if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_")) {
+            if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_") || tName === "execute_ifc_code_tool") {
               hasChanges = true;
             }
           }
@@ -414,15 +262,18 @@ Deno.serve(async (req: Request) => {
     const payloadMsgs = (await req.json() as any).messages || [];
     if (!payloadMsgs.length) return new Response(JSON.stringify({ error: "No messages" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
     
-    // Convert incoming [role: user/assistant] payload into Gemini [role: user/model] history
     const history = payloadMsgs.map((m: any) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content || "" }]
     }));
 
     await mcpInit();
+    
+    // Fetch tool catalog from MCP backend (cached after first call)
+    const toolCatalog = await fetchToolCatalog();
+    const systemPrompt = buildSystemPrompt(toolCatalog);
 
-    const result = await executeAgentLoop(history);
+    const result = await executeAgentLoop(history, systemPrompt);
 
     let ifc_url: string | undefined;
     if (result.hasChanges) {
