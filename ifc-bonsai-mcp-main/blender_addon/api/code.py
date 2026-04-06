@@ -320,9 +320,30 @@ def execute_ifc_code(code: str) -> Dict[str, Any]:
 
         try:
             import ifcopenshell
+            import ifcopenshell.api
             exec_globals['ifcopenshell'] = ifcopenshell
         except ImportError:
             return {"status": "error", "error": "IFC OpenShell not available"}
+
+        # Pre-inject IFC utility functions so AI code can call them directly
+        # without needing `from blender_addon.api.ifc_utils import ...`
+        try:
+            from .ifc_utils import (
+                get_ifc_file,
+                get_default_container,
+                get_or_create_body_context,
+                get_or_create_axis_context,
+                calculate_unit_scale,
+                save_and_load_ifc
+            )
+            exec_globals['get_ifc_file'] = get_ifc_file
+            exec_globals['get_default_container'] = get_default_container
+            exec_globals['get_or_create_body_context'] = get_or_create_body_context
+            exec_globals['get_or_create_axis_context'] = get_or_create_axis_context
+            exec_globals['calculate_unit_scale'] = calculate_unit_scale
+            exec_globals['save_and_load_ifc'] = save_and_load_ifc
+        except ImportError as e:
+            logger.warning(f"Could not pre-inject IFC utilities: {e}")
 
         output_buffer = io.StringIO()
 

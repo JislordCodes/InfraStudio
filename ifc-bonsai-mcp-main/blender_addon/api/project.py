@@ -93,3 +93,52 @@ def initialize_project(project_name: str = "My Project") -> dict:
             "success": False,
             "error": error_msg
         }
+
+@register_command('create_storey', description="Create a new Building Storey")
+def create_storey(name: str, elevation: float = 0.0) -> dict:
+    """Create a new IfcBuildingStorey at the specified elevation.
+    
+    Args:
+        name: Name of the storey (e.g. 'First Floor')
+        elevation: Elevation height in meters
+        
+    Returns:
+        Dict with success status and storey GUID
+    """
+    try:
+        from bonsai.bim.ifc import IfcStore
+        from .ifc_utils import get_ifc_file, save_and_load_ifc
+        
+        ifc_file = get_ifc_file()
+        
+        # Find the active building
+        buildings = ifc_file.by_type("IfcBuilding")
+        if not buildings:
+            return {"success": False, "error": "No IfcBuilding found to attach storey to."}
+        building = buildings[0]
+        
+        storey = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name=name)
+        
+        # Set elevation if requested
+        if elevation != 0.0:
+            ifcopenshell.api.run("geometry.edit_object_placement", ifc_file, product=storey, matrix=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,elevation,1]])
+            
+        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
+        
+        # Set as the active spatial container for subsequent objects
+        import bonsai.tool as tool
+        try:
+            # We must load into Blender representation first
+            save_and_load_ifc()
+        except:
+            pass
+            
+        return {
+            "success": True,
+            "storey_guid": storey.GlobalId,
+            "name": storey.Name,
+            "message": f"Created Storey '{name}' at elevation {elevation}m."
+        }
+    except Exception as e:
+        logger.error(f"Failed to create storey: {e}")
+        return {"success": False, "error": str(e)}

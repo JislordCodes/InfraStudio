@@ -99,183 +99,38 @@ def execute_ifc_code_tool(code: str) -> str:
     SECURITY & RESTRICTIONS:
     ✓ Only IFC OpenShell APIs allowed (ifcopenshell, ifcopenshell.api.*)
     ✓ Standard Python libraries (math, json, datetime, etc.) permitted
-    ✗ No Blender APIs (bpy, bmesh) - use IFC APIs instead
     ✗ No file system access, network, or system operations
     ✗ No dangerous functions (eval, exec, import, etc.)
 
+    PRE-INJECTED FUNCTIONS (call directly, no import needed):
+    - get_ifc_file()              → Returns the current active IFC file object
+    - get_default_container()     → Returns the active spatial container (building storey)
+    - get_or_create_body_context(ifc_file) → Gets/creates 3D geometry context
+    - get_or_create_axis_context(ifc_file) → Gets/creates 2D axis/plan context
+    - calculate_unit_scale(ifc_file)       → Gets unit conversion factor
+    - save_and_load_ifc()         → Saves changes and reloads in Blender (ALWAYS call at end!)
+
     TYPICAL WORKFLOW:
-    # =============================================================================
-    # IFC Environment Prelude for IFC Bonsai MCP
-    # =============================================================================
-    # This prelude provides essential utility functions for IFC operations.
-    # These functions handle the connection to Blender's IFC environment and
-    # provide consistent access to IFC contexts and file management.
+    import ifcopenshell.api as api
 
-    # -----------------------------------------------------------------------------
-    # ESSENTIAL IMPORTS - Always include these for IFC operations
-    # -----------------------------------------------------------------------------
-    import ifcopenshell
-    import ifcopenshell.api
-    from blender_addon.api.ifc_utils import (
-        get_ifc_file,                    # Get current IFC file object
-        get_default_container,           # Get active spatial container (building/storey)
-        get_or_create_body_context,      # Get/create 3D geometry context
-        get_or_create_axis_context,      # Get/create 2D axis/plan context
-        calculate_unit_scale,            # Get unit conversion factor
-        save_and_load_ifc                # Save changes and reload in Blender
-    )
+    ifc_file = get_ifc_file()           # PRE-INJECTED, no import needed
+    body_ctx = get_or_create_body_context(ifc_file)
 
-    # -----------------------------------------------------------------------------
-    # CORE IFC CONTEXT SETUP - Always run this first in your IFC code
-    # -----------------------------------------------------------------------------
-    # These variables provide access to the current IFC environment
-    ifc_file = get_ifc_file()           # The current IFC model/file
-    container = get_default_container() # Active building storey/space
-    unit_scale = calculate_unit_scale(ifc_file)  # Unit conversion (usually 1.0)
+    # Get existing building (auto-created by initialization)
+    building = ifc_file.by_type("IfcBuilding")[0]
 
-    # -----------------------------------------------------------------------------
-    # PRACTICAL EXAMPLE: Creating a Simple Wall
-    # -----------------------------------------------------------------------------
-    # This example shows how to use the utility functions for basic IFC operations
-    # NOTE: This is just to demonstrate the utility functions - for actual wall
-    # creation, use the higher-level API functions from blender_addon.api.wall
+    # Create a storey
+    storey = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground")
+    api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
 
-    # Step 1: Define your wall parameters (replace with your actual values)
-    wall_name = "Example Wall"
-    wall_length = 5.0    # meters
-    wall_height = 3.0    # meters
-    wall_thickness = 0.2 # meters
+    # Create an element with geometry
+    wall = api.run("root.create_entity", ifc_file, ifc_class="IfcWall", name="Wall_1")
+    api.run("spatial.assign_container", ifc_file, products=[wall], relating_structure=storey)
+    rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx,
+                  length=5.0, height=3.0, thickness=0.2)
+    api.run("geometry.assign_representation", ifc_file, product=wall, representation=rep)
 
-    # Step 2: Create the wall entity using ifcopenshell.api
-    wall = ifcopenshell.api.run(
-        "root.create_entity",
-        ifc_file,
-        ifc_class="IfcWall",
-        name=wall_name
-    )
-
-    # Step 3: Assign to spatial container (building storey)
-    ifcopenshell.api.run(
-        "spatial.assign_container",
-        ifc_file,
-        products=[wall],
-        relating_structure=container
-    )
-
-    # Step 4: Create geometric contexts (3D body and 2D axis)
-    body_context = get_or_create_body_context(ifc_file)  # For 3D geometry
-    axis_context = get_or_create_axis_context(ifc_file)  # For 2D plan representation
-
-    # Step 5: Add 3D body representation (the actual wall geometry)
-    wall_body_rep = ifcopenshell.api.run(
-        "geometry.add_wall_representation",
-        ifc_file,
-        context=body_context,
-        length=wall_length,
-        height=wall_height,
-        thickness=wall_thickness,
-        direction_sense="POSITIVE"  # Wall direction
-    )
-
-    # Step 6: Add 2D axis representation (for plan views)
-    wall_axis_rep = ifcopenshell.api.run(
-        "geometry.add_axis_representation",
-        ifc_file,
-        context=axis_context,
-        axis=[(0.0, 0.0), (wall_length, 0.0)]  # Start and end points
-    )
-
-    # Step 7: Assign representations to the wall
-    ifcopenshell.api.run("geometry.assign_representation", ifc_file,
-                    product=wall, representation=wall_body_rep)
-    ifcopenshell.api.run("geometry.assign_representation", ifc_file,
-                    product=wall, representation=wall_axis_rep)
-
-    # Step 8: Save changes back to Blender
-    save_and_load_ifc()
-
-    print(f"Created wall: {wall.GlobalId}")
-
-    # -----------------------------------------------------------------------------
-    # FUNCTION REFERENCE
-    # -----------------------------------------------------------------------------
-    # get_ifc_file():
-    #   - Returns the current IFC file object
-    #   - Raises RuntimeError if no IFC file is open
-    #   - Use this to access the current model for all IFC operations
-    #
-    # get_default_container():
-    #   - Returns the active spatial container (usually a building storey)
-    #   - Raises RuntimeError if no container is set
-    #   - Required for assigning elements to the correct spatial structure
-    #
-    # get_or_create_body_context(ifc_file):
-    #   - Gets existing or creates new 3D geometric representation context
-    #   - Used for 3D model geometry (walls, slabs, etc.)
-    #   - Automatically handles context setup
-    #
-    # get_or_create_axis_context(ifc_file):
-    #   - Gets existing or creates new 2D geometric representation context
-    #   - Used for plan/elevation representations
-    #   - Required for proper 2D visualization
-    #
-    # calculate_unit_scale(ifc_file):
-    #   - Returns the unit conversion factor for the IFC file
-    #   - Usually 1.0 for meters, but may vary
-    #   - Use when working with measurements
-    #
-    # save_and_load_ifc():
-    #   - Saves all changes to the IFC file
-    #   - Reloads the file in Blender to update the 3D view
-    #   - Call this after making changes to see them in Blender
-    #
-    # -----------------------------------------------------------------------------
-    # BEST PRACTICES
-    # -----------------------------------------------------------------------------
-    # 1. Always call the context setup (get_ifc_file, get_default_container, etc.)
-    #    at the beginning of your IFC code
-    #
-    # 2. Use try/except blocks for error handling:
-    #    try:
-    #        ifc_file = get_ifc_file()
-    #        # ... your IFC operations ...
-    #        save_and_load_ifc()
-    #    except Exception as e:
-    #        print(f"IFC operation failed: {e}")
-    #
-    # 3. For complex operations, use the higher-level API functions instead:
-    #    from blender_addon.api.wall import create_wall
-    #    from blender_addon.api.door import create_door
-    #    # These handle all the low-level details for you
-    #
-    # 4. Remember to call save_and_load_ifc() after making changes
-    #
-    # -----------------------------------------------------------------------------
-    # IMPORTANT NOTES
-    # -----------------------------------------------------------------------------
-    # - This prelude is ONLY for the utility functions that connect to Blender's IFC
-    # - For actual IFC element creation, use the API functions in blender_addon.api.*
-    # - For property setting or other functions which are not available in the main tools, use ifcopenshell.api directly
-    # - Different IFC operations may require different patterns and additional imports
-    # - Always check if an IFC file is open before running IFC operations
-    #
-    # -----------------------------------------------------------------------------
-    # ALTERNATIVE PATTERNS FOR OTHER OPERATIONS
-    # -----------------------------------------------------------------------------
-    # For material assignment (different from wall creation):
-    # material = ifcopenshell.api.run("material.add_material", ifc_file, name="Concrete")
-    # ifcopenshell.api.run("material.assign_material", ifc_file,
-    #                     product=wall, material=material.to_dict())
-    #
-    # For property assignment:
-    # pset = ifcopenshell.api.run("pset.add_pset", ifc_file,
-    #                           product=wall, name="Custom_Properties")
-    # ifcopenshell.api.run("pset.edit_pset", ifc_file,
-    #                     pset=pset, properties={"FireRating": "1hr"})
-    #
-    # The utility functions (get_ifc_file, save_and_load_ifc, etc.) are still needed,
-    # but the specific IFC operations vary by use case.
-    # -----------------------------------------------------------------------------
+    save_and_load_ifc()  # ALWAYS call at end!
     """
     try:
         blender = get_blender_connection()
