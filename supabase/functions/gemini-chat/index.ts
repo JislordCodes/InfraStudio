@@ -269,6 +269,18 @@ Deno.serve(async (req: Request) => {
 
     await mcpInit();
     
+    // If this is the first message in a new conversation, reset the IFC project
+    // so old geometry from previous sessions doesn't accumulate
+    if (payloadMsgs.length === 1) {
+      log("New session detected (1 message) — resetting IFC project");
+      try {
+        await mcpTool("initialize_project", { project_name: "InfraStudio Project" });
+        log("Fresh project initialized");
+      } catch (e) {
+        log("Project init warning: " + e);
+      }
+    }
+    
     // Fetch tool catalog from MCP backend (cached after first call)
     const toolCatalog = await fetchToolCatalog();
     const systemPrompt = buildSystemPrompt(toolCatalog);
