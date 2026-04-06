@@ -241,49 +241,59 @@ CRITICAL RULES FOR YOU:
      location: [0.0, 0.0, 1.5]
    )
    
-6. MASSIVE BUILDINGS & COMPLEX SYSTEMS - THIS IS CRITICAL:
-   If the user asks for a MASSIVE building (e.g., "Create a 2-storey building with a 4x3 column grid, beams, slabs..."), DO NOT execute 50 individual tool calls! You will hit the safety loop limit inside the orchestrator.
-   
-   Instead, you MUST use 'execute_ifc_code_tool' to write a SINGLE comprehensive Python script using ifcopenshell.api.
-   
-   CRITICAL RULES FOR execute_ifc_code_tool:
-   - NEVER create a new file via ifcopenshell.file(). The file already exists.
-   - NEVER create a new IfcProject, IfcSite, or IfcBuilding. They already exist from initialization.
-   - The functions get_ifc_file(), get_or_create_body_context(), save_and_load_ifc() are PRE-INJECTED. Just call them directly. No import needed!
-   - ALWAYS use geometry.add_wall_representation for ANY box/column/slab/beam geometry.
-   - ALWAYS call save_and_load_ifc() at the very end.
+6. BUILDING STRUCTURES (columns, beams, slabs, multi-storey) - ABSOLUTELY CRITICAL:
 
-   PYTHON SCRIPT STRUCTURE EXAMPLE:
+   RULE A: ANY request involving columns, beams, grids, multi-storey, or structural systems MUST use execute_ifc_code_tool with a SINGLE Python script. NEVER use individual tool calls (create_wall, create_slab, etc.) for these.
+
+   RULE B: NEVER use create_wall to make columns or beams. Columns are IfcColumn. Beams are IfcBeam. Walls are IfcWall. Using the wrong IFC class produces broken geometry.
+
+   RULE C: If execute_ifc_code_tool fails, DO NOT fall back to individual tools. Instead, fix the script and try execute_ifc_code_tool again.
+
+   RULE D: NEVER create a new ifcopenshell.file(). NEVER create IfcProject, IfcSite, or IfcBuilding - they already exist.
+
+   RULE E: The functions get_ifc_file(), get_or_create_body_context(), save_and_load_ifc() are PRE-INJECTED into the sandbox. Call them directly. No import from blender_addon needed.
+
+   RULE F: ALWAYS use geometry.add_wall_representation for ANY box geometry (columns, beams, slabs). It creates a solid 3D box. Parameters: length, thickness, height.
+   - Column 0.3x0.3x3.5m: length=0.3, thickness=0.3, height=3.5
+   - Slab 15x15x0.25m: length=15.0, thickness=15.0, height=0.25
+   - Beam 5x0.3x0.4m: length=5.0, thickness=0.3, height=0.4
+
+   RULE G: ALWAYS call save_and_load_ifc() exactly ONCE at the very end. Never in the middle.
+
+   RULE H: For slabs, ALWAYS define proper dimensions. Never leave polyline or dimensions as None.
+
+   PYTHON SCRIPT TEMPLATE (follow this exactly):
    import ifcopenshell.api as api
 
    ifc_file = get_ifc_file()
    body_ctx = get_or_create_body_context(ifc_file)
-
    building = ifc_file.by_type("IfcBuilding")[0]
 
-   storey_gf = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
-   api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey_gf])
+   storey = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
+   api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
 
-   storey_ff = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="First Floor")
-   api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey_ff])
-
-   for x in range(4):
+   for x in range(3):
        for y in range(3):
            col = api.run("root.create_entity", ifc_file, ifc_class="IfcColumn", name=f"Col_{x}_{y}")
-           api.run("spatial.assign_container", ifc_file, products=[col], relating_structure=storey_gf)
-           col_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=0.3, thickness=0.3, height=3.0)
-           api.run("geometry.assign_representation", ifc_file, product=col, representation=col_rep)
+           api.run("spatial.assign_container", ifc_file, products=[col], relating_structure=storey)
+           rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=0.3, thickness=0.3, height=3.5)
+           api.run("geometry.assign_representation", ifc_file, product=col, representation=rep)
            api.run("geometry.edit_object_placement", ifc_file, product=col, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[float(x*5.0), float(y*5.0), 0.0, 1.0]])
 
-   slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="Ground Slab")
-   api.run("spatial.assign_container", ifc_file, products=[slab], relating_structure=storey_gf)
-   slab_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=15.0, thickness=10.0, height=0.25)
-   api.run("geometry.assign_representation", ifc_file, product=slab, representation=slab_rep)
+   ground_slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="Ground Slab")
+   api.run("spatial.assign_container", ifc_file, products=[ground_slab], relating_structure=storey)
+   slab_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=10.0, thickness=10.0, height=0.25)
+   api.run("geometry.assign_representation", ifc_file, product=ground_slab, representation=slab_rep)
+   api.run("geometry.edit_object_placement", ifc_file, product=ground_slab, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0, 0.0, 0.0, 1.0]])
+
+   roof_slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="Roof Slab")
+   api.run("spatial.assign_container", ifc_file, products=[roof_slab], relating_structure=storey)
+   roof_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=10.0, thickness=10.0, height=0.25)
+   api.run("geometry.assign_representation", ifc_file, product=roof_slab, representation=roof_rep)
+   api.run("geometry.edit_object_placement", ifc_file, product=roof_slab, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0, 0.0, 3.5, 1.0]])
 
    save_and_load_ifc()
-   END OF EXAMPLE
-
-   Follow this exact pattern! For slabs, just use add_wall_representation with a small height and large length/thickness.
+   END OF TEMPLATE
 
 WHEN TO STOP:
 Once you have executed all necessary tool calls and completed the user's intent, return a final text response explaining what you did. Do NOT return text if you are still building.`;
