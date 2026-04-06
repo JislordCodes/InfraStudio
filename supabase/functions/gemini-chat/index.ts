@@ -372,28 +372,23 @@ Deno.serve(async (req: Request) => {
     if (isComplex) {
       log("Complex request detected — auto-fetching RAG knowledge");
       try {
-        // Make TARGETED RAG queries for the specific APIs needed for buildings
-        const queries = [
-          { query: "create column profile representation geometry", max_results: 3 },
-          { query: "add wall representation length height thickness", max_results: 3 },
-          { query: "edit object placement matrix position", max_results: 3 },
-          { query: "add slab representation depth", max_results: 2 },
-          { query: "spatial assign container storey", max_results: 2 },
-        ];
+        // Run 2 targeted RAG queries IN PARALLEL to stay within timeout
+        const [geomResult, profileResult] = await Promise.allSettled([
+          mcpTool("search_ifc_knowledge", { query: "add wall representation add profile representation geometry", max_results: 5 }),
+          mcpTool("search_ifc_knowledge", { query: "edit object placement spatial assign container", max_results: 5 }),
+        ]);
         
         const ragParts: string[] = [];
-        for (const q of queries) {
-          try {
-            const result = await mcpTool("search_ifc_knowledge", q);
-            if (result && (result as any).status === "success" && (result as any).results) {
-              for (const r of (result as any).results as any[]) {
+        for (const settled of [geomResult, profileResult]) {
+          if (settled.status === "fulfilled" && settled.value) {
+            const result = settled.value as any;
+            if (result.status === "success" && result.results) {
+              for (const r of result.results as any[]) {
                 if (r.description) ragParts.push(r.description);
                 if (r.signature) ragParts.push(`Signature: ${r.signature}`);
                 if (r.examples && r.examples.length > 0) ragParts.push(`Example:\n${r.examples[0]}`);
               }
             }
-          } catch (e) {
-            log(`RAG query warning for "${q.query}": ${e}`);
           }
         }
         
