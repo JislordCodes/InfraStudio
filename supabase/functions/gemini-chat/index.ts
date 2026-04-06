@@ -241,24 +241,49 @@ CRITICAL RULES FOR YOU:
      location: [0.0, 0.0, 1.5]
    )
    
-   For a beam:
-   create_trimesh_ifc(
-     trimesh_code: "import trimesh\\nresult = trimesh.primitives.Box(extents=[6.0, 0.3, 0.5])",
-     ifc_class: "IfcBeam",
-     name: "SteelBeam",
-     location: [3.0, 0.0, 3.0]
-   )
+6. MASSIVE BUILDINGS & COMPLEX SYSTEMS - THIS IS CRITICAL:
+   If the user asks for a MASSIVE building (e.g., "Create a 2-storey building with a 4x3 column grid, beams, slabs..."), DO NOT execute 50 individual tool calls! You will hit the safety loop limit inside the orchestrator.
    
-   RULES for trimesh_code: 
-   - MUST start with "import trimesh"
-   - MUST assign final mesh to "result" variable
-   - NEVER use print() statements
-   - Can use trimesh, numpy, math only
+   Instead, you MUST use 'execute_ifc_code_tool' to write a SINGLE comprehensive Python script using ifcopenshell.api.
    
-   After create_trimesh_ifc succeeds, the returned GUID can be used with apply_style_to_object for coloring.
+   CRITICAL RULES FOR execute_ifc_code_tool:
+   - NEVER create a new file via ifcopenshell.file(). The file already exists.
+   - NEVER create a new IfcProject, IfcSite, or IfcBuilding. They already exist from initialization.
+   - The functions get_ifc_file(), get_or_create_body_context(), save_and_load_ifc() are PRE-INJECTED. Just call them directly. No import needed!
+   - ALWAYS use geometry.add_wall_representation for ANY box/column/slab/beam geometry.
+   - ALWAYS call save_and_load_ifc() at the very end.
 
-6. RAG KNOWLEDGE LOOKUP:
-   If you are unsure how to construct a specific IFC element, use find_ifc_function or search_ifc_knowledge FIRST to learn the correct approach, then apply using create_trimesh_ifc.
+   PYTHON SCRIPT STRUCTURE EXAMPLE:
+   import ifcopenshell.api as api
+
+   ifc_file = get_ifc_file()
+   body_ctx = get_or_create_body_context(ifc_file)
+
+   building = ifc_file.by_type("IfcBuilding")[0]
+
+   storey_gf = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Ground Floor")
+   api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey_gf])
+
+   storey_ff = api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="First Floor")
+   api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey_ff])
+
+   for x in range(4):
+       for y in range(3):
+           col = api.run("root.create_entity", ifc_file, ifc_class="IfcColumn", name=f"Col_{x}_{y}")
+           api.run("spatial.assign_container", ifc_file, products=[col], relating_structure=storey_gf)
+           col_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=0.3, thickness=0.3, height=3.0)
+           api.run("geometry.assign_representation", ifc_file, product=col, representation=col_rep)
+           api.run("geometry.edit_object_placement", ifc_file, product=col, matrix=[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[float(x*5.0), float(y*5.0), 0.0, 1.0]])
+
+   slab = api.run("root.create_entity", ifc_file, ifc_class="IfcSlab", name="Ground Slab")
+   api.run("spatial.assign_container", ifc_file, products=[slab], relating_structure=storey_gf)
+   slab_rep = api.run("geometry.add_wall_representation", ifc_file, context=body_ctx, length=15.0, thickness=10.0, height=0.25)
+   api.run("geometry.assign_representation", ifc_file, product=slab, representation=slab_rep)
+
+   save_and_load_ifc()
+   END OF EXAMPLE
+
+   Follow this exact pattern! For slabs, just use add_wall_representation with a small height and large length/thickness.
 
 WHEN TO STOP:
 Once you have executed all necessary tool calls and completed the user's intent, return a final text response explaining what you did. Do NOT return text if you are still building.`;
@@ -288,7 +313,7 @@ async function executeAgentLoop(history: any[]): Promise<{ reply: string; steps:
   let loopCount = 0;
   let hasChanges = false;
   
-  while (loopCount < 20) {
+  while (loopCount < 100) {
     loopCount++;
     log(`--- Agent Turn ${loopCount} ---`);
     
