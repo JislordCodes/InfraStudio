@@ -78,17 +78,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     ifcLoaderRef.current = ifcLoader;
 
     const initAsync = async () => {
-      // Initialize Fragments Manager with Blob worker approach
-      try {
-        const fetchedUrl = await fetch('/fragments-worker.mjs');
-        const workerBlob = await fetchedUrl.blob();
-        const workerFile = new File([workerBlob], "worker.mjs", { type: "text/javascript" });
-        const localWorkerUrl = URL.createObjectURL(workerFile);
-        console.log('Initializing FragmentsManager worker from blob...');
-        fragments.init(localWorkerUrl);
-      } catch (e) {
-        console.warn('Failed to load fragments-worker.mjs from local origin, skipping worker init', e);
-      }
+      // Point directly to the Fragments Web Worker script placed into our Vite public/ folder
+      fragments.init('/fragments-worker.mjs');
 
       // Camera update loop
       world.camera.controls.addEventListener('update', () => {
@@ -166,18 +157,19 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       if (!ifcLoaderRef.current) return;
       setIsLoadingFile(true);
       try {
-        // Wait for the async init (worker + wasm setup) to fully complete first
-        if (initPromiseRef.current) {
-          await initPromiseRef.current;
+        if (initPromiseRef.current) await initPromiseRef.current;
+        
+        // Anti-crash failsafe: If fragments lost initialization, forcibly re-initialize
+        const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
+        if (!fragments.initialized) {
+          console.warn('Fragments were uninitialized before load. Forcing FragmentsManager init.');
+          fragments.init('/fragments-worker.mjs');
         }
 
         const data = new Uint8Array(await file.arrayBuffer());
-
-        // useWorker: false — process on main thread / without web-ifc-mt.worker.js
         console.log('Starting IFC load, file size:', data.byteLength, 'bytes');
         const model = await ifcLoaderRef.current.load(data, true, file.name);
         console.log('IFC load() resolved successfully', !!model);
-        
       } catch (error) {
         console.error('Error loading IFC file:', error);
         alert(`Failed to load IFC file. Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -190,8 +182,13 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       if (!ifcLoaderRef.current) return;
       setIsLoadingFile(true);
       try {
-        if (initPromiseRef.current) {
-          await initPromiseRef.current;
+        if (initPromiseRef.current) await initPromiseRef.current;
+
+        // Anti-crash failsafe: If fragments lost initialization, forcibly re-initialize
+        const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
+        if (!fragments.initialized) {
+          console.warn('Fragments were uninitialized before loadFromUrl. Forcing FragmentsManager init.');
+          fragments.init('/fragments-worker.mjs');
         }
 
         console.log(`Fetching IFC from URL: ${url}`);
@@ -204,7 +201,6 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         const modelId = `supabase-model-${Date.now()}`;
         const model = await ifcLoaderRef.current.load(data, true, modelId);
         console.log('IFC model loaded from URL successfully', !!model);
-
       } catch (error) {
         console.error('Error loading IFC from URL:', error);
         alert(`Failed to load IFC URL. Error: ${error instanceof Error ? error.message : String(error)}`);

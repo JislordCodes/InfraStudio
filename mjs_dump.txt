@@ -1,0 +1,14 @@
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField = (obj, key, value) => {
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+  return value;
+};
+import * as FRAGS from "@thatopen/fragments";
+import { DataMap as DataMap$1, FragmentsModels, DataSet as DataSet$1 } from "@thatopen/fragments";
+import * as THREE from "three";
+import { BufferAttribute, Vector3, Plane, Line3, Vector2, Triangle, Sphere, Matrix4, Box3, BackSide, DoubleSide, FrontSide, Ray, Mesh, Controls, Quaternion, Raycaster, Object3D, MeshBasicMaterial, LineBasicMaterial, CylinderGeometry, BoxGeometry, BufferGeometry, Float32BufferAttribute, OctahedronGeometry, Line, TorusGeometry, SphereGeometry, Euler, PlaneGeometry } from "three";
+import * as WEBIFC from "web-ifc";
+import CameraControls from "camera-controls";
+class Event {
+  construct

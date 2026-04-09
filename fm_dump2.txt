@@ -1,0 +1,39 @@
+
+    return this.core.models.list;
+  }
+  get core() {
+    if (!this._core) {
+      throw new Error("FragmentsManager not initialized. Call init() first.");
+    }
+    return this._core;
+  }
+  get _hasCoordinationModel() {
+    return this.baseCoordinationModel !== "";
+  }
+  /** {@link Disposable.dispose} */
+  dispose() {
+    this.onBeforeDispose.trigger();
+    if (this._core) {
+      this.core.dispose();
+      this._core = void 0;
+    }
+    this.baseCoordinationModel = "";
+    this.onFragmentsLoaded.reset();
+    this.onDisposed.trigger();
+    this.onDisposed.reset();
+  }
+  init(workerURL, options) {
+    this._core = new FragmentsModels(workerURL, options);
+    this.core.onModelLoaded.add(async () => {
+      if (this._hasCoordinationModel)
+        return;
+      const firstModel = [...this.list.values()][0];
+      if (!firstModel)
+        return;
+      this.baseCoordinationModel = firstModel.modelId;
+      this.baseCoordinationMatrix = await firstModel.getCoordinationMatrix();
+    });
+    this.list.onItemDeleted.add(() => {
+      if (this.list.size > 0)
+        return;
+      this.baseCoo

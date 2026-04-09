@@ -6,11 +6,12 @@ interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  reasoning_details?: string;
 }
 
-// Map our internal roles to what Gemini expects
+// Map our internal roles
 const toGeminiRole = (role: 'user' | 'assistant') =>
-  role === 'assistant' ? 'model' : 'user';
+  role === 'assistant' ? 'assistant' : 'user';
 
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
@@ -48,16 +49,21 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     setExpanded(true);
 
     try {
-      // Build conversation history for Gemini (skip the initial welcome message)
+      // Build conversation history for the AI
       const history = updatedMessages
         .filter(m => m.id !== '1')  // exclude the static welcome message
-        .map(m => ({ role: toGeminiRole(m.role), content: m.content }));
+        .map(m => {
+          const out: any = { role: toGeminiRole(m.role), content: m.content };
+          if (m.reasoning_details) out.reasoning_details = m.reasoning_details;
+          return out;
+        });
 
       const { data, error } = await supabase.functions.invoke('gemini-chat', {
         body: { messages: history },
       });
 
       if (error) throw error;
+      if (data.error) throw new Error(data.error);
 
       // Debug: log full response
       console.log('Full AI response:', JSON.stringify(data, null, 2));
@@ -80,6 +86,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: replyText,
+        reasoning_details: data.reasoning_details
       }]);
     } catch (err) {
       console.error('Gemini chat error:', err);
@@ -138,6 +145,12 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                 >
                   {msg.role === 'assistant' ? (
                     <div className="space-y-1">
+                      {msg.reasoning_details && (
+                        <details className="mb-2 text-xs text-neutral-400 bg-black/20 rounded p-2">
+                          <summary className="cursor-pointer font-semibold text-neutral-300">Model Reasoning</summary>
+                          <div className="mt-1 whitespace-pre-wrap">{msg.reasoning_details}</div>
+                        </details>
+                      )}
                       {msg.content.split('\n').map((line, i) => {
                         if (line.startsWith('✓')) return <div key={i} className="text-emerald-400 text-xs font-mono">{line}</div>;
                         if (line.startsWith('⚠')) return <div key={i} className="text-amber-400 text-xs font-mono">{line}</div>;

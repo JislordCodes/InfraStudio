@@ -187,7 +187,7 @@ def ensure_ifc_knowledge_ready(
                     os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
                     os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
                     os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
-                    os.environ['BLENDER_MCP_REMOTE_EMBEDDINGS_URL'] = 'http://127.0.0.1:8080/embeddings'
+                    os.environ.setdefault('BLENDER_MCP_REMOTE_EMBEDDINGS_URL', 'http://127.0.0.1:9090/embeddings')
                     
 
                     _init_stage = 'load_embeddings'

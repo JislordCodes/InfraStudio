@@ -1,0 +1,34 @@
+moveEventListener("touchstart", this.updateMouseInfo);
+    }
+  }
+}
+const _FragmentsManager = class _FragmentsManager extends Component {
+  constructor(components) {
+    super(components);
+    /** {@link Disposable.onDisposed} */
+    __publicField(this, "onDisposed", new Event());
+    __publicField(this, "onBeforeDispose", new Event());
+    /**
+     * Event triggered when fragments are loaded.
+     */
+    __publicField(this, "onFragmentsLoaded", new Event());
+    __publicField(this, "baseCoordinationModel", "");
+    __publicField(this, "baseCoordinationMatrix", new THREE.Matrix4());
+    /** {@link Component.enabled} */
+    __publicField(this, "enabled", true);
+    __publicField(this, "_core");
+    this.components.add(_FragmentsManager.uuid, this);
+  }
+  get initialized() {
+    return !!this._core;
+  }
+  /**
+   * Map containing all loaded fragment models.
+   * The key is the group's unique identifier, and the value is the model itself.
+   */
+  get list() {
+    return this.core.models.list;
+  }
+  get core() {
+    if (!this._core) {
+      throw new Error("FragmentsManager not initialized
