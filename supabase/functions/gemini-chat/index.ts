@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const DASHSCOPE_API_KEY = Deno.env.get("DASHSCOPE_API_KEY") || "sk-f02a2c9778704fe8af1b12e297ec44e0";
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const DASHSCOPE_MODEL = "qwen3.6-plus";
+const DASHSCOPE_MODEL = "qwen3.6-plus-2026-04-02";
 const DASHSCOPE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions";
 
 const CORS = {
