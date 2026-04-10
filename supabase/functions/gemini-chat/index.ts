@@ -195,7 +195,9 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   log(`Calling LLM API... messages count: ${openRouterMessages.length}`);
   
   // -- RETRY LOOP for transient Modal failures (502, 503, 429, timeouts) --
-  const MAX_LLM_RETRIES = 3;
+  // IMPORTANT: Supabase Edge Functions have a HARD 150s wall clock limit (HTTP 546).
+  // Worst case: MCP init(5s) + attempt1(55s) + backoff(3s) + attempt2(55s) = 118s < 150s ✓
+  const MAX_LLM_RETRIES = 2;
   let lastError = "";
   let json: any = null;
   
@@ -216,11 +218,26 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
           tool_choice: "auto",
           enable_thinking: false
         }),
-        signal: AbortSignal.timeout(180000)
+        signal: AbortSignal.timeout(55000) // 55s — must fit within Supabase 150s limit
       });
       
       if (res.ok) {
-        json = await res.json();
+        const parsed = await res.json();
+        const msg = parsed?.choices?.[0]?.message;
+        
+        // Handle empty GLM responses (no content AND no tool_calls)
+        if (!msg || (!msg.content && (!msg.tool_calls || msg.tool_calls.length === 0))) {
+          lastError = "Model returned empty response (no content, no tool_calls)";
+          log(`Empty response on attempt ${attempt}. ${attempt < MAX_LLM_RETRIES ? "Retrying..." : "Giving up."}`);
+          if (attempt < MAX_LLM_RETRIES) {
+            steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (empty response)`);
+            await new Promise(r => setTimeout(r, 3000));
+            continue;
+          }
+          throw new Error(lastError);
+        }
+        
+        json = parsed;
         break; // Success — exit retry loop
       }
       
@@ -228,15 +245,14 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       const errBody = await res.text().catch(() => "N/A");
       lastError = `Modal API Error: ${res.status} - ${errBody}`;
       
-      if ([502, 503, 429].includes(res.status)) {
-        const waitSec = attempt * 5; // 5s, 10s, 15s backoff
+      if ([502, 503, 429].includes(res.status) && attempt < MAX_LLM_RETRIES) {
+        const waitSec = attempt * 3; // 3s, 6s backoff
         log(`Transient ${res.status} on attempt ${attempt}. Retrying in ${waitSec}s...`);
         steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (${res.status})`);
         await new Promise(r => setTimeout(r, waitSec * 1000));
         continue;
       }
       
-      // Non-transient error (e.g. 401, 400) — fail immediately
       throw new Error(lastError);
       
     } catch (e: any) {
@@ -245,7 +261,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       const isUpstream = lastError.includes("502") || lastError.includes("503") || lastError.includes("upstream");
       
       if ((isTimeout || isUpstream) && attempt < MAX_LLM_RETRIES) {
-        const waitSec = attempt * 5;
+        const waitSec = attempt * 3;
         log(`Network error on attempt ${attempt}: ${lastError.slice(0, 100)}. Retrying in ${waitSec}s...`);
         steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (network)`);
         await new Promise(r => setTimeout(r, waitSec * 1000));
@@ -259,10 +275,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
     throw new Error(`LLM failed after ${MAX_LLM_RETRIES} attempts: ${lastError.slice(0, 300)}`);
   }
   
-  const message = json?.choices?.[0]?.message;
-  if (!message) {
-    throw new Error("No message choices returned from model.");
-  }
+  const message = json.choices[0].message;
   
   const new_messages = [message];
   

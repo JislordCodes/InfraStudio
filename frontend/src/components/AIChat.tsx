@@ -58,91 +58,112 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     try {
       let isCompleted = false;
       let turnCount = 0;
+      let consecutiveErrors = 0;
       
-      while (!isCompleted && turnCount < 20) {
+      while (!isCompleted && turnCount < 40) {
         turnCount++;
         
-        // Build conversation history for the AI
-        const history = currentMessages
-          .filter(m => m.id !== '1')  // exclude the static welcome message
-          .map(m => {
-            const out: any = { role: toGeminiRole(m.role), content: m.content || "" };
-            if (m.reasoning_details) out.reasoning_details = m.reasoning_details;
-            if (m.tool_calls) out.tool_calls = m.tool_calls;
-            if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
-            return out;
+        try {
+          // Build conversation history for the AI
+          const history = currentMessages
+            .filter(m => m.id !== '1')  // exclude the static welcome message
+            .map(m => {
+              const out: any = { role: toGeminiRole(m.role), content: m.content || "" };
+              if (m.reasoning_details) out.reasoning_details = m.reasoning_details;
+              if (m.tool_calls) out.tool_calls = m.tool_calls;
+              if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+              return out;
+            });
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 155000); // 155s — Supabase hard limit is 150s
+
+          const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
+              'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
+            },
+            body: JSON.stringify({ messages: history }),
+            signal: controller.signal,
           });
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 180000); // 180s max per API turn
+          clearTimeout(timeoutId);
 
-        const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-          },
-          body: JSON.stringify({ messages: history }),
-          signal: controller.signal,
-        });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
 
-        clearTimeout(timeoutId);
+          if (data.error) throw new Error(data.error);
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+          // Reset errors on success
+          consecutiveErrors = 0;
 
-        if (data.error) throw new Error(data.error);
-
-        // Update steps live
-        if (data.steps && data.steps.length > 0) {
-          accumSteps = [...accumSteps, ...data.steps];
-          setCurrentSteps(accumSteps);
-        }
-
-        // If the response includes an IFC file URL, auto-load it in the viewer
-        if (data.ifc_url && onLoadIfcUrl) {
-          console.log('Auto-loading IFC model from:', data.ifc_url);
-          onLoadIfcUrl(data.ifc_url);
-        }
-
-        if (data.status === 'completed') {
-          isCompleted = true;
-          // Build final reply with step details
-          let replyText = data.reply ?? 'Sorry, I could not generate a response.';
-          if (accumSteps.length > 0) {
-            replyText += '\n\n' + accumSteps.join('\n');
+          // Update steps live
+          if (data.steps && data.steps.length > 0) {
+            accumSteps = [...accumSteps, ...data.steps];
+            setCurrentSteps(accumSteps);
           }
 
-          const finalMsg: Message = {
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: replyText,
-            reasoning_details: data.reasoning_details
-          };
-          currentMessages = [...currentMessages, finalMsg];
-          setMessages(currentMessages);
-          setCurrentSteps([]); // clear pending steps
-        } else if (data.status === 'pending_turn') {
-          // Append hidden tool calls and results to the history
-          const newMsgs = (data.new_messages || []).map((m: any, i: number) => ({
-            id: Date.now().toString() + '_' + i,
-            role: m.role,
-            content: m.content || "",
-            reasoning_details: m.reasoning_details || m.reasoning_content,
-            tool_calls: m.tool_calls,
-            tool_call_id: m.tool_call_id
-          }));
-          currentMessages = [...currentMessages, ...newMsgs];
-          setMessages(currentMessages);
-          // Loop continues...
-        } else {
-          throw new Error("Unknown orchestrator status: " + data.status);
+          // If the response includes an IFC file URL, auto-load it in the viewer
+          if (data.ifc_url && onLoadIfcUrl) {
+            console.log('Auto-loading IFC model from:', data.ifc_url);
+            onLoadIfcUrl(data.ifc_url);
+          }
+
+          if (data.status === 'completed') {
+            isCompleted = true;
+            // Build final reply with step details
+            let replyText = data.reply ?? 'Sorry, I could not generate a response.';
+            if (accumSteps.length > 0) {
+              replyText += '\n\n' + accumSteps.join('\n');
+            }
+
+            const finalMsg: Message = {
+              id: Date.now().toString(),
+              role: 'assistant',
+              content: replyText,
+              reasoning_details: data.reasoning_details
+            };
+            currentMessages = [...currentMessages, finalMsg];
+            setMessages(currentMessages);
+            setCurrentSteps([]); // clear pending steps
+          } else if (data.status === 'pending_turn') {
+            // Append hidden tool calls and results to the history
+            const newMsgs = (data.new_messages || []).map((m: any, i: number) => ({
+              id: Date.now().toString() + '_' + i,
+              role: m.role,
+              content: m.content || "",
+              reasoning_details: m.reasoning_details || m.reasoning_content,
+              tool_calls: m.tool_calls,
+              tool_call_id: m.tool_call_id
+            }));
+            currentMessages = [...currentMessages, ...newMsgs];
+            setMessages(currentMessages);
+            // Loop continues...
+          } else {
+            throw new Error("Unknown orchestrator status: " + data.status);
+          }
+        } catch (turnError) {
+          console.error("Turn execution failed:", turnError);
+          consecutiveErrors++;
+          
+          if (consecutiveErrors >= 3) {
+            // Re-throw after 3 repeated failures so it hits the outer catch
+            throw turnError;
+          }
+          
+          const waitSecs = 3 * consecutiveErrors;
+          setCurrentSteps(prev => [...prev, `⚠ API Error. Auto-retrying in ${waitSecs}s...`]);
+          await new Promise(r => setTimeout(r, waitSecs * 1000));
+          
+          // Decrement tick so network flakes don't consume the loop limit
+          turnCount--;
         }
       }
       
-      if (!isCompleted && turnCount >= 20) {
-         throw new Error("Safety limit reached: 20 sequential loops aborted.");
+      if (!isCompleted && turnCount >= 40) {
+         throw new Error("Safety limit reached: 40 sequential loops aborted.");
       }
       
     } catch (err) {
