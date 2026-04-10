@@ -194,10 +194,12 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   
   log(`Calling LLM API... messages count: ${openRouterMessages.length}`);
   
-  // -- RETRY LOOP for transient Modal failures (502, 503, 429, timeouts) --
+  // -- RETRY LOOP for transient Modal failures --
   // IMPORTANT: Supabase Edge Functions have a HARD 150s wall clock limit (HTTP 546).
-  // Worst case: MCP init(5s) + attempt1(55s) + backoff(3s) + attempt2(55s) = 118s < 150s ✓
-  const MAX_LLM_RETRIES = 2;
+  // 429 responses return instantly (<1s), so we can retry more with longer pauses.
+  // Worst case (all 429): init(5s) + 4×reject(~4s) + backoffs(8+15+20=43s) + real(55s) = 107s ✓
+  // Worst case (502): init(5s) + attempt(55s) + backoff(5s) + attempt(55s) = 120s ✓
+  const MAX_LLM_RETRIES = 4;
   let lastError = "";
   let json: any = null;
   
@@ -245,8 +247,18 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       const errBody = await res.text().catch(() => "N/A");
       lastError = `Modal API Error: ${res.status} - ${errBody}`;
       
-      if ([502, 503, 429].includes(res.status) && attempt < MAX_LLM_RETRIES) {
-        const waitSec = attempt * 3; // 3s, 6s backoff
+      if (res.status === 429 && attempt < MAX_LLM_RETRIES) {
+        // 429 = rate limit. Response is instant, so use LONG backoff to let queue clear.
+        const waitSec = [0, 8, 15, 20][attempt] || 15;
+        log(`Rate limited (429) on attempt ${attempt}. Waiting ${waitSec}s...`);
+        steps.push(`⚠ Rate limited, waiting ${waitSec}s (${attempt}/${MAX_LLM_RETRIES})`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        continue;
+      }
+      
+      if ([502, 503].includes(res.status) && attempt < MAX_LLM_RETRIES) {
+        // 502/503 = server crash. Response took time, so use SHORT backoff.
+        const waitSec = attempt * 3;
         log(`Transient ${res.status} on attempt ${attempt}. Retrying in ${waitSec}s...`);
         steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (${res.status})`);
         await new Promise(r => setTimeout(r, waitSec * 1000));
@@ -261,7 +273,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       const isUpstream = lastError.includes("502") || lastError.includes("503") || lastError.includes("upstream");
       
       if ((isTimeout || isUpstream) && attempt < MAX_LLM_RETRIES) {
-        const waitSec = attempt * 3;
+        const waitSec = 5;
         log(`Network error on attempt ${attempt}: ${lastError.slice(0, 100)}. Retrying in ${waitSec}s...`);
         steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (network)`);
         await new Promise(r => setTimeout(r, waitSec * 1000));
