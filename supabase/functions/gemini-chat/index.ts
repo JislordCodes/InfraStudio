@@ -1,9 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const LLM_API_KEY = Deno.env.get("HF_API_KEY") || "";
+const LLM_API_KEY = Deno.env.get("MODAL_API_KEY") || "";
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_MODEL = "zai-org/GLM-5.1:together";
-const LLM_URL = "https://router.huggingface.co/v1/chat/completions";
+const LLM_MODEL = "zai-org/GLM-5.1-FP8";
+const LLM_URL = "https://api.us-west-2.modal.direct/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -187,7 +187,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   
   if (!res.ok) {
      const errBody = await res.text().catch(() => "N/A");
-     throw new Error(`DashScope API Error: ${res.status} - ${errBody}`);
+     throw new Error(`Modal API Error: ${res.status} - ${errBody}`);
   }
   
   const json = await res.json();
