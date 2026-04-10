@@ -116,7 +116,8 @@ To prevent system timeouts, you must minimize the number of tool calls.
 3. Missing Tools: If no direct tool exists, use execute_ifc_code_tool.
 
 MANDATORY RAG REQUIREMENT:
-Before calling execute_ifc_code_tool, you MUST call search_ifc_knowledge ONCE with a single comprehensive query combining all the elements you need (e.g. "ifcopenshell create wall opening door window slab placement"). Do NOT make multiple separate search calls — ONE search is enough. Read the results, then write ONE complete Python script.
+Before calling execute_ifc_code_tool, you MUST call search_ifc_knowledge ONCE with a single comprehensive query combining all the elements you need (e.g. "ifcopenshell create wall opening door window slab placement"). 
+CRITICAL ANTI-LOOP RULE: Do NOT make multiple separate search calls one after another! Once you have searched, you are FORBIDDEN from searching again for the same task. You must read the results and immediately write ONE complete Python script using execute_ifc_code_tool.
 
 RAG BEST PRACTICES & ZERO-GUESSING POLICY:
 - By default, search_ifc_knowledge returns 5 results. ALWAYS set \`max_results: 15\` for a wider view.
@@ -158,6 +159,38 @@ const OPENROUTER_TOOLS = [{
 // ═══════════════════════════════════════════
 // AGENT EXECUTION LOOP
 // ═══════════════════════════════════════════
+
+async function fetchWithRetry(url: string, options: any, retries: number = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 180000); // 180s absolute limit
+      
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (res.ok) return res;
+      
+      const errBody = await res.clone().text().catch(() => "N/A");
+      if (res.status >= 500 && res.status < 600) {
+        log(`Upstream 5xx Error (${res.status}): retrying ${i + 1}/${retries}...`);
+        await new Promise(r => setTimeout(r, 2000 * (i + 1))); // Exponential backoff
+        continue;
+      }
+      return res; // Return non-5xx errors immediately
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.message.includes('timeout')) {
+        log(`Network timeout: retrying ${i + 1}/${retries}...`);
+      } else {
+        log(`Fetch err: ${err}. Retrying ${i + 1}/${retries}...`);
+      }
+      if (i === retries - 1) throw err;
+      await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{ status: "pending_turn"|"completed"; new_messages: any[]; steps: string[]; hasChanges: boolean; reasoning_details?: string | null }> {
   const steps: string[] = [];
   let hasChanges = false;
@@ -168,7 +201,8 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   ];
   
   log(`Calling LLM API... messages count: ${openRouterMessages.length}`);
-  const res = await fetch(LLM_URL, {
+  
+  const res = await fetchWithRetry(LLM_URL, {
     method: "POST", headers: { 
        "Content-Type": "application/json",
        "Authorization": `Bearer ${LLM_API_KEY}`,
@@ -181,8 +215,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       tools: OPENROUTER_TOOLS,
       tool_choice: "auto",
       enable_thinking: false
-    }),
-    signal: AbortSignal.timeout(180000)
+    })
   });
   
   if (!res.ok) {
