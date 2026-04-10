@@ -122,6 +122,7 @@ RAG BEST PRACTICES & ZERO-GUESSING POLICY:
 - By default, search_ifc_knowledge returns 5 results. ALWAYS set \`max_results: 15\` for a wider view.
 - CRITICAL RULE: You are FORBIDDEN from guessing or inventing function parameters! If you plan to use an IfcOpenShell API function, but the RAG output did not explicitly list its \`parameters\` and \`signature\`, you MUST do a new targeted \`search_ifc_knowledge\` for that exact function name before writing any Python code. NEVER assume you know the arguments.
 - If your execute_ifc_code_tool crashes with a TypeError or missing keyword argument, DO NOT GUESS the fix. Use search_ifc_knowledge again to query the exact function name that failed so you can get the correct signature and adapt.
+- SYSTEM REMINDER: Did you search the RAG for the EXACT signature of the function you are attempting to use? If not, do it now. NEVER GUESS PARAMETERS.
 
 For execute_ifc_code_tool, you have PRE-INJECTED context:
 - ifc_file = get_ifc_file() (always call this)
@@ -152,147 +153,115 @@ const OPENROUTER_TOOLS = [{
 // ═══════════════════════════════════════════
 // AGENT EXECUTION LOOP
 // ═══════════════════════════════════════════
-async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{ reply: string; steps: string[]; hasChanges: boolean; reasoning_details?: string | null }> {
+async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{ status: "pending_turn"|"completed"; new_messages: any[]; steps: string[]; hasChanges: boolean; reasoning_details?: string | null }> {
   const steps: string[] = [];
-  let modelHistory = [...history];
-  let loopCount = 0;
   let hasChanges = false;
-  const startTime = Date.now();
-  const TIME_LIMIT_MS = 125000; // 125s limits to ensure it finishes before frontend drops
   
-  while (loopCount < 5) {
-    // TIME GUARD: if we're past 125s, stop immediately and return what we have
-    const elapsed = Date.now() - startTime;
-    if (elapsed > TIME_LIMIT_MS) {
-      log(`⏱ TIME GUARD: ${Math.round(elapsed/1000)}s elapsed, stopping to avoid gateway timeout`);
-      break;
-    }
-    
-    loopCount++;
-    log(`--- Agent Turn ${loopCount} (${Math.round(elapsed/1000)}s elapsed) ---`);
-    
-    // Calculate remaining time for this DashScope call
-    const remainingMs = Math.max(TIME_LIMIT_MS - elapsed, 30000);
-    
-    const openRouterMessages = [
-       { role: "system", content: systemPrompt },
-       ...modelHistory
-    ];
-    
-    log(`Calling DashScope API... messages count: ${openRouterMessages.length}`);
-    const res = await fetch(DASHSCOPE_URL, {
-      method: "POST", headers: { 
-         "Content-Type": "application/json",
-         "Authorization": `Bearer ${DASHSCOPE_API_KEY}`,
-         "HTTP-Referer": "https://infrastudio.tools",
-         "X-Title": "InfraStudio"
-      },
-      body: JSON.stringify({
-        model: DASHSCOPE_MODEL,
-        messages: openRouterMessages,
-        tools: OPENROUTER_TOOLS,
-        tool_choice: "auto",
-        enable_thinking: false
-      }),
-      signal: AbortSignal.timeout(remainingMs)
-    });
-    
-    if (!res.ok) {
-       const errBody = await res.text().catch(() => "N/A");
-       throw new Error(`DashScope API Error: ${res.status} - ${errBody}`);
-    }
-    
-    const json = await res.json();
-    const message = json?.choices?.[0]?.message;
-    if (!message) {
-      log("No message choices returned.");
-      break;
-    }
-    
-    modelHistory.push(message);
-    
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      for (const toolCall of message.tool_calls) {
-        const callId = toolCall.id;
-        const call = toolCall.function;
-        log(`AI Wants to call: ${call.name}`);
+  const openRouterMessages = [
+     { role: "system", content: systemPrompt },
+     ...history
+  ];
+  
+  log(`Calling DashScope API... messages count: ${openRouterMessages.length}`);
+  const res = await fetch(DASHSCOPE_URL, {
+    method: "POST", headers: { 
+       "Content-Type": "application/json",
+       "Authorization": `Bearer ${DASHSCOPE_API_KEY}`,
+       "HTTP-Referer": "https://infrastudio.tools",
+       "X-Title": "InfraStudio"
+    },
+    body: JSON.stringify({
+      model: DASHSCOPE_MODEL,
+      messages: openRouterMessages,
+      tools: OPENROUTER_TOOLS,
+      tool_choice: "auto",
+      enable_thinking: false
+    }),
+    signal: AbortSignal.timeout(60000)
+  });
+  
+  if (!res.ok) {
+     const errBody = await res.text().catch(() => "N/A");
+     throw new Error(`DashScope API Error: ${res.status} - ${errBody}`);
+  }
+  
+  const json = await res.json();
+  const message = json?.choices?.[0]?.message;
+  if (!message) {
+    throw new Error("No message choices returned from model.");
+  }
+  
+  const new_messages = [message];
+  
+  if (message.tool_calls && message.tool_calls.length > 0) {
+    for (const toolCall of message.tool_calls) {
+      const callId = toolCall.id;
+      const call = toolCall.function;
+      log(`AI Wants to call: ${call.name}`);
+      
+      let callResult: any;
+      if (call.name === "call_mcp_tool") {
+        let parsedArgs: any = {};
+        try { parsedArgs = JSON.parse(call.arguments || "{}"); } catch(e) {}
         
-        let callResult: any;
-        if (call.name === "call_mcp_tool") {
-          let parsedArgs: any = {};
-          try { parsedArgs = JSON.parse(call.arguments || "{}"); } catch(e) {}
-          
-          let tName = parsedArgs?.tool_name?.toString() || "";
-          let tArgs = parsedArgs?.arguments || {};
-          
-          while (tName === "call_mcp_tool" && tArgs && tArgs.tool_name) {
-            log(`Unwrapping nested call_mcp_tool -> ${tArgs.tool_name}`);
-            tName = tArgs.tool_name.toString();
-            tArgs = tArgs.arguments || {};
-          }
-          
-          if (!tName || tName === "unknown" || tName === "call_mcp_tool") {
-            log(`Skipping invalid tool name: "${tName}"`);
-            callResult = { success: false, error: `Invalid tool name: "${tName}". Use a specific tool name.` };
-            steps.push(`✗ Skipped: invalid tool name`);
-          } else {
-            try {
-              const mRes = await mcpTool(tName, tArgs);
-              callResult = mRes;
-              
-              if (mRes.success === false || mRes.error || mRes.status === "error") {
-                steps.push(`✗ Failed: ${tName}`);
-              } else {
-                steps.push(`✓ Used: ${tName}`);
-                if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_") || tName === "execute_ifc_code_tool") {
-                  hasChanges = true;
-                }
-              }
-            } catch(e) {
-              log(`Tool Execution Error: ${e}`);
-              callResult = { success: false, error: String(e) };
-              steps.push(`✗ Error: ${tName}`);
-            }
-          }
-        } else {
-          callResult = { error: "Unknown function" };
+        let tName = parsedArgs?.tool_name?.toString() || "";
+        let tArgs = parsedArgs?.arguments || {};
+        
+        while (tName === "call_mcp_tool" && tArgs && tArgs.tool_name) {
+          log(`Unwrapping nested call_mcp_tool -> ${tArgs.tool_name}`);
+          tName = tArgs.tool_name.toString();
+          tArgs = tArgs.arguments || {};
         }
         
-        modelHistory.push({
-          role: "tool",
-          tool_call_id: callId,
-          content: JSON.stringify(callResult)
-        });
+        if (!tName || tName === "unknown" || tName === "call_mcp_tool") {
+          log(`Skipping invalid tool name: "${tName}"`);
+          callResult = { success: false, error: `Invalid tool name: "${tName}". Use a specific tool name.` };
+          steps.push(`✗ Skipped: invalid tool name`);
+        } else {
+          try {
+            const mRes = await mcpTool(tName, tArgs);
+            callResult = mRes;
+            
+            if (mRes.success === false || mRes.error || mRes.status === "error") {
+              steps.push(`✗ Failed: ${tName}`);
+            } else {
+              steps.push(`✓ Used: ${tName}`);
+              if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_") || tName === "execute_ifc_code_tool") {
+                hasChanges = true;
+              }
+            }
+          } catch(e) {
+            log(`Tool Execution Error: ${e}`);
+            callResult = { success: false, error: String(e) };
+            steps.push(`✗ Error: ${tName}`);
+          }
+        }
+      } else {
+        callResult = { error: "Unknown function" };
       }
       
-      // After executing code, if we already have changes and are past 80s, skip the summary turn
-      const elapsedAfterTool = Date.now() - startTime;
-      if (hasChanges && elapsedAfterTool > 80000) {
-        log(`⏱ TIME GUARD: ${Math.round(elapsedAfterTool/1000)}s elapsed with changes, skipping summary to preserve time for export`);
-        return { reply: "Building complete! Your IFC model has been generated with the requested elements.", steps, hasChanges, reasoning_details: null };
-      }
-      
-      continue;
+      new_messages.push({
+        role: "tool",
+        tool_call_id: callId,
+        content: JSON.stringify(callResult)
+      });
     }
     
-    if (message.content) {
-      log(`Final AI Answer received.`);
-      return { 
-        reply: message.content, 
-        steps, 
-        hasChanges,
-        reasoning_details: message.reasoning_content || message.reasoning_details || null
-      };
-    }
-    
-    break;
+    return { status: "pending_turn", new_messages, steps, hasChanges, reasoning_details: message.reasoning_content };
   }
   
-  // If we ran out of turns but have changes, still return success
-  if (hasChanges) {
-    return { reply: "Building complete! Your IFC model has been generated.", steps, hasChanges, reasoning_details: null };
+  if (message.content) {
+    log(`Final AI Answer received.`);
+    return { 
+      status: "completed",
+      new_messages,
+      steps, 
+      hasChanges,
+      reasoning_details: message.reasoning_content
+    };
   }
-  return { reply: "I hit a constraint (either time or loop limit) and couldn't complete the task. Often this happens if my code encounters an error I couldn't fix in time.", steps, hasChanges, reasoning_details: null };
+  
+  return { status: "completed", new_messages: [{role: "assistant", content: "I encountered an error."}], steps, hasChanges, reasoning_details: null };
 }
 
 // ═══════════════════════════════════════════
@@ -308,41 +277,31 @@ Deno.serve(async (req: Request) => {
     const payloadMsgs = (await req.json() as any).messages || [];
     if (!payloadMsgs.length) return new Response(JSON.stringify({ error: "No messages" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
     
-    // Map initial history from frontend to OpenAI format: role/content
-    const history = payloadMsgs.map((m: any) => {
-      const role = (m.role === "assistant" || m.role === "model") ? "assistant" : "user";
-      const obj: any = { role, content: m.content || "" };
-      if (m.reasoning_details) {
-        obj.reasoning_details = m.reasoning_details;
-        obj.reasoning_content = m.reasoning_details;
-      }
-      return obj;
-    });
+    // We expect the frontend to provide the perfectly formatted history array now.
+    const history = payloadMsgs;
 
     await mcpInit();
     
-    // If this is the first message in a new conversation, reset the IFC project
-    // so old geometry from previous sessions doesn't accumulate
-    if (payloadMsgs.length === 1) {
-      log("New session detected (1 message) — resetting IFC project");
+    // If there is exactly 1 user message, it's a new session. Reset project.
+    if (history.length === 1 && history[0].role === "user") {
+      log("New session detected (1 user message) — resetting IFC project");
       try {
         await mcpTool("initialize_project", { project_name: "InfraStudio Project" });
-        log("Fresh project initialized");
       } catch (e) {
         log("Project init warning: " + e);
       }
     }
     
-    // Initialize MCP and get tool catalog
     const toolCatalog = await fetchToolCatalog();
     const systemPrompt = buildSystemPrompt(toolCatalog);
 
-    const result = await executeAgentLoop(history, systemPrompt);
+    const result = await executeAgentTurn(history, systemPrompt);
 
     let ifc_url: string | undefined;
+    // Export IFC if we completed and had changes
     if (result.hasChanges) {
       try {
-        log("Changes detected, exporting IFC...");
+        log("Changes detected in this turn, exporting IFC...");
         const ex = await mcpTool("export_ifc", { session_id: mcpSessionId || "default" });
         if ((ex as any).success && (ex as any).file_url) {
           ifc_url = (ex as any).file_url as string;
@@ -351,7 +310,15 @@ Deno.serve(async (req: Request) => {
       } catch (e) { log("Export err: " + e); }
     }
 
-    const body: Record<string, unknown> = { reply: result.reply, steps: result.steps, debug: debugLog };
+    const body: Record<string, unknown> = {
+      status: result.status,
+      new_messages: result.new_messages,
+      steps: result.steps,
+      debug: debugLog
+    };
+    if (result.status === "completed") {
+      body.reply = result.new_messages[0]?.content || "Done.";
+    }
     if (result.reasoning_details) body.reasoning_details = result.reasoning_details;
     if (ifc_url) body.ifc_url = ifc_url;
     return new Response(JSON.stringify(body), { headers: { ...CORS, "Content-Type": "application/json" } });

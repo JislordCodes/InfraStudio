@@ -1,17 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown } from 'lucide-react';
-import { supabase } from '../lib/supabase';
 
 interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
   reasoning_details?: string;
+  tool_calls?: any[];
+  tool_call_id?: string;
 }
 
 // Map our internal roles
-const toGeminiRole = (role: 'user' | 'assistant') =>
-  role === 'assistant' ? 'assistant' : 'user';
+const toGeminiRole = (role: 'user' | 'assistant' | 'tool') => {
+  if (role === 'tool') return 'tool';
+  return role === 'assistant' ? 'assistant' : 'user';
+};
 
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
@@ -24,13 +27,14 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [currentSteps, setCurrentSteps] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (expanded) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, expanded]);
+  }, [messages, expanded, currentSteps]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,67 +46,105 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       content: input.trim(),
     };
 
-    const updatedMessages = [...messages, userMsg];
-    setMessages(updatedMessages);
+    let currentMessages = [...messages, userMsg];
+    setMessages(currentMessages);
     setInput('');
     setIsLoading(true);
     setExpanded(true);
+    setCurrentSteps([]);
+
+    let accumSteps: string[] = [];
 
     try {
-      // Build conversation history for the AI
-      const history = updatedMessages
-        .filter(m => m.id !== '1')  // exclude the static welcome message
-        .map(m => {
-          const out: any = { role: toGeminiRole(m.role), content: m.content };
-          if (m.reasoning_details) out.reasoning_details = m.reasoning_details;
-          return out;
+      let isCompleted = false;
+      let turnCount = 0;
+      
+      while (!isCompleted && turnCount < 20) {
+        turnCount++;
+        
+        // Build conversation history for the AI
+        const history = currentMessages
+          .filter(m => m.id !== '1')  // exclude the static welcome message
+          .map(m => {
+            const out: any = { role: toGeminiRole(m.role), content: m.content || "" };
+            if (m.reasoning_details) out.reasoning_details = m.reasoning_details;
+            if (m.tool_calls) out.tool_calls = m.tool_calls;
+            if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+            return out;
+          });
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s max per API turn
+
+        const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
+            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
+          },
+          body: JSON.stringify({ messages: history }),
+          signal: controller.signal,
         });
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000); // 300s timeout to match new massive code generation limits
+        clearTimeout(timeoutId);
 
-      const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-        },
-        body: JSON.stringify({ messages: history }),
-        signal: controller.signal,
-      });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
 
-      clearTimeout(timeoutId);
+        if (data.error) throw new Error(data.error);
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+        // Update steps live
+        if (data.steps && data.steps.length > 0) {
+          accumSteps = [...accumSteps, ...data.steps];
+          setCurrentSteps(accumSteps);
+        }
 
+        // If the response includes an IFC file URL, auto-load it in the viewer
+        if (data.ifc_url && onLoadIfcUrl) {
+          console.log('Auto-loading IFC model from:', data.ifc_url);
+          onLoadIfcUrl(data.ifc_url);
+        }
 
-      if (data.error) throw new Error(data.error);
+        if (data.status === 'completed') {
+          isCompleted = true;
+          // Build final reply with step details
+          let replyText = data.reply ?? 'Sorry, I could not generate a response.';
+          if (accumSteps.length > 0) {
+            replyText += '\n\n' + accumSteps.join('\n');
+          }
 
-      // Debug: log full response
-      console.log('Full AI response:', JSON.stringify(data, null, 2));
-      if (data.debug) console.log('DEBUG LOG:', data.debug);
-      if (data.steps) console.log('STEPS:', data.steps);
-
-      // If the response includes an IFC file URL, auto-load it in the viewer
-      if (data.ifc_url && onLoadIfcUrl) {
-        console.log('Auto-loading IFC model from:', data.ifc_url);
-        onLoadIfcUrl(data.ifc_url);
+          const finalMsg: Message = {
+            id: Date.now().toString(),
+            role: 'assistant',
+            content: replyText,
+            reasoning_details: data.reasoning_details
+          };
+          currentMessages = [...currentMessages, finalMsg];
+          setMessages(currentMessages);
+          setCurrentSteps([]); // clear pending steps
+        } else if (data.status === 'pending_turn') {
+          // Append hidden tool calls and results to the history
+          const newMsgs = (data.new_messages || []).map((m: any, i: number) => ({
+            id: Date.now().toString() + '_' + i,
+            role: m.role,
+            content: m.content || "",
+            reasoning_details: m.reasoning_details || m.reasoning_content,
+            tool_calls: m.tool_calls,
+            tool_call_id: m.tool_call_id
+          }));
+          currentMessages = [...currentMessages, ...newMsgs];
+          setMessages(currentMessages);
+          // Loop continues...
+        } else {
+          throw new Error("Unknown orchestrator status: " + data.status);
+        }
       }
-
-      // Build reply with step details if available
-      let replyText = data.reply ?? 'Sorry, I could not generate a response.';
-      if (data.steps && data.steps.length > 0) {
-        replyText += '\n\n' + data.steps.join('\n');
+      
+      if (!isCompleted && turnCount >= 20) {
+         throw new Error("Safety limit reached: 20 sequential loops aborted.");
       }
-
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: replyText,
-        reasoning_details: data.reasoning_details
-      }]);
+      
     } catch (err) {
       console.error('Gemini chat error:', err);
       const detail = err instanceof Error ? err.message : String(err);
@@ -111,15 +153,19 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: isTimeout
-          ? '⏱️ The request took too long. Try a simpler prompt (e.g. "Create a wall") or try again.'
-          : `⚠️ Failed to get a response: ${detail.slice(0, 200)}`,
+          ? '⏱️ A network timeout occurred while attempting to process the code.'
+          : `⚠️ Failed to complete task: ${detail.slice(0, 200)}`,
       }]);
+      setCurrentSteps([]);
     } finally {
       setIsLoading(false);
     }
   };
 
   const hasMessages = messages.length > 1;
+
+  // Filter messages for display (hide internal tool_calls and tool results)
+  const displayableMessages = messages.filter(m => m.role === 'user' || (m.role === 'assistant' && !m.tool_calls));
 
   return (
     <div
@@ -144,7 +190,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
             </button>
           </div>
           <div className="max-h-56 overflow-y-auto px-4 pb-1 space-y-2 flex flex-col">
-            {messages.map(msg => (
+            {displayableMessages.map(msg => (
               <div key={msg.id} className={`flex items-end gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'assistant' && (
                   <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 mb-0.5">
@@ -184,10 +230,23 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                 <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 mb-0.5">
                   <Bot className="w-3 h-3 text-white" />
                 </div>
-                <div className="bg-white/10 rounded-2xl rounded-bl-sm px-3 py-2 flex gap-1 items-center">
-                  <span className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                  <span className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                  <span className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce" />
+                <div className="bg-white/10 rounded-2xl rounded-bl-sm px-3 py-2 flex flex-col gap-2">
+                  {currentSteps.length > 0 && (
+                    <div className="space-y-1">
+                      {currentSteps.map((line, i) => {
+                        if (line.startsWith('✓')) return <div key={`step-${i}`} className="text-emerald-400 text-xs font-mono">{line}</div>;
+                        if (line.startsWith('⚠')) return <div key={`step-${i}`} className="text-amber-400 text-xs font-mono">{line}</div>;
+                        if (line.startsWith('✗')) return <div key={`step-${i}`} className="text-red-400 text-xs font-mono">{line}</div>;
+                        if (line.trim() === '') return null;
+                        return <div key={`step-${i}`} className="text-xs text-neutral-300 font-mono">{line}</div>;
+                      })}
+                    </div>
+                  )}
+                  <div className="flex gap-1 items-center">
+                    <span className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <span className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <span className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce" />
+                  </div>
                 </div>
               </div>
             )}
