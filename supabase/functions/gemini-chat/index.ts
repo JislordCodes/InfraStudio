@@ -1,9 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const DASHSCOPE_API_KEY = Deno.env.get("DASHSCOPE_API_KEY") || "sk-f02a2c9778704fe8af1b12e297ec44e0";
+const LLM_API_KEY = Deno.env.get("HF_API_KEY") || "";
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const DASHSCOPE_MODEL = "qwen3.6-plus-2026-04-02";
-const DASHSCOPE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions";
+const LLM_MODEL = "zai-org/GLM-5.1:together";
+const LLM_URL = "https://router.huggingface.co/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -124,6 +124,11 @@ RAG BEST PRACTICES & ZERO-GUESSING POLICY:
 - If your execute_ifc_code_tool crashes with a TypeError or missing keyword argument, DO NOT GUESS the fix. Use search_ifc_knowledge again to query the exact function name that failed so you can get the correct signature and adapt.
 - SYSTEM REMINDER: Did you search the RAG for the EXACT signature of the function you are attempting to use? If not, do it now. NEVER GUESS PARAMETERS.
 
+ANTI-HALLUCINATION FAST-TRACK:
+Because LLMs frequently hallucinate these specific IfcOpenShell APIs, internalize these immutable rules:
+1. \`ifcopenshell.api.material.add_layer\` DOES NOT accept \`thickness\`. You must create the layer, then call \`ifcopenshell.api.material.edit_layer(model, layer=L, attributes={"LayerThickness": 0.2})\`
+2. \`ifcopenshell.api.style.add_surface_style\` DOES NOT accept \`name\` or \`color\`. You must pass \`attributes={"SurfaceColour": {"Name": None, "Red": 1.0, "Green": 1.0, "Blue": 1.0}}\`.
+
 For execute_ifc_code_tool, you have PRE-INJECTED context:
 - ifc_file = get_ifc_file() (always call this)
 - body_ctx = get_or_create_body_context(ifc_file) (always call this)
@@ -162,16 +167,16 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
      ...history
   ];
   
-  log(`Calling DashScope API... messages count: ${openRouterMessages.length}`);
-  const res = await fetch(DASHSCOPE_URL, {
+  log(`Calling LLM API... messages count: ${openRouterMessages.length}`);
+  const res = await fetch(LLM_URL, {
     method: "POST", headers: { 
        "Content-Type": "application/json",
-       "Authorization": `Bearer ${DASHSCOPE_API_KEY}`,
+       "Authorization": `Bearer ${LLM_API_KEY}`,
        "HTTP-Referer": "https://infrastudio.tools",
        "X-Title": "InfraStudio"
     },
     body: JSON.stringify({
-      model: DASHSCOPE_MODEL,
+      model: LLM_MODEL,
       messages: openRouterMessages,
       tools: OPENROUTER_TOOLS,
       tool_choice: "auto",
@@ -270,7 +275,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
-  if (!DASHSCOPE_API_KEY) return new Response(JSON.stringify({ error: "No API key" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
+  if (!LLM_API_KEY) return new Response(JSON.stringify({ error: "No API key" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
   debugLog.length = 0;
   mcpSessionId = "";
   try {
