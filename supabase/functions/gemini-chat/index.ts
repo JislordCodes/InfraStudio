@@ -168,29 +168,72 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   ];
   
   log(`Calling LLM API... messages count: ${openRouterMessages.length}`);
-  const res = await fetch(LLM_URL, {
-    method: "POST", headers: { 
-       "Content-Type": "application/json",
-       "Authorization": `Bearer ${LLM_API_KEY}`,
-       "HTTP-Referer": "https://infrastudio.tools",
-       "X-Title": "InfraStudio"
-    },
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      messages: openRouterMessages,
-      tools: OPENROUTER_TOOLS,
-      tool_choice: "auto",
-      enable_thinking: false
-    }),
-    signal: AbortSignal.timeout(180000)
-  });
   
-  if (!res.ok) {
-     const errBody = await res.text().catch(() => "N/A");
-     throw new Error(`Modal API Error: ${res.status} - ${errBody}`);
+  // -- RETRY LOOP for transient Modal failures (502, 503, 429, timeouts) --
+  const MAX_LLM_RETRIES = 3;
+  let lastError = "";
+  let json: any = null;
+  
+  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+    try {
+      log(`LLM attempt ${attempt}/${MAX_LLM_RETRIES}...`);
+      const res = await fetch(LLM_URL, {
+        method: "POST", headers: { 
+           "Content-Type": "application/json",
+           "Authorization": `Bearer ${LLM_API_KEY}`,
+           "HTTP-Referer": "https://infrastudio.tools",
+           "X-Title": "InfraStudio"
+        },
+        body: JSON.stringify({
+          model: LLM_MODEL,
+          messages: openRouterMessages,
+          tools: OPENROUTER_TOOLS,
+          tool_choice: "auto",
+          enable_thinking: false
+        }),
+        signal: AbortSignal.timeout(180000)
+      });
+      
+      if (res.ok) {
+        json = await res.json();
+        break; // Success — exit retry loop
+      }
+      
+      // Transient errors worth retrying
+      const errBody = await res.text().catch(() => "N/A");
+      lastError = `Modal API Error: ${res.status} - ${errBody}`;
+      
+      if ([502, 503, 429].includes(res.status)) {
+        const waitSec = attempt * 5; // 5s, 10s, 15s backoff
+        log(`Transient ${res.status} on attempt ${attempt}. Retrying in ${waitSec}s...`);
+        steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (${res.status})`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        continue;
+      }
+      
+      // Non-transient error (e.g. 401, 400) — fail immediately
+      throw new Error(lastError);
+      
+    } catch (e: any) {
+      lastError = String(e);
+      const isTimeout = lastError.includes("TimeoutError") || lastError.includes("abort") || lastError.includes("timed out");
+      const isUpstream = lastError.includes("502") || lastError.includes("503") || lastError.includes("upstream");
+      
+      if ((isTimeout || isUpstream) && attempt < MAX_LLM_RETRIES) {
+        const waitSec = attempt * 5;
+        log(`Network error on attempt ${attempt}: ${lastError.slice(0, 100)}. Retrying in ${waitSec}s...`);
+        steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (network)`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        continue;
+      }
+      throw new Error(`LLM failed after ${attempt} attempts: ${lastError.slice(0, 300)}`);
+    }
   }
   
-  const json = await res.json();
+  if (!json) {
+    throw new Error(`LLM failed after ${MAX_LLM_RETRIES} attempts: ${lastError.slice(0, 300)}`);
+  }
+  
   const message = json?.choices?.[0]?.message;
   if (!message) {
     throw new Error("No message choices returned from model.");
