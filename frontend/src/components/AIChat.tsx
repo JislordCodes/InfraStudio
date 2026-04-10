@@ -74,7 +74,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
           });
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s max per API turn
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 180s max per API turn
 
         const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
           method: 'POST',

@@ -182,7 +182,7 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       tool_choice: "auto",
       enable_thinking: false
     }),
-    signal: AbortSignal.timeout(60000)
+    signal: AbortSignal.timeout(180000)
   });
   
   if (!res.ok) {
