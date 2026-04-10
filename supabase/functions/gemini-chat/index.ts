@@ -109,20 +109,45 @@ Call call_mcp_tool(tool_name, arguments) with the exact tool name and a JSON arg
 AVAILABLE MCP TOOLS (from backend):
 \${toolCatalog}
 
-CRITICAL RULES FOR PERFORMANCE AND TOOL SELECTION:
-You must strictly follow these rules based on what the user asks to build:
-1. SINGLE ITEM (e.g., "build a wall" or "build stairs"): You MUST use the exact individual MCP tool designed for that component (e.g., \`create_wall\`).
-2. MIXTURE OF ITEMS (e.g., "build a structure", "build a building") OR MISSING ITEM (e.g., "build a slab"): You MUST NOT use individual MCP tools. You MUST use \`search_ifc_knowledge\` to query RAG, and then use \`execute_ifc_code_tool\` to build EVERYTHING in a single Python script.
-3. NEVER INVENT: When using \`execute_ifc_code_tool\`, you must strictly use ONLY the exact code patterns and signatures retrieved from the RAG search. Do not hallucinate or invent properties/parameters.
+══════════════════════════════════════════════════════════
+MANDATORY DECISION RULE — READ THIS BEFORE EVERY RESPONSE
+══════════════════════════════════════════════════════════
+
+Before you do ANYTHING, count how many distinct IFC elements the user's prompt requires.
+
+IF the prompt asks for EXACTLY ONE element (e.g. "create a wall", "add stairs"):
+  → Use the matching individual MCP tool (e.g. create_wall).
+  → Do NOT use search_ifc_knowledge or execute_ifc_code_tool.
+
+IF the prompt asks for TWO OR MORE elements, OR any element that has NO individual MCP tool (e.g. slab, opening, material):
+  → You are STRICTLY FORBIDDEN from calling individual MCP tools like create_wall, create_window, create_door, etc.
+  → You MUST call search_ifc_knowledge ONCE to get RAG knowledge.
+  → Then you MUST call execute_ifc_code_tool with ONE Python script that builds ALL elements together.
+  → This is the ONLY acceptable path. No exceptions.
+
+EXAMPLES OF WHAT IS FORBIDDEN:
+- User says: "create a wall with a window and a door"
+  ✗ WRONG: calling create_wall, then create_window, then create_door separately
+  ✓ CORRECT: call search_ifc_knowledge → then execute_ifc_code_tool with ONE script
+
+- User says: "build a house with 4 walls, a slab, and a roof"
+  ✗ WRONG: calling create_wall four times, then trying to find a slab tool
+  ✓ CORRECT: call search_ifc_knowledge → then execute_ifc_code_tool with ONE script
+
+- User says: "create a wall"
+  ✓ CORRECT: call create_wall directly (single element)
+
+IF YOU CALL create_wall, create_window, create_door, OR ANY OTHER INDIVIDUAL TOOL WHEN THE USER ASKED FOR MULTIPLE ELEMENTS, YOU HAVE FAILED YOUR TASK. DO NOT DO THIS.
+
+══════════════════════════════════════════════════════════
 
 MANDATORY RAG REQUIREMENT:
 Before calling execute_ifc_code_tool, you MUST call search_ifc_knowledge ONCE with a single comprehensive query combining all the elements you need (e.g. "ifcopenshell create wall opening door window slab placement"). Do NOT make multiple separate search calls — ONE search is enough. Read the results, then write ONE complete Python script.
 
 RAG BEST PRACTICES & ZERO-GUESSING POLICY:
-- By default, search_ifc_knowledge returns 5 results. ALWAYS set \`max_results: 15\` for a wider view.
+- ALWAYS set \`max_results: 15\` for a wider view.
 - CRITICAL RULE: You are FORBIDDEN from guessing or inventing function parameters! If you plan to use an IfcOpenShell API function, but the RAG output did not explicitly list its \`parameters\` and \`signature\`, you MUST do a new targeted \`search_ifc_knowledge\` for that exact function name before writing any Python code. NEVER assume you know the arguments.
 - If your execute_ifc_code_tool crashes with a TypeError or missing keyword argument, DO NOT GUESS the fix. Use search_ifc_knowledge again to query the exact function name that failed so you can get the correct signature and adapt.
-- SYSTEM REMINDER: Did you search the RAG for the EXACT signature of the function you are attempting to use? If not, do it now. NEVER GUESS PARAMETERS.
 
 ANTI-HALLUCINATION FAST-TRACK:
 Because LLMs frequently hallucinate these specific IfcOpenShell APIs, internalize these immutable rules:
