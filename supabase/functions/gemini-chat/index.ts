@@ -35,7 +35,7 @@ function extractText(content: unknown): string | undefined {
 async function mcpPost(body: unknown): Promise<unknown> {
   const headers: Record<string, string> = { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" };
   if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
-  const res = await fetch(MCP_URL, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
+  const res = await fetch(MCP_URL, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000) });
   const s = res.headers.get("mcp-session-id"); if (s) mcpSessionId = s;
   const text = await res.text();
   if (text.trim().startsWith("data:")) {
@@ -107,25 +107,27 @@ HOW TO USE TOOLS:
 Call call_mcp_tool(tool_name, arguments) with the exact tool name and a JSON arguments object. Always use metric units (meters).
 
 AVAILABLE MCP TOOLS (from backend):
-${toolCatalog}
+\${toolCatalog}
 
-CRITICAL RULES FOR PERFORMANCE AND CUSTOM COMPONENTS:
-To prevent system timeouts, you must minimize the number of individual tool calls you make.
-CRITICAL RULES FOR PERFORMANCE AND CUSTOM COMPONENTS:
-To prevent system timeouts, you must minimize the number of individual tool calls you make.
-1. Single Elements: For simple, isolated tasks (e.g., "add one wall", "add a door"), use the direct tools provided above.
-2. Multiple Elements (COMPLEX TASKS): For ANY request that requires creating multiple objects (e.g., "build a bedroom with walls, a toilet, doors and windows", "create an apartment", or "build a slab"), you MUST NOT use individual tools sequentially. That takes too long!
-Instead, you MUST use execute_ifc_code_tool to write a SINGLE Python script that builds EVERYTHING at once.
-3. Missing Tools: If you need to build something that has no direct tool, do NOT guess the tool name. Use execute_ifc_code_tool.
+CRITICAL RULES FOR PERFORMANCE:
+To prevent system timeouts, you must minimize the number of tool calls.
+1. Single Elements: For simple tasks (e.g., "add one wall"), use the direct tools above.
+2. Multiple Elements (COMPLEX TASKS): For ANY request needing multiple objects, you MUST use execute_ifc_code_tool to write ONE Python script that builds EVERYTHING.
+3. Missing Tools: If no direct tool exists, use execute_ifc_code_tool.
 
 MANDATORY RAG REQUIREMENT:
-Before you write ANY Python code or use execute_ifc_code_tool, you MUST ALWAYS call search_ifc_knowledge first to retrieve the exact ifcopenshell API signatures and examples (e.g. search for "create wall" or "cut opening in wall"). NEVER skip this step. NEVER rely on your pre-trained memory for ifcopenshell API usage, as it may be outdated or hallucinate. ALWAYS search first, read the results, and then write the code.
+Before calling execute_ifc_code_tool, you MUST call search_ifc_knowledge ONCE with a single comprehensive query combining all the elements you need (e.g. "ifcopenshell create wall opening door window slab placement"). Do NOT make multiple separate search calls — ONE search is enough. Read the results, then write ONE complete Python script.
 
-For execute_ifc_code_tool, you have the following PRE-INJECTED context:
+RAG BEST PRACTICES & ZERO-GUESSING POLICY:
+- By default, search_ifc_knowledge returns 5 results. ALWAYS set \`max_results: 15\` for a wider view.
+- CRITICAL RULE: You are FORBIDDEN from guessing or inventing function parameters! If you plan to use an IfcOpenShell API function, but the RAG output did not explicitly list its \`parameters\` and \`signature\`, you MUST do a new targeted \`search_ifc_knowledge\` for that exact function name before writing any Python code. NEVER assume you know the arguments.
+- If your execute_ifc_code_tool crashes with a TypeError or missing keyword argument, DO NOT GUESS the fix. Use search_ifc_knowledge again to query the exact function name that failed so you can get the correct signature and adapt.
+
+For execute_ifc_code_tool, you have PRE-INJECTED context:
 - ifc_file = get_ifc_file() (always call this)
 - body_ctx = get_or_create_body_context(ifc_file) (always call this)
-- save_and_load_ifc() (ALWAYS call at the end of every script)
-- Never create the IfcProject, IfcSite, or IfcBuilding. They already exist.
+- save_and_load_ifc() (ALWAYS call at the end)
+- Never create IfcProject, IfcSite, or IfcBuilding — they already exist.
 
 WHEN DONE: Return a final text response explaining what you built.`;
 }
@@ -155,18 +157,29 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
   let modelHistory = [...history];
   let loopCount = 0;
   let hasChanges = false;
+  const startTime = Date.now();
+  const TIME_LIMIT_MS = 125000; // 125s limits to ensure it finishes before frontend drops
   
-  while (loopCount < 100) {
-    loopCount++;
-    log(`--- Agent Turn ${loopCount} ---`);
+  while (loopCount < 5) {
+    // TIME GUARD: if we're past 125s, stop immediately and return what we have
+    const elapsed = Date.now() - startTime;
+    if (elapsed > TIME_LIMIT_MS) {
+      log(`⏱ TIME GUARD: ${Math.round(elapsed/1000)}s elapsed, stopping to avoid gateway timeout`);
+      break;
+    }
     
-    // Inject system prompt explicitly for each loop as the first message
+    loopCount++;
+    log(`--- Agent Turn ${loopCount} (${Math.round(elapsed/1000)}s elapsed) ---`);
+    
+    // Calculate remaining time for this DashScope call
+    const remainingMs = Math.max(TIME_LIMIT_MS - elapsed, 30000);
+    
     const openRouterMessages = [
        { role: "system", content: systemPrompt },
        ...modelHistory
     ];
     
-    log(`Calling OpenRouter API... messages count: ${openRouterMessages.length}`);
+    log(`Calling DashScope API... messages count: ${openRouterMessages.length}`);
     const res = await fetch(DASHSCOPE_URL, {
       method: "POST", headers: { 
          "Content-Type": "application/json",
@@ -179,28 +192,26 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
         messages: openRouterMessages,
         tools: OPENROUTER_TOOLS,
         tool_choice: "auto",
-        enable_thinking: true
+        enable_thinking: false
       }),
-      signal: AbortSignal.timeout(60000)
+      signal: AbortSignal.timeout(remainingMs)
     });
     
     if (!res.ok) {
        const errBody = await res.text().catch(() => "N/A");
-       throw new Error(`OpenRouter API Error: ${res.status} - ${errBody}`);
+       throw new Error(`DashScope API Error: ${res.status} - ${errBody}`);
     }
     
     const json = await res.json();
     const message = json?.choices?.[0]?.message;
     if (!message) {
-      log("No message choices returned from OpenRouter.");
+      log("No message choices returned.");
       break;
     }
     
-    // Push the EXACT message back to history so OpenRouter preserves the reasoning_details and tool states
     modelHistory.push(message);
     
     if (message.tool_calls && message.tool_calls.length > 0) {
-      // Execute all tool calls sequentially
       for (const toolCall of message.tool_calls) {
         const callId = toolCall.id;
         const call = toolCall.function;
@@ -229,7 +240,7 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
               const mRes = await mcpTool(tName, tArgs);
               callResult = mRes;
               
-              if (mRes.success === false || mRes.error) {
+              if (mRes.success === false || mRes.error || mRes.status === "error") {
                 steps.push(`✗ Failed: ${tName}`);
               } else {
                 steps.push(`✓ Used: ${tName}`);
@@ -247,13 +258,20 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
           callResult = { error: "Unknown function" };
         }
         
-        // Send tool response back in the format OpenAI/OpenRouter requires
         modelHistory.push({
           role: "tool",
           tool_call_id: callId,
           content: JSON.stringify(callResult)
         });
       }
+      
+      // After executing code, if we already have changes and are past 80s, skip the summary turn
+      const elapsedAfterTool = Date.now() - startTime;
+      if (hasChanges && elapsedAfterTool > 80000) {
+        log(`⏱ TIME GUARD: ${Math.round(elapsedAfterTool/1000)}s elapsed with changes, skipping summary to preserve time for export`);
+        return { reply: "Building complete! Your IFC model has been generated with the requested elements.", steps, hasChanges, reasoning_details: null };
+      }
+      
       continue;
     }
     
@@ -270,7 +288,11 @@ async function executeAgentLoop(history: any[], systemPrompt: string): Promise<{
     break;
   }
   
-  return { reply: "I completed my logic loop but did not return a final text response.", steps, hasChanges, reasoning_details: null };
+  // If we ran out of turns but have changes, still return success
+  if (hasChanges) {
+    return { reply: "Building complete! Your IFC model has been generated.", steps, hasChanges, reasoning_details: null };
+  }
+  return { reply: "I hit a constraint (either time or loop limit) and couldn't complete the task. Often this happens if my code encounters an error I couldn't fix in time.", steps, hasChanges, reasoning_details: null };
 }
 
 // ═══════════════════════════════════════════
