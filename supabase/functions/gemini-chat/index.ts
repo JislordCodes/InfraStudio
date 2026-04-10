@@ -198,6 +198,39 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   
   const new_messages = [message];
   
+  // -- GLM-5.1 RAW TOKEN SYNTHESIS --
+  // HF Router sometimes fails to parse Zhipu's proprietary <tool_call> tags into the standard tool_calls array.
+  // We manually intercept these tokens in the text content and synthesize a valid tool_calls object.
+  if ((!message.tool_calls || message.tool_calls.length === 0) && typeof message.content === "string" && message.content.includes("<tool_call>")) {
+    message.tool_calls = [];
+    const parts = message.content.split("<tool_call>");
+    for (let i = 1; i < parts.length; i++) {
+      const t = parts[i];
+      const nameMatch = t.match(/^\s*([a-zA-Z0-9_]+)/);
+      if (!nameMatch) continue;
+      const fnName = nameMatch[1];
+      
+      const argsOb: Record<string, any> = {};
+      const argRegex = /<arg_key>(.*?)<\/arg_key>\s*<arg_value>(.*?)<\/arg_value>/gs;
+      let match;
+      while ((match = argRegex.exec(t)) !== null) {
+        let valRaw = match[2];
+        try { valRaw = JSON.parse(valRaw); } catch(e) {} // Attempt to decode nested JSON if it's stringified
+        argsOb[match[1]] = valRaw;
+      }
+      
+      message.tool_calls.push({
+        id: "call_" + Math.random().toString(36).substr(2, 9),
+        type: "function",
+        function: {
+          name: fnName,
+          arguments: JSON.stringify(argsOb)
+        }
+      });
+    }
+    log(`Synthesized ${message.tool_calls.length} GLM tool calls from raw response content.`);
+  }
+  
   if (message.tool_calls && message.tool_calls.length > 0) {
     for (const toolCall of message.tool_calls) {
       const callId = toolCall.id;
