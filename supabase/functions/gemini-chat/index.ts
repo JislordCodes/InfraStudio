@@ -145,7 +145,7 @@ MANDATORY RAG REQUIREMENT:
 Before calling execute_ifc_code_tool, you MUST call search_ifc_knowledge ONCE with a single comprehensive query combining all the elements you need (e.g. "ifcopenshell create wall opening door window slab placement"). Do NOT make multiple separate search calls — ONE search is enough. Read the results, then write ONE complete Python script.
 
 RAG BEST PRACTICES & ZERO-GUESSING POLICY:
-- ALWAYS set \`max_results: 15\` for a wider view.
+- ALWAYS set \`max_results: 5\` (DO NOT use more than 5 to avoid overloading context).
 - CRITICAL RULE: You are FORBIDDEN from guessing or inventing function parameters! If you plan to use an IfcOpenShell API function, but the RAG output did not explicitly list its \`parameters\` and \`signature\`, you MUST do a new targeted \`search_ifc_knowledge\` for that exact function name before writing any Python code. NEVER assume you know the arguments.
 - If your execute_ifc_code_tool crashes with a TypeError or missing keyword argument, DO NOT GUESS the fix. Use search_ifc_knowledge again to query the exact function name that failed so you can get the correct signature and adapt.
 
@@ -330,6 +330,17 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
       log(`AI generated ${message.tool_calls.length} parallel tool calls. Enforcing sequential logic by taking only the first one.`);
       steps.push(`⚠ AI tried to run ${message.tool_calls.length} tools at once. Throttled to 1.`);
       message.tool_calls = [message.tool_calls[0]]; // Keep only the first
+      
+      // Fix history divergence: also truncate the raw content if it was a synthetic manual tag
+      if (typeof message.content === "string") {
+         const firstCallIdx = message.content.indexOf("<tool_call>");
+         if (firstCallIdx !== -1) {
+             const nextCallIdx = message.content.indexOf("<tool_call>", firstCallIdx + 11);
+             if (nextCallIdx !== -1) {
+                 message.content = message.content.substring(0, nextCallIdx).trim();
+             }
+         }
+      }
     }
     
     for (const toolCall of message.tool_calls) {
