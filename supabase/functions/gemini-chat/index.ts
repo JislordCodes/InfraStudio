@@ -325,6 +325,13 @@ async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{
   }
   
   if (message.tool_calls && message.tool_calls.length > 0) {
+    // 🛑 ANTI-SPAM GUARD: Force sequential execution. If the LLM hallucinates 7 parallel tools, only run the FIRST one.
+    if (message.tool_calls.length > 1) {
+      log(`AI generated ${message.tool_calls.length} parallel tool calls. Enforcing sequential logic by taking only the first one.`);
+      steps.push(`⚠ AI tried to run ${message.tool_calls.length} tools at once. Throttled to 1.`);
+      message.tool_calls = [message.tool_calls[0]]; // Keep only the first
+    }
+    
     for (const toolCall of message.tool_calls) {
       const callId = toolCall.id;
       const call = toolCall.function;
