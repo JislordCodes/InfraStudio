@@ -1,9 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const LLM_API_KEY = Deno.env.get("MODAL_API_KEY") || "";
+// NVIDIA NIM API
+const LLM_API_KEY = Deno.env.get("NVIDIA_API_KEY") || "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";
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_MODEL = "zai-org/GLM-5.1-FP8";
-const LLM_URL = "https://api.us-west-2.modal.direct/v1/chat/completions";
+const LLM_MODEL = "meta/llama-3.1-70b-instruct";
+const LLM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -11,9 +12,10 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// ═══════════════════════════════════════════
-// MCP CLIENT
-// ═══════════════════════════════════════════
+const RAG_TAG = "[INFRASTUDIO_RAG_DONE]";
+const ERR_TAG = "[INFRASTUDIO_EXEC_ERROR]";
+
+// ══ MCP CLIENT ══
 let mcpSessionId = "";
 const debugLog: string[] = [];
 function log(msg: string) { console.log(msg); debugLog.push(msg); }
@@ -46,17 +48,17 @@ async function mcpPost(body: unknown): Promise<unknown> {
 }
 
 async function mcpInit(): Promise<void> {
-  await mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "4.0" } } });
+  await mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "7.0" } } });
   await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }).catch(() => {});
   log("MCP ready");
 }
 
 async function mcpTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  log("CALL " + name + "(" + JSON.stringify(args).slice(0, 200) + ")");
+  log("CALL " + name + "(" + JSON.stringify(args).slice(0, 300) + ")");
   const res = await mcpPost({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name, arguments: args } }) as Record<string, unknown>;
   const text = extractText((res?.result as Record<string, unknown>)?.content);
   if (text) {
-    log("=> " + name + ": " + text.slice(0, 200));
+    log("=> " + name + ": " + text.slice(0, 400));
     try { return JSON.parse(text); } catch { return { raw: text }; }
   }
   if (res?.error) {
@@ -67,413 +69,487 @@ async function mcpTool(name: string, args: Record<string, unknown>): Promise<Rec
   return { raw: JSON.stringify(res?.result ?? "done") };
 }
 
-// ═══════════════════════════════════════════
-// DYNAMIC TOOL DISCOVERY
-// ═══════════════════════════════════════════
+// ══ TOOL CATALOG ══
 let cachedToolCatalog = "";
-
 async function fetchToolCatalog(): Promise<string> {
   if (cachedToolCatalog) return cachedToolCatalog;
   try {
     const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) as Record<string, unknown>;
-    const result = res?.result as Record<string, unknown>;
-    const tools = (result?.tools || []) as Array<Record<string, unknown>>;
-    
-    const catalog = tools.map((t: Record<string, unknown>) => {
+    const tools = ((res?.result as any)?.tools || []) as Array<Record<string, unknown>>;
+    cachedToolCatalog = tools.map(t => {
       const name = t.name as string;
       const desc = ((t.description as string) || "").slice(0, 150);
-      const schema = t.inputSchema as Record<string, unknown>;
-      const props = schema?.properties as Record<string, unknown> || {};
-      const params = Object.keys(props).join(", ");
-      return `- ${name}(${params}): ${desc}`;
+      const props = ((t.inputSchema as any)?.properties as Record<string, unknown>) || {};
+      return `- ${name}(${Object.keys(props).join(", ")}): ${desc}`;
     }).join("\n");
-    
-    cachedToolCatalog = catalog;
-    log(`Fetched ${tools.length} tools from MCP backend`);
-    return catalog;
+    log(`Fetched ${tools.length} tools`);
+    return cachedToolCatalog;
   } catch (e) {
-    log("Failed to fetch tool catalog: " + e);
-    return "Tool catalog unavailable. Use search_ifc_knowledge to discover available operations.";
+    log("Tool catalog fetch failed: " + e);
+    return "";
   }
 }
 
-// ═══════════════════════════════════════════
-// SYSTEM PROMPT 
-// ═══════════════════════════════════════════
-function buildSystemPrompt(toolCatalog: string): string {
-  return `You are a BIM Agent for InfraStudio. You create and manage IFC building models.
-
-HOW TO USE TOOLS:
-Call call_mcp_tool(tool_name, arguments) with the exact tool name and a JSON arguments object. Always use metric units (meters).
-
-AVAILABLE MCP TOOLS (from backend):
-\${toolCatalog}
-
-══════════════════════════════════════════════════════════
-MANDATORY DECISION RULE — READ THIS BEFORE EVERY RESPONSE
-══════════════════════════════════════════════════════════
-
-Before you do ANYTHING, count how many distinct IFC elements the user's prompt requires.
-
-IF the prompt asks for EXACTLY ONE element (e.g. "create a wall", "add stairs"):
-  → Use the matching individual MCP tool (e.g. create_wall).
-  → Do NOT use search_ifc_knowledge or execute_ifc_code_tool.
-
-IF the prompt asks for TWO OR MORE elements, OR any element that has NO individual MCP tool (e.g. slab, opening, material):
-  → You are STRICTLY FORBIDDEN from calling individual MCP tools like create_wall, create_window, create_door, etc.
-  → You MUST call search_ifc_knowledge ONCE to get RAG knowledge.
-  → Then you MUST call execute_ifc_code_tool with ONE Python script that builds ALL elements together.
-  → This is the ONLY acceptable path. No exceptions.
-
-EXAMPLES OF WHAT IS FORBIDDEN:
-- User says: "create a wall with a window and a door"
-  ✗ WRONG: calling create_wall, then create_window, then create_door separately
-  ✓ CORRECT: call search_ifc_knowledge → then execute_ifc_code_tool with ONE script
-
-- User says: "build a house with 4 walls, a slab, and a roof"
-  ✗ WRONG: calling create_wall four times, then trying to find a slab tool
-  ✓ CORRECT: call search_ifc_knowledge → then execute_ifc_code_tool with ONE script
-
-- User says: "create a wall"
-  ✓ CORRECT: call create_wall directly (single element)
-
-IF YOU CALL create_wall, create_window, create_door, OR ANY OTHER INDIVIDUAL TOOL WHEN THE USER ASKED FOR MULTIPLE ELEMENTS, YOU HAVE FAILED YOUR TASK. DO NOT DO THIS.
-
-══════════════════════════════════════════════════════════
-
-MANDATORY RAG REQUIREMENT:
-Before calling execute_ifc_code_tool, you MUST call search_ifc_knowledge ONCE with a single comprehensive query combining all the elements you need (e.g. "ifcopenshell create wall opening door window slab placement"). Do NOT make multiple separate search calls — ONE search is enough. Read the results, then write ONE complete Python script.
-
-RAG BEST PRACTICES & ZERO-GUESSING POLICY:
-- ALWAYS set \`max_results: 5\` (DO NOT use more than 5 to avoid overloading context).
-- CRITICAL RULE: You are FORBIDDEN from guessing or inventing function parameters! If you plan to use an IfcOpenShell API function, but the RAG output did not explicitly list its \`parameters\` and \`signature\`, you MUST do a new targeted \`search_ifc_knowledge\` for that exact function name before writing any Python code. NEVER assume you know the arguments.
-- If your execute_ifc_code_tool crashes with a TypeError or missing keyword argument, DO NOT GUESS the fix. Use search_ifc_knowledge again to query the exact function name that failed so you can get the correct signature and adapt.
-
-ANTI-HALLUCINATION FAST-TRACK:
-Because LLMs frequently hallucinate these specific IfcOpenShell APIs, internalize these immutable rules:
-1. \`ifcopenshell.api.material.add_layer\` DOES NOT accept \`thickness\`. You must create the layer, then call \`ifcopenshell.api.material.edit_layer(model, layer=L, attributes={"LayerThickness": 0.2})\`
-2. \`ifcopenshell.api.style.add_surface_style\` DOES NOT accept \`name\` or \`color\`. You must pass \`attributes={"SurfaceColour": {"Name": None, "Red": 1.0, "Green": 1.0, "Blue": 1.0}}\`.
-
-For execute_ifc_code_tool, you have PRE-INJECTED context:
-- ifc_file = get_ifc_file() (always call this)
-- body_ctx = get_or_create_body_context(ifc_file) (always call this)
-- save_and_load_ifc() (ALWAYS call at the end)
-- Never create IfcProject, IfcSite, or IfcBuilding — they already exist.
-
-WHEN DONE: Return a final text response explaining what you built.`;
+// ══ HELPERS ══
+function buildRagQuery(userRequest: string): string {
+  const lower = userRequest.toLowerCase();
+  const parts: string[] = ["ifcopenshell api"];
+  if (lower.includes("wall")) parts.push("create wall IfcWall representation placement");
+  if (lower.includes("door")) parts.push("create door IfcDoor fill opening void");
+  if (lower.includes("window")) parts.push("create window IfcWindow fill opening");
+  if (lower.includes("roof")) parts.push("create roof IfcRoof");
+  if (lower.includes("slab") || lower.includes("floor")) parts.push("create slab IfcSlab");
+  if (lower.includes("stair")) parts.push("IfcStairFlight");
+  if (lower.includes("column")) parts.push("IfcColumn");
+  if (lower.includes("beam")) parts.push("IfcBeam");
+  if (lower.includes("glass") || lower.includes("material") || lower.includes("wood") || lower.includes("wooden") || lower.includes("concrete")) {
+    parts.push("material IfcMaterial add_surface_style");
+  }
+  parts.push("assign_container IfcBuildingStorey");
+  return parts.join(" ");
 }
 
-// Define the generic tool for OpenRouter / OpenAI Schema
-const OPENROUTER_TOOLS = [{
+function isComplexRequest(userMsg: string): boolean {
+  const lower = userMsg.toLowerCase();
+  if (lower.match(/(house|building|structure|multiple|and |with |,)/i)) return true;
+  let kw = 0;
+  if (lower.includes("wall")) kw++; if (lower.includes("door")) kw++;
+  if (lower.includes("window")) kw++; if (lower.includes("roof")) kw++;
+  if (lower.includes("slab") || lower.includes("floor")) kw++;
+  if (lower.includes("stair")) kw++;
+  return kw > 1;
+}
+
+function extractErrorSummary(result: Record<string, unknown>): string {
+  if (typeof result.traceback === "string") return result.traceback.slice(0, 800);
+  if (typeof result.error === "string") return result.error.slice(0, 800);
+  if (typeof result.message === "string") return result.message.slice(0, 800);
+  return JSON.stringify(result).slice(0, 600);
+}
+
+function extractFailingFunction(error: string): string {
+  for (const fn of ["add_layer","add_surface_style","add_opening","add_filling","assign_container","assign_representation","create_entity","add_wall_representation","add_door_representation","add_window_representation"]) {
+    if (error.includes(fn)) return fn;
+  }
+  return "unknown";
+}
+
+// ══ COMPRESS RAG ══
+function compressRagResults(rawRag: string): string {
+  try {
+    const parsed = JSON.parse(rawRag);
+    const results = parsed.results || parsed.hits || (Array.isArray(parsed) ? parsed : []);
+    if (!Array.isArray(results) || results.length === 0) return rawRag.slice(0, 3000);
+    
+    const compressed = results.slice(0, 8).map((r: any, i: number) => {
+      const name = r.function || r.name || r.function_name || r.title || `result_${i}`;
+      const desc = (r.description || r.content || "").slice(0, 500);
+      const params = r.parameters || r.params || r.args;
+      let paramStr = "";
+      if (params) {
+        if (typeof params === "string") paramStr = params.slice(0, 300);
+        else if (Array.isArray(params)) paramStr = params.map((p: any) => `${p.name || p}: ${p.type || 'any'}${p.required ? ' (required)' : ''}`).join(", ");
+        else paramStr = JSON.stringify(params).slice(0, 300);
+      }
+      let exampleStr = "";
+      if (r.examples && Array.isArray(r.examples) && r.examples.length > 0) {
+        exampleStr = "\n   Examples:\n   " + r.examples.join("\n   ").slice(0, 1000);
+      }
+      const module = r.module || r.category || "";
+      return `[${i+1}] ${module ? module + "." : ""}${name}(${paramStr})\n   ${desc}${exampleStr}`;
+    });
+    
+    return compressed.join("\n\n");
+  } catch {
+    return rawRag.slice(0, 3000);
+  }
+}
+
+// ══ LLM CALLER (FOR FALLBACK / SIMPLE QUERIES) ══
+const TOOLS_SCHEMA = [{
   type: "function",
   function: {
     name: "call_mcp_tool",
-    description: "Call an MCP backend tool by its name. Use this to create or query BIM objects, search the IFC knowledge base via RAG, execute IFC code, etc. It returns the raw result.",
+    description: "Call a backend MCP tool by name.",
     parameters: {
       type: "object",
       properties: {
-        tool_name: { type: "string", description: "The exact name of the tool (e.g. create_wall, search_ifc_knowledge, execute_ifc_code_tool)" },
-        arguments: { type: "object", description: "A JSON object of arguments keyed by name." }
+        tool_name: { type: "string" },
+        arguments: { type: "object" }
       },
       required: ["tool_name", "arguments"]
     }
   }
 }];
 
-// ═══════════════════════════════════════════
-// AGENT EXECUTION LOOP
-// ═══════════════════════════════════════════
-async function executeAgentTurn(history: any[], systemPrompt: string): Promise<{ status: "pending_turn"|"completed"; new_messages: any[]; steps: string[]; hasChanges: boolean; reasoning_details?: string | null }> {
-  const steps: string[] = [];
-  let hasChanges = false;
-  
-  const openRouterMessages = [
-     { role: "system", content: systemPrompt },
-     ...history
-  ];
-  
-  log(`Calling LLM API... messages count: ${openRouterMessages.length}`);
-  
-  // -- RETRY LOOP for transient Modal failures --
-  // IMPORTANT: Supabase Edge Functions have a HARD 150s wall clock limit (HTTP 546).
-  // 429 responses return instantly (<1s), so we can retry more with longer pauses.
-  // Worst case (all 429): init(5s) + 4×reject(~4s) + backoffs(8+15+20=43s) + real(55s) = 107s ✓
-  // Worst case (502): init(5s) + attempt(55s) + backoff(5s) + attempt(55s) = 120s ✓
-  const MAX_LLM_RETRIES = 4;
+async function callLLMSimple(messages: any[], steps: string[]): Promise<any> {
+  const MAX_RETRIES = 2;
+  const PER_ATTEMPT_TIMEOUT = 60000; 
   let lastError = "";
-  let json: any = null;
-  
-  for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      log(`LLM attempt ${attempt}/${MAX_LLM_RETRIES}...`);
-      const res = await fetch(LLM_URL, {
-        method: "POST", headers: { 
-           "Content-Type": "application/json",
-           "Authorization": `Bearer ${LLM_API_KEY}`,
-           "HTTP-Referer": "https://infrastudio.tools",
-           "X-Title": "InfraStudio"
-        },
-        body: JSON.stringify({
-          model: LLM_MODEL,
-          messages: openRouterMessages,
-          tools: OPENROUTER_TOOLS,
-          tool_choice: "auto",
-          enable_thinking: false
-        }),
-        signal: AbortSignal.timeout(55000) // 55s — must fit within Supabase 150s limit
-      });
-      
-      if (res.ok) {
-        const parsed = await res.json();
-        const msg = parsed?.choices?.[0]?.message;
-        
-        // Handle empty GLM responses (no content AND no tool_calls)
-        if (!msg || (!msg.content && (!msg.tool_calls || msg.tool_calls.length === 0))) {
-          lastError = "Model returned empty response (no content, no tool_calls)";
-          log(`Empty response on attempt ${attempt}. ${attempt < MAX_LLM_RETRIES ? "Retrying..." : "Giving up."}`);
-          if (attempt < MAX_LLM_RETRIES) {
-            steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (empty response)`);
-            await new Promise(r => setTimeout(r, 3000));
-            continue;
-          }
-          throw new Error(lastError);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PER_ATTEMPT_TIMEOUT);
+      try {
+        const res = await fetch(LLM_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${LLM_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: LLM_MODEL,
+            messages,
+            tools: TOOLS_SCHEMA,
+            tool_choice: "auto",
+            temperature: 0.6,
+            max_tokens: 2048,
+            stream: false
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+
+        if (res.ok) {
+          const parsed = await res.json();
+          return parsed;
         }
-        
-        json = parsed;
-        break; // Success — exit retry loop
+        throw new Error(`API ${res.status}: ${await res.text()}`);
+      } finally {
+        clearTimeout(timer);
       }
-      
-      // Transient errors worth retrying
-      const errBody = await res.text().catch(() => "N/A");
-      lastError = `Modal API Error: ${res.status} - ${errBody}`;
-      
-      if (res.status === 429 && attempt < MAX_LLM_RETRIES) {
-        // 429 = rate limit. Response is instant, so use LONG backoff to let queue clear.
-        const waitSec = [0, 8, 15, 20][attempt] || 15;
-        log(`Rate limited (429) on attempt ${attempt}. Waiting ${waitSec}s...`);
-        steps.push(`⚠ Rate limited, waiting ${waitSec}s (${attempt}/${MAX_LLM_RETRIES})`);
-        await new Promise(r => setTimeout(r, waitSec * 1000));
-        continue;
-      }
-      
-      if ([502, 503].includes(res.status) && attempt < MAX_LLM_RETRIES) {
-        // 502/503 = server crash. Response took time, so use SHORT backoff.
-        const waitSec = attempt * 3;
-        log(`Transient ${res.status} on attempt ${attempt}. Retrying in ${waitSec}s...`);
-        steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (${res.status})`);
-        await new Promise(r => setTimeout(r, waitSec * 1000));
-        continue;
-      }
-      
-      throw new Error(lastError);
-      
     } catch (e: any) {
       lastError = String(e);
-      const isTimeout = lastError.includes("TimeoutError") || lastError.includes("abort") || lastError.includes("timed out");
-      const isUpstream = lastError.includes("502") || lastError.includes("503") || lastError.includes("upstream");
-      
-      if ((isTimeout || isUpstream) && attempt < MAX_LLM_RETRIES) {
-        const waitSec = 5;
-        log(`Network error on attempt ${attempt}: ${lastError.slice(0, 100)}. Retrying in ${waitSec}s...`);
-        steps.push(`⚠ LLM retry ${attempt}/${MAX_LLM_RETRIES} (network)`);
-        await new Promise(r => setTimeout(r, waitSec * 1000));
-        continue;
-      }
-      throw new Error(`LLM failed after ${attempt} attempts: ${lastError.slice(0, 300)}`);
+      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 2000));
     }
   }
-  
-  if (!json) {
-    throw new Error(`LLM failed after ${MAX_LLM_RETRIES} attempts: ${lastError.slice(0, 300)}`);
-  }
-  
-  const message = json.choices[0].message;
-  
-  const new_messages = [message];
-  
-  // -- GLM-5.1 RAW TOKEN SYNTHESIS --
-  // HF Router sometimes fails to parse Zhipu's proprietary <tool_call> tags into the standard tool_calls array.
-  // We manually intercept these tokens in the text content and synthesize a valid tool_calls object.
-  if ((!message.tool_calls || message.tool_calls.length === 0) && typeof message.content === "string" && message.content.includes("<tool_call>")) {
-    message.tool_calls = [];
+  throw new Error(`LLM failed: ${lastError.slice(0, 200)}`);
+}
+
+function parseToolCall(message: any): { name: string; args: any } | null {
+  let calls = message.tool_calls || [];
+  if (calls.length === 0 && typeof message.content === "string" && message.content.includes("<tool_call>")) {
     const parts = message.content.split("<tool_call>");
     for (let i = 1; i < parts.length; i++) {
       const t = parts[i];
       const nameMatch = t.match(/^\s*([a-zA-Z0-9_]+)/);
       if (!nameMatch) continue;
-      const fnName = nameMatch[1];
-      
       const argsOb: Record<string, any> = {};
-      const argRegex = /<arg_key>(.*?)<\/arg_key>\s*<arg_value>(.*?)<\/arg_value>/gs;
-      let match;
-      while ((match = argRegex.exec(t)) !== null) {
-        let valRaw = match[2];
-        try { valRaw = JSON.parse(valRaw); } catch(e) {} // Attempt to decode nested JSON if it's stringified
-        argsOb[match[1]] = valRaw;
-      }
-      
-      message.tool_calls.push({
-        id: "call_" + Math.random().toString(36).substr(2, 9),
-        type: "function",
-        function: {
-          name: fnName,
-          arguments: JSON.stringify(argsOb)
-        }
-      });
+      const argRex = /<arg_key>(.*?)<\/arg_key>\s*<arg_value>(.*?)<\/arg_value>/gs;
+      let m; while ((m = argRex.exec(t)) !== null) { let v = m[2]; try { v = JSON.parse(v); } catch (e) {} argsOb[m[1]] = v; }
+      calls.push({ function: { name: nameMatch[1], arguments: JSON.stringify(argsOb) } });
     }
-    log(`Synthesized ${message.tool_calls.length} GLM tool calls from raw response content.`);
   }
-  
-  if (message.tool_calls && message.tool_calls.length > 0) {
-    // 🛑 ANTI-SPAM GUARD: Force sequential execution. If the LLM hallucinates 7 parallel tools, only run the FIRST one.
-    if (message.tool_calls.length > 1) {
-      log(`AI generated ${message.tool_calls.length} parallel tool calls. Enforcing sequential logic by taking only the first one.`);
-      steps.push(`⚠ AI tried to run ${message.tool_calls.length} tools at once. Throttled to 1.`);
-      message.tool_calls = [message.tool_calls[0]]; // Keep only the first
-      
-      // Fix history divergence: also truncate the raw content if it was a synthetic manual tag
-      if (typeof message.content === "string") {
-         const firstCallIdx = message.content.indexOf("<tool_call>");
-         if (firstCallIdx !== -1) {
-             const nextCallIdx = message.content.indexOf("<tool_call>", firstCallIdx + 11);
-             if (nextCallIdx !== -1) {
-                 message.content = message.content.substring(0, nextCallIdx).trim();
-             }
-         }
-      }
-    }
-    
-    for (const toolCall of message.tool_calls) {
-      const callId = toolCall.id;
-      const call = toolCall.function;
-      log(`AI Wants to call: ${call.name}`);
-      
-      let callResult: any;
-      if (call.name === "call_mcp_tool") {
-        let parsedArgs: any = {};
-        try { parsedArgs = JSON.parse(call.arguments || "{}"); } catch(e) {}
-        
-        let tName = parsedArgs?.tool_name?.toString() || "";
-        let tArgs = parsedArgs?.arguments || {};
-        
-        while (tName === "call_mcp_tool" && tArgs && tArgs.tool_name) {
-          log(`Unwrapping nested call_mcp_tool -> ${tArgs.tool_name}`);
-          tName = tArgs.tool_name.toString();
-          tArgs = tArgs.arguments || {};
-        }
-        
-        if (!tName || tName === "unknown" || tName === "call_mcp_tool") {
-          log(`Skipping invalid tool name: "${tName}"`);
-          callResult = { success: false, error: `Invalid tool name: "${tName}". Use a specific tool name.` };
-          steps.push(`✗ Skipped: invalid tool name`);
-        } else {
-          try {
-            const mRes = await mcpTool(tName, tArgs);
-            callResult = mRes;
-            
-            if (mRes.success === false || mRes.error || mRes.status === "error") {
-              steps.push(`✗ Failed: ${tName}`);
-            } else {
-              steps.push(`✓ Used: ${tName}`);
-              if (tName.startsWith("create_") || tName.startsWith("update_") || tName.startsWith("delete_") || tName.startsWith("apply_") || tName.startsWith("fill_") || tName.startsWith("initialize_") || tName === "execute_ifc_code_tool") {
-                hasChanges = true;
-              }
-            }
-          } catch(e) {
-            log(`Tool Execution Error: ${e}`);
-            callResult = { success: false, error: String(e) };
-            steps.push(`✗ Error: ${tName}`);
-          }
-        }
-      } else {
-        callResult = { error: "Unknown function" };
-      }
-      
-      new_messages.push({
-        role: "tool",
-        tool_call_id: callId,
-        content: JSON.stringify(callResult)
-      });
-    }
-    
-    return { status: "pending_turn", new_messages, steps, hasChanges, reasoning_details: message.reasoning_content };
-  }
-  
-  if (message.content) {
-    log(`Final AI Answer received.`);
-    return { 
-      status: "completed",
-      new_messages,
-      steps, 
-      hasChanges,
-      reasoning_details: message.reasoning_content
-    };
-  }
-  
-  return { status: "completed", new_messages: [{role: "assistant", content: "I encountered an error."}], steps, hasChanges, reasoning_details: null };
+  if (calls.length === 0) return null;
+  const call = calls[0].function;
+  let parsedArgs: any = {};
+  try { parsedArgs = JSON.parse(call.arguments || "{}"); } catch (e) {}
+  let tName = parsedArgs?.tool_name || call.name;
+  let tArgs = parsedArgs?.arguments || parsedArgs;
+  while (tName === "call_mcp_tool" && tArgs?.tool_name) { tName = tArgs.tool_name; tArgs = tArgs.arguments || {}; }
+  return { name: tName, args: tArgs };
 }
 
-// ═══════════════════════════════════════════
-// HTTP HANDLER
-// ═══════════════════════════════════════════
+// ══ FILTERED CATALOG ══
+const HIDDEN_TOOLS = ["create_wall", "create_door", "create_window", "create_slab", "create_roof", "create_opening", "fill_opening", "create_trimesh_ifc", "create_polyline_walls"];
+function filterCatalog(catalog: string): string {
+  return catalog.split("\n").filter(l => !HIDDEN_TOOLS.some(t => l.startsWith(`- ${t}(`))).join("\n");
+}
+
+// ════════════════════════════════════════════
+// ACTION: TURN 1: RAG SEARCH 
+// ════════════════════════════════════════════
+async function turn1_rag(
+  userMsg: string,
+  isNewSession: boolean,
+  toolCatalog: string,
+  steps: string[]
+): Promise<{ new_messages: any[]; steps: string[] }> {
+  if (isNewSession) {
+    try { await mcpTool("initialize_project", { project_name: "InfraStudio Project" }); } catch (e) { log("Init warn: " + e); }
+  }
+
+  const ragQuery = buildRagQuery(userMsg);
+  log(`RAG query: ${ragQuery}`);
+  steps.push("🔍 Searching IFC knowledge base...");
+
+  let ragContent = "RAG unavailable.";
+  try {
+    const ragResult = await mcpTool("search_ifc_knowledge", { query: ragQuery, max_results: 8 });
+    ragContent = JSON.stringify(ragResult);
+    steps.push("✓ Used: search_ifc_knowledge (8 results)");
+  } catch (e) {
+    log("RAG failed: " + e);
+    steps.push("⚠ RAG search failed");
+  }
+
+  const compressed = compressRagResults(ragContent);
+  const embeddedMsg = `${RAG_TAG}\n=== IFC API REFERENCE ===\n${compressed}\n=== END REFERENCE ===\n[CATALOG]:${filterCatalog(toolCatalog)}`;
+
+  return { new_messages: [{ role: "assistant", content: embeddedMsg }], steps };
+}
+
+// ════════════════════════════════════════════
+// ACTION: TURN 2: GENERATE STREAM
+// ════════════════════════════════════════════
+async function turn2_generate(
+  userMsg: string,
+  ragContext: string,
+  codeError: string,
+  filteredCatalog: string,
+  allMsgs: any[]
+): Promise<Response> {
+  const isFixAttempt = !!codeError;
+
+  const systemPrompt = `You are an expert BIM Agent. Create IFC models using Python + IfcOpenShell.
+OUTPUT ONLY THE RAW PYTHON SCRIPT wrapped in \`\`\`python ... \`\`\` codeblocks. Do not write text explanations or pleasantries.
+
+Pre-injected context (already available in your script):
+- ifc_file = get_ifc_file()
+- body_ctx = get_or_create_body_context(ifc_file)
+- axis_ctx = get_or_create_axis_context(ifc_file)
+- container = get_default_container()
+- save_and_load_ifc()  # call at end
+- IfcProject/IfcSite/IfcBuilding exist. Do NOT recreate them.
+
+Rules:
+1. add_layer() has NO thickness param. Use edit_layer(layer=L, attributes={"LayerThickness": 0.2})
+2. add_surface_style() has NO name param. Use attributes={"SurfaceColour":{"Name":null,"Red":1.0,"Green":1.0,"Blue":1.0}}
+3. add_opening(opening=op, element=wall) then add_filling(opening=op, element=door)
+${isFixAttempt ? "\nFIX THE ERROR below. Do not repeat the same mistake." : "\nWrite the code NOW. Do NOT search."}\n\nAvailable tools:\n${filteredCatalog}`;
+
+  // Copy messages from frontend history
+  const messages = [{ role: "system", content: systemPrompt }];
+  
+  // Clean up history to ensure good context length and structure
+  for (let i = 0; i < allMsgs.length; i++) {
+     messages.push({ role: allMsgs[i].role, content: allMsgs[i].content });
+  }
+
+  const enforcementRule = `CRITICAL RULES TO FOLLOW:
+1. NEVER create a new project file. DO NOT CALL project.create_file(). Use the global \`ifc_file\`.
+2. ALL elements (walls, doors, etc.) MUST have 3D geometry representations added via geometry.add_*_representation. Refer to the Examples section in the RAG contexts for exactly how to do this.
+3. Write proper multi-line python code with indentation. Do not put everything in one line.
+`;
+
+  // Inject the RAG reference (and explicit instruction) into the very final user message
+  const lastMsg = messages[messages.length - 1];
+  if (lastMsg.role === "user") {
+      let suffix = `\n\nRewrite the python script completely to fix the error.`;
+      if (!isFixAttempt) suffix = `\n\nGenerate the complete python script now.`;
+      
+      lastMsg.content = `API Reference (Includes Examples):\n${ragContext}\n\n` + lastMsg.content + `\n\n${enforcementRule}` + suffix;
+  }
+
+  log(`Streaming LLM... NIM ${LLM_MODEL} | HistoryLen: ${messages.length}`);
+
+  try {
+    const res = await fetch(LLM_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${LLM_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages,
+        temperature: 0.6,
+        top_p: 0.95,
+        max_tokens: 8192,
+        stream: true
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      return new Response(`data: [API ERROR] ${err}\n\n`, { headers: { ...CORS, "Content-Type": "text/event-stream" } });
+    }
+
+    // Proxy the stream natively back to the client!
+    return new Response(res.body, { headers: { ...CORS, "Content-Type": "text/event-stream" } });
+  } catch (err) {
+    return new Response(`data: [FETCH ERROR] ${String(err)}\n\n`, { headers: { ...CORS, "Content-Type": "text/event-stream" } });
+  }
+}
+
+function sanitizeGeneratedCode(code: string): string {
+  // 1. Validate if we have a single line
+  const lines = code.split("\n").map(l => l.trimEnd());
+  // Count non-empty, non-comment lines
+  const meaningfulLines = lines.filter(l => l.trim().length > 0 && !l.trim().startsWith("#"));
+  
+  if (meaningfulLines.length <= 1 && code.includes("import ") && code.length > 50) {
+     throw new Error("Invalid Python syntax: code generated as a single line without newlines. Please rewrite with proper newlines and indentation.");
+  }
+
+  // 2. Filter out project.create_file
+  const filteredLines = lines.filter(l => !l.includes("project.create_file"));
+
+  // 3. Prepend mandatory structure
+  const preamble = [
+    "import ifcopenshell",
+    "import ifcopenshell.api",
+    "ifc_file = get_ifc_file()",
+    "body_ctx = get_or_create_body_context(ifc_file)",
+    "axis_ctx = get_or_create_axis_context(ifc_file)",
+    "container = get_default_container()",
+    "unit_scale = calculate_unit_scale(ifc_file)",
+    ""
+  ];
+
+  // Check if save_and_load_ifc() is there, if not append it
+  let finalCode = [...preamble, ...filteredLines].join("\n");
+  if (!finalCode.includes("save_and_load_ifc()")) {
+      finalCode += "\n\nsave_and_load_ifc()\n";
+  }
+
+  return finalCode;
+}
+
+// ════════════════════════════════════════════
+// ACTION: TURN 3: EXECUTE
+// ════════════════════════════════════════════
+async function turn3_execute(code: string, sessionID: string): Promise<Record<string, unknown>> {
+  mcpSessionId = sessionID || "";
+  await mcpInit();
+  
+  log(`Executing python code (~${code.length} chars)`);
+  let execResult: Record<string, unknown> = {};
+  let sanitizedCode = code;
+
+  try {
+    sanitizedCode = sanitizeGeneratedCode(code);
+    execResult = await mcpTool("execute_ifc_code_tool", { code: sanitizedCode });
+  } catch (e) {
+    execResult = { success: false, error: String(e), status: "error" };
+  }
+
+  const isExecError = execResult.success === false || !!execResult.error || execResult.status === "error";
+
+  if (!isExecError) {
+    // Post execution validation checking geometry representation
+    try {
+      const validationScript = `
+import json
+import ifcopenshell
+ifc_file = get_ifc_file()
+shapes = ifc_file.by_type("IfcShapeRepresentation")
+print(json.dumps({"shape_count": len(shapes)}))
+`;
+      const valRes = await mcpTool("execute_ifc_code_tool", { code: validationScript });
+      const valStr = ((valRes as any).output || "").trim();
+      let hasGeometry = false;
+      try {
+        const valData = JSON.parse(valStr);
+        if (valData.shape_count && valData.shape_count > 0) hasGeometry = true;
+      } catch (e) { log("Validation JSON parse fail: " + e); }
+      
+      if (!hasGeometry) {
+         const errorSummary = "SUCCESS BUT EMPTY GEOMETRY: The code ran without errors, but the IFC file contains zero 3D geometry shape representations. You MUST use functions like `geometry.add_wall_representation(...)` and `geometry.assign_representation(...)` to attach 3D meshes to your elements so they appear in the 3D viewer.";
+         const failingFn = "missing_geometry_representation";
+         const fixExtra = "Check the examples in the RAG contexts for exactly how to add geometric representations.";
+         return { status: "pending_turn", errorSummary, failingFn, fixExtra, success: false };
+      }
+    } catch (e) { log("Validation query failed: " + e); }
+
+    let ifc_url: string | undefined;
+    try {
+      const ex = await mcpTool("export_ifc", { session_id: mcpSessionId || "default" });
+      if ((ex as any).success) ifc_url = (ex as any).file_url;
+    } catch (e) { log("Export err: " + e); }
+    
+    return { status: "completed", reply: "I successfully built your IFC model.", ifc_url, success: true };
+  }
+
+  // ERROR RECOVERY
+  const errorSummary = extractErrorSummary(execResult);
+  const failingFn = extractFailingFunction(errorSummary);
+  log(`Exec failed: ${failingFn}`);
+  
+  let fixExtra = "";
+  try {
+    const fixRag = await mcpTool("search_ifc_knowledge", { query: `ifcopenshell ${failingFn} correct parameters`, max_results: 5 });
+    fixExtra = compressRagResults(JSON.stringify(fixRag));
+  } catch (e) {}
+
+  return { status: "pending_turn", errorSummary, failingFn, fixExtra, success: false };
+}
+
+// ══ HTTP HANDLER ══
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
   if (!LLM_API_KEY) return new Response(JSON.stringify({ error: "No API key" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
   debugLog.length = 0;
-  mcpSessionId = "";
+
   try {
-    const payloadMsgs = (await req.json() as any).messages || [];
-    if (!payloadMsgs.length) return new Response(JSON.stringify({ error: "No messages" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
-    
-    // We expect the frontend to provide the perfectly formatted history array now.
-    const history = payloadMsgs;
+    const payload = (await req.json() as any);
+    const action = payload.action; 
 
+    // ACTION: turn3_execute
+    if (action === "turn3_execute") {
+       const res = await turn3_execute(payload.code || "", payload.session_id || "");
+       res.debug = debugLog;
+       res.session_id = mcpSessionId;
+       return new Response(JSON.stringify(res), { headers: { ...CORS, "Content-Type": "application/json" } });
+    }
+
+    // OTHER ACTIONS
+    mcpSessionId = payload.session_id || "";
+    const allMsgs: any[] = payload.messages || [];
+    if (!allMsgs.length) return new Response(JSON.stringify({ error: "No messages" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
+
+    const steps: string[] = [];
+    const userMsg = [...allMsgs].reverse().find(m => m.role === "user")?.content || "";
+    
+    // ACTION: turn1_rag
+    if (action === "turn1_rag") {
+      await mcpInit();
+      const toolCatalog = await fetchToolCatalog();
+      const result = await turn1_rag(userMsg, payload.isNewSession || false, toolCatalog, steps);
+      return new Response(JSON.stringify({ status: "pending_turn", new_messages: result.new_messages, steps, debug: debugLog, session_id: mcpSessionId }), { headers: { ...CORS, "Content-Type": "application/json" } });
+    }
+
+    // ACTION: turn2_generate (SSE Stream)
+    if (action === "turn2_generate") {
+      const ragContext = payload.ragContext || "";
+      const filteredCatalog = payload.filteredCatalog || "";
+      const codeError = payload.codeError || "";
+      return await turn2_generate(userMsg, ragContext, codeError, filteredCatalog, allMsgs);
+    }
+
+    // LEGACY FALLBACK
     await mcpInit();
+    const isComplex = isComplexRequest(userMsg);
+    log(`v125 | Complex=${isComplex} | provider=NVIDIA_NIM_STREAM`);
     
-    // If there is exactly 1 user message, it's a new session. Reset project.
-    if (history.length === 1 && history[0].role === "user") {
-      log("New session detected (1 user message) — resetting IFC project");
-      try {
-        await mcpTool("initialize_project", { project_name: "InfraStudio Project" });
-      } catch (e) {
-        log("Project init warning: " + e);
+    if (!isComplex) {
+      const toolCatalog = await fetchToolCatalog();
+      if (allMsgs.filter(m => m.role === "user").length === 1) {
+        try { await mcpTool("initialize_project", { project_name: "InfraStudio Project" }); } catch (e) {}
       }
-    }
-    
-    const toolCatalog = await fetchToolCatalog();
-    const systemPrompt = buildSystemPrompt(toolCatalog);
+      const sysPrompt = `Call call_mcp_tool(tool_name, arguments) to create IFC elements.\nTOOLS:\n${toolCatalog}`;
+      const llmMsgs = [{ role: "system", content: sysPrompt }, ...allMsgs.filter(m => ["user", "assistant"].includes(m.role))];
+      const parsed = await callLLMSimple(llmMsgs, steps);
+      const tc = parseToolCall(parsed.choices[0].message);
+      if (!tc) return new Response(JSON.stringify({ status: "completed", reply: parsed.choices[0].message.content || "Done.", steps, session_id: mcpSessionId }), { headers: { ...CORS, "Content-Type": "application/json" } });
 
-    const result = await executeAgentTurn(history, systemPrompt);
+      let toolResult: Record<string, unknown>;
+      try { toolResult = await mcpTool(tc.name, tc.args); } catch (e) { toolResult = { error: String(e) }; }
+      const isErr = toolResult.success === false || !!toolResult.error;
+      steps.push(`${isErr ? "✗" : "✓"} ${tc.name}`);
+      let ifc_url: string | undefined;
+      if (!isErr) try { const ex = await mcpTool("export_ifc", { session_id: mcpSessionId }); if ((ex as any).success) ifc_url = (ex as any).file_url; } catch (e) {}
 
-    let ifc_url: string | undefined;
-    // Export IFC if we completed and had changes
-    if (result.hasChanges) {
-      try {
-        log("Changes detected in this turn, exporting IFC...");
-        const ex = await mcpTool("export_ifc", { session_id: mcpSessionId || "default" });
-        if ((ex as any).success && (ex as any).file_url) {
-          ifc_url = (ex as any).file_url as string;
-          log("Export success");
-        }
-      } catch (e) { log("Export err: " + e); }
+      const body: any = { status: "pending_turn", new_messages: [{ role: "assistant", content: `Tool ${tc.name}: ${JSON.stringify(toolResult).slice(0, 300)}` }], steps, session_id: mcpSessionId };
+      if (ifc_url) body.ifc_url = ifc_url;
+      return new Response(JSON.stringify(body), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
 
-    const body: Record<string, unknown> = {
-      status: result.status,
-      new_messages: result.new_messages,
-      steps: result.steps,
-      debug: debugLog
-    };
-    if (result.status === "completed") {
-      body.reply = result.new_messages[0]?.content || "Done.";
-    }
-    if (result.reasoning_details) body.reasoning_details = result.reasoning_details;
-    if (ifc_url) body.ifc_url = ifc_url;
-    return new Response(JSON.stringify(body), { headers: { ...CORS, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: "Client must supply action='turn1_rag' for complex queries." }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
+
   } catch (err) {
     log("FATAL: " + err);
-    // Return 200 with the error inside JSON, so the frontend UI can explicitly show "Rate Limit Exceeded" instead of just "non-2xx"
     return new Response(JSON.stringify({ error: String(err).slice(0, 800), debug: debugLog }), { status: 200, headers: { ...CORS, "Content-Type": "application/json" } });
   }
 });
