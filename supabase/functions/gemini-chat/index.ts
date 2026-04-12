@@ -328,8 +328,9 @@ ${isFixAttempt ? "\nFIX THE ERROR below. Do not repeat the same mistake." : "\nW
 
   const enforcementRule = `CRITICAL RULES TO FOLLOW:
 1. NEVER create a new project file. DO NOT CALL project.create_file(). Use the global \`ifc_file\`.
-2. ALL elements (walls, doors, etc.) MUST have 3D geometry representations added via geometry.add_*_representation. Refer to the Examples section in the RAG contexts for exactly how to do this.
-3. Write proper multi-line python code with indentation. Do not put everything in one line.
+2. ALL elements (walls, doors, etc.) MUST have 3D geometry representations added via geometry.add_*_representation AND ASSIGNED via geometry.assign_representation. Refer to the Examples section in the RAG contexts for exactly how to do this. You MUST assign the representation to the product!
+3. After creating the geometry, you MUST place the objects in 3D space using geometry.edit_object_placement(product=obj).
+4. Write proper multi-line python code with indentation. Do not put everything in one line.
 `;
 
   // Inject the RAG reference (and explicit instruction) into the very final user message
@@ -433,21 +434,25 @@ async function turn3_execute(code: string, sessionID: string): Promise<Record<st
 import json
 import ifcopenshell
 ifc_file = get_ifc_file()
-shapes = ifc_file.by_type("IfcShapeRepresentation")
-print(json.dumps({"shape_count": len(shapes)}))
+products = ifc_file.by_type("IfcProduct")
+# Products that should have geometry usually include elements like Walls, Doors, Slabs
+elements = [p for p in products if p.is_a("IfcBuildingElement")]
+assigned = [p for p in elements if p.Representation]
+print(json.dumps({"element_count": len(elements), "assigned_count": len(assigned)}))
 `;
       const valRes = await mcpTool("execute_ifc_code_tool", { code: validationScript });
       const valStr = ((valRes as any).output || "").trim();
       let hasGeometry = false;
       try {
         const valData = JSON.parse(valStr);
-        if (valData.shape_count && valData.shape_count > 0) hasGeometry = true;
+        // If there are elements, they must have representations assigned
+        if (valData.element_count === 0 || valData.assigned_count > 0) hasGeometry = true;
       } catch (e) { log("Validation JSON parse fail: " + e); }
       
       if (!hasGeometry) {
-         const errorSummary = "SUCCESS BUT EMPTY GEOMETRY: The code ran without errors, but the IFC file contains zero 3D geometry shape representations. You MUST use functions like `geometry.add_wall_representation(...)` and `geometry.assign_representation(...)` to attach 3D meshes to your elements so they appear in the 3D viewer.";
-         const failingFn = "missing_geometry_representation";
-         const fixExtra = "Check the examples in the RAG contexts for exactly how to add geometric representations.";
+         const errorSummary = "SUCCESS BUT EMPTY GEOMETRY: The code ran without errors, but none of your elements have geometry properly assigned to them. You created the shape representation, but you FORGOT to call `ifcopenshell.api.run('geometry.assign_representation', ifc_file, product=..., representation=...)`. This is mandatory.";
+         const failingFn = "missing_geometry_assignment";
+         const fixExtra = "Look at the Examples! You must ASSIGN the geometry representation to the wall/door using geometry.assign_representation.";
          return { status: "pending_turn", errorSummary, failingFn, fixExtra, success: false };
       }
     } catch (e) { log("Validation query failed: " + e); }
