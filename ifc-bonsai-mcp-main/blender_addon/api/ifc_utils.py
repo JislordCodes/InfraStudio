@@ -56,10 +56,12 @@ def save_and_load_ifc():
         return
 
     try:
-        logger = logging.getLogger("BonsaiExport")
-        export_settings = export_ifc.IfcExportSettings.factory(bpy.context, path, logger)
-        exporter = export_ifc.IfcExporter(export_settings)
-        exporter.export()
+        # Simply write the native IfcOpenShell modifications to disk
+        ifc = tool.Ifc.get()
+        if ifc:
+            ifc.write(path)
+        
+        # Reload the project into Bonsai to update the Blender scene graph
         tool.IfcGit.load_project(path)
         
 
