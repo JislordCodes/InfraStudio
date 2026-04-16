@@ -53,207 +53,67 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     setExpanded(true);
     setCurrentSteps([]);
 
-    let accumSteps: string[] = [];
-
     try {
-      let isCompleted = false;
-      let turnCount = 0;
-      let consecutiveErrors = 0;
-      
-      while (!isCompleted && turnCount < 40) {
-        turnCount++;
-        
-        try {
-          // ----- ACTION ORCHESTRATOR -----
-          const revMsgs = [...currentMessages].reverse();
-          const rMsg = revMsgs.find(m => typeof m.content === 'string' && m.content.includes("[INFRASTUDIO_RAG_DONE]"));
-          const eMsg = revMsgs.find(m => typeof m.content === 'string' && m.content.includes("[INFRASTUDIO_EXEC_ERROR]"));
-          
-          let action = "simple_sync"; // fallback
-          let codeError = eMsg ? eMsg.content.replace("[INFRASTUDIO_EXEC_ERROR]", "").trim() : "";
-          let ragContext = "";
-          let filteredCatalog = "";
-          let pythonToRun = "";
+      setCurrentSteps(['🤖 Agent thinking...']);
 
-          const lastAsst = [...currentMessages].reverse().find(m => m.role === 'assistant');
-          // Match ```python, ```, OR gracefully capture everything to the end of the string if the LLM was abruptly cut off mid-generation
-          const codeMatch = lastAsst ? lastAsst.content.match(/```(?:python)?\s*([\s\S]*?)(?:```|$)/i) : null;
+      // Build clean message history (only user/assistant roles)
+      const history = currentMessages
+        .filter(m => m.id !== '1')
+        .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content || '' }));
 
-          if (!rMsg) {
-             action = "turn1_rag";
-          } else if (codeMatch && lastAsst?.id?.endsWith("_stream")) {
-             action = "turn3_execute";
-             pythonToRun = codeMatch[1].trim();
-             // Clear the _stream tag so we don't re-execute it if it fails
-             lastAsst.id = lastAsst.id.replace("_stream", "_done"); 
-          } else if (lastAsst?.id?.endsWith("_stream")) {
-             // It streamed but no code was generated! We are done.
-             isCompleted = true;
-             lastAsst.id = lastAsst.id.replace("_stream", "_done");
-             break;
-          } else {
-             action = "turn2_generate";
-             const rc = rMsg.content || "";
-             ragContext = rc.includes("=== IFC API REFERENCE ===") ? rc.split("=== IFC API REFERENCE ===")[1].split("=== END REFERENCE ===")[0].trim() : rc.slice(0, 3000);
-             filteredCatalog = rc.includes("[CATALOG]:") ? rc.split("[CATALOG]:")[1] : "";
-          }
+      const controller = new AbortController();
+      // Agent loop can run for up to 5 minutes building complex models
+      const timeoutId = setTimeout(() => controller.abort(), 300000);
 
-          // Build history for backend mapping
-          const history = currentMessages
-            .filter(m => m.id !== '1' && !m.content.includes("[INFRASTUDIO_RAG_DONE]")) // Strip huge RAG blocks specifically from history to save bandwidth
-            .map(m => {
-              const out: any = { role: m.role === 'user' ? 'user' : 'assistant', content: m.content || "" };
-              return out;
-            });
+      const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
+          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
+        },
+        body: JSON.stringify({
+          messages: history,
+          session_id: window.sessionStorage.getItem('mcpSessionId') || ''
+        }),
+        signal: controller.signal,
+      });
 
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 155000); 
+      clearTimeout(timeoutId);
 
-          const reqBody = {
-             action,
-             messages: history,
-             ragContext,
-             filteredCatalog,
-             codeError,
-             code: pythonToRun,
-             isNewSession: currentMessages.length <= 2,
-             session_id: window.sessionStorage.getItem("mcpSessionId") || ""
-          };
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
 
-          const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-              'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-            },
-            body: JSON.stringify(reqBody),
-            signal: controller.signal,
-          });
+      const data = await res.json();
 
-          clearTimeout(timeoutId);
+      if (data.error) throw new Error(data.error);
+      if (data.session_id) window.sessionStorage.setItem('mcpSessionId', data.session_id);
 
-          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      // Show tool call steps in the progress area
+      if (data.steps?.length > 0) setCurrentSteps(data.steps);
 
-          // --- HANDLE STREAMING (TURN 2) ---
-          if (action === "turn2_generate") {
-              const reader = res.body?.getReader();
-              const decoder = new TextDecoder();
-              if (!reader) throw new Error("No stream body");
-
-              let accumulatedText = "";
-              const streamMsgId = Date.now().toString() + "_stream";
-              
-              setMessages(prev => [...prev, { id: streamMsgId, role: 'assistant', content: "" }]);
-
-              let streamBuffer = "";
-              while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  
-                  streamBuffer += decoder.decode(value, { stream: true });
-                  const lines = streamBuffer.split('\n');
-                  streamBuffer = lines.pop() || "";
-                  for (const line of lines) {
-                      if (line.startsWith('data: ') && line.length > 6 && !line.includes('[DONE]')) {
-                          try {
-                              const parsed = JSON.parse(line.slice(6));
-                              if (parsed.choices && parsed.choices[0].delta?.content) {
-                                  accumulatedText += parsed.choices[0].delta.content;
-                                  setMessages(prev => {
-                                      const next = [...prev];
-                                      const idx = next.findIndex(m => m.id === streamMsgId);
-                                      if (idx !== -1) next[idx].content = accumulatedText;
-                                      return next;
-                                  });
-                              }
-                          } catch (e) {}
-                      } else if (line.startsWith('data: [API ERROR]')) {
-                          throw new Error("NVIDIA API stream error: " + line);
-                      }
-                  }
-              }
-              
-              currentMessages.push({ id: streamMsgId, role: 'assistant', content: accumulatedText });
-              // Loop continues — next iteration will see the code block and trigger turn3_execute!
-              continue;
-          }
-
-          // --- HANDLE JSON (TURN 1 & TURN 3) ---
-          const data = await res.json();
-          if (data.error) throw new Error(data.error);
-
-          if (data.session_id) window.sessionStorage.setItem("mcpSessionId", data.session_id);
-          consecutiveErrors = 0;
-
-          if (data.steps && data.steps.length > 0) {
-            accumSteps = [...accumSteps, ...data.steps];
-            setCurrentSteps(accumSteps);
-          }
-
-          if (data.ifc_url && onLoadIfcUrl) {
-            console.log('Auto-loading IFC model:', data.ifc_url);
-            onLoadIfcUrl(data.ifc_url);
-          }
-
-          if (data.status === 'completed') {
-            isCompleted = true;
-            let replyText = data.reply ?? 'I have completed your request.';
-            if (accumSteps.length > 0) replyText += '\n\n' + accumSteps.join('\n');
-
-            const finalMsg: Message = { id: Date.now().toString(), role: 'assistant', content: replyText };
-            currentMessages = [...currentMessages, finalMsg];
-            setMessages(currentMessages);
-            setCurrentSteps([]); 
-          } else if (data.status === 'pending_turn') {
-            // Setup Turn 3 Context additions
-            const newMsgs = [];
-            if (data.new_messages) {
-               newMsgs.push(...data.new_messages.map((m: any, i: number) => ({
-                 id: Date.now().toString() + '_' + i,
-                 role: m.role,
-                 content: m.content || ""
-               })));
-            } else if (data.errorSummary) {
-               // Append error manually if returned directly from turn3
-               newMsgs.push(
-                 { id: Date.now()+'_r', role: "assistant", content: `[INFRASTUDIO_RAG_DONE]\n=== IFC API REFERENCE ===\n${ragContext}\n${data.fixExtra||""}\n=== END REFERENCE ===\n[CATALOG]:${filteredCatalog}`},
-                 { id: Date.now()+'_e', role: "user", content: `[INFRASTUDIO_EXEC_ERROR]\n${data.errorSummary.slice(0,500)}` }
-               );
-            }
-            
-            currentMessages = [...currentMessages, ...newMsgs];
-            setMessages(currentMessages);
-          }
-        } catch (turnError) {
-          console.error("Turn execution failed:", turnError);
-          consecutiveErrors++;
-          
-          if (consecutiveErrors >= 3) {
-            throw turnError;
-          }
-          
-          const waitSecs = 3 * consecutiveErrors;
-          setCurrentSteps(prev => [...prev, `⚠ API Error. Auto-retrying in ${waitSecs}s...`]);
-          await new Promise(r => setTimeout(r, waitSecs * 1000));
-          turnCount--;
-        }
+      // Auto-load IFC model if returned
+      if (data.ifc_url && onLoadIfcUrl) {
+        console.log('Auto-loading IFC model:', data.ifc_url);
+        onLoadIfcUrl(data.ifc_url);
       }
-      
-      if (!isCompleted && turnCount >= 40) {
-         throw new Error("Safety limit reached: 40 sequential loops aborted.");
-      }
-      
+
+      // Append final reply
+      const replyText = data.reply || 'I have completed your request.';
+      const finalMsg: Message = { id: Date.now().toString(), role: 'assistant', content: replyText };
+      currentMessages = [...currentMessages, finalMsg];
+      setMessages(currentMessages);
+      setCurrentSteps([]);
+
     } catch (err) {
-      console.error('Gemini chat error:', err);
+      console.error('Agent error:', err);
       const detail = err instanceof Error ? err.message : String(err);
       const isTimeout = detail.toLowerCase().includes('timeout') || detail.toLowerCase().includes('aborted');
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: isTimeout
-          ? '⏱️ A network timeout occurred while attempting to process the code.'
-          : `⚠️ Failed to complete task: ${detail.slice(0, 200)}`,
+          ? '⏱️ The agent timed out. Try a simpler request or check if Blender is running.'
+          : `⚠️ Agent failed: ${detail.slice(0, 200)}`,
       }]);
       setCurrentSteps([]);
     } finally {
