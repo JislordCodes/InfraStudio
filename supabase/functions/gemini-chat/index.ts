@@ -153,7 +153,7 @@ create_door — ALWAYS specify ALL of these:
   name: string — e.g. "Main Entry Door", "Bedroom Door"
   dimensions: { "overall_height": 2.1, "overall_width": 0.9 }
   operation_type: "SINGLE_SWING_LEFT" — options: SINGLE_SWING_LEFT, SINGLE_SWING_RIGHT, DOUBLE_SWING_LEFT, DOUBLE_SWING_RIGHT
-  location: [x, y, z] — position in wall
+  location: [x, y, z] — MUST BE IDENTICAL to the create_opening location for this door (so fill_opening snaps it in)
   rotation: [0.0, 0.0, 0.0]
   frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
   panel_properties: { "panel_depth": 0.035, "panel_width": 0.84 }
@@ -162,7 +162,7 @@ create_window — ALWAYS specify ALL of these:
   name: string — e.g. "Living Room Window", "Bedroom Window"
   dimensions: { "overall_height": 1.2, "overall_width": 1.0 }
   partition_type: "SINGLE_PANEL" — options: SINGLE_PANEL, DOUBLE_PANEL_HORIZONTAL, DOUBLE_PANEL_VERTICAL
-  location: [x, y, z] — position in wall (sill height typically 0.9m)
+  location: [x, y, z] — MUST BE IDENTICAL to the create_opening location for this window (so fill_opening snaps it in)
   rotation: [0.0, 0.0, 0.0]
   frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
   panel_properties: { "panel_depth": 0.025 }

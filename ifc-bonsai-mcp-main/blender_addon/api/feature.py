@@ -255,18 +255,24 @@ def fill_opening(
             element=element
         )
         
-        # Enforce strict hierarchy for Web-IFC / That Open Engine
+        # Snap the filling element's placement to match the opening's placement exactly.
+        # The filling element (door/window) should be positioned relative to the opening
+        # so that it sits perfectly inside the void. We inherit the opening's full placement.
         if hasattr(element, "ObjectPlacement") and hasattr(opening, "ObjectPlacement"):
-            element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement
-            # Since the element is now relative to the opening, set its local offset to origin 
-            # (Assuming the AI supplied matching absolute coords earlier, the door should just snap directly)
             try:
-                if hasattr(element.ObjectPlacement, "RelativePlacement"):
-                    rel_placement = element.ObjectPlacement.RelativePlacement
-                    if hasattr(rel_placement, "Location"):
-                        rel_placement.Location.Coordinates = (0.0, 0.0, 0.0)
+                element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement.PlacementRelTo
+                # Copy the opening's relative placement (location + axes) to the filler
+                # so the element appears at the same world position as the opening void
+                opening_rel = opening.ObjectPlacement.RelativePlacement
+                filler_rel = element.ObjectPlacement.RelativePlacement
+                if hasattr(opening_rel, "Location") and hasattr(filler_rel, "Location"):
+                    filler_rel.Location.Coordinates = opening_rel.Location.Coordinates
+                if hasattr(opening_rel, "Axis") and hasattr(filler_rel, "Axis") and opening_rel.Axis and filler_rel.Axis:
+                    filler_rel.Axis.DirectionRatios = opening_rel.Axis.DirectionRatios
+                if hasattr(opening_rel, "RefDirection") and hasattr(filler_rel, "RefDirection") and opening_rel.RefDirection and filler_rel.RefDirection:
+                    filler_rel.RefDirection.DirectionRatios = opening_rel.RefDirection.DirectionRatios
             except Exception as e:
-                if verbose: print(f"Could not reset relative placement coordinates: {e}")
+                if verbose: print(f"Could not sync placement from opening to filling: {e}")
         
         save_and_load_ifc()
         
