@@ -211,12 +211,12 @@ def create_door(
     panel_props.update(panel_properties)
     
     if custom_panels:
-        panel_dict = {k: v * s if isinstance(v, (int, float)) and v is not None else v 
+        panel_dict = {k: v * s if isinstance(v, (int, float)) and v is not None and k != "PanelWidth" else v 
                       for k, v in custom_panels.items()}
     else:
         panel_dict = {
             "PanelDepth": panel_props.get("panel_depth", 0.035) * s,
-            "PanelWidth": panel_props.get("panel_width", 1.0) * s,
+            "PanelWidth": panel_props.get("panel_width", 1.0),  # CRITICAL: Do NOT scale PanelWidth (it's a ratio)
             "FrameDepth": panel_props.get("frame_depth", 0.035) * s,
             "FrameThickness": panel_props.get("frame_thickness", 0.035) * s
         }

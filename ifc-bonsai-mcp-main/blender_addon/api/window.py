@@ -267,7 +267,7 @@ def create_window(
         panel_props = []
         for props in custom_panels:
             if isinstance(props, dict):
-                scaled = {k: v * s if isinstance(v, (int, float)) else v for k, v in props.items()}
+                scaled = {k: v * s if isinstance(v, (int, float)) and k != 'PanelWidth' else v for k, v in props.items()}
                 panel_props.append(WindowPanelProperties(**scaled))
             else:
                 panel_props.append(props)
