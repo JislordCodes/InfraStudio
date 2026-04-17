@@ -255,24 +255,20 @@ def fill_opening(
             element=element
         )
         
-        # Snap the filling element's placement to match the opening's placement exactly.
-        # The filling element (door/window) should be positioned relative to the opening
-        # so that it sits perfectly inside the void. We inherit the opening's full placement.
+        # IFC standard: filling element must be placed RELATIVE TO the opening,
+        # not relative to the wall. The element sits at the opening's origin (0,0,0).
+        # This tells web-ifc/IFC viewers that the door/window belongs inside the void.
         if hasattr(element, "ObjectPlacement") and hasattr(opening, "ObjectPlacement"):
             try:
-                element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement.PlacementRelTo
-                # Copy the opening's relative placement (location + axes) to the filler
-                # so the element appears at the same world position as the opening void
-                opening_rel = opening.ObjectPlacement.RelativePlacement
-                filler_rel = element.ObjectPlacement.RelativePlacement
-                if hasattr(opening_rel, "Location") and hasattr(filler_rel, "Location"):
-                    filler_rel.Location.Coordinates = opening_rel.Location.Coordinates
-                if hasattr(opening_rel, "Axis") and hasattr(filler_rel, "Axis") and opening_rel.Axis and filler_rel.Axis:
-                    filler_rel.Axis.DirectionRatios = opening_rel.Axis.DirectionRatios
-                if hasattr(opening_rel, "RefDirection") and hasattr(filler_rel, "RefDirection") and opening_rel.RefDirection and filler_rel.RefDirection:
-                    filler_rel.RefDirection.DirectionRatios = opening_rel.RefDirection.DirectionRatios
+                # Place relative to the OPENING (not the wall)
+                element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement
+                # Zero out local coordinates — element is at the opening's origin
+                if hasattr(element.ObjectPlacement, "RelativePlacement"):
+                    rel = element.ObjectPlacement.RelativePlacement
+                    if hasattr(rel, "Location"):
+                        rel.Location.Coordinates = (0.0, 0.0, 0.0)
             except Exception as e:
-                if verbose: print(f"Could not sync placement from opening to filling: {e}")
+                if verbose: print(f"Could not fix placement hierarchy for filling: {e}")
         
         save_and_load_ifc()
         

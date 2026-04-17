@@ -182,35 +182,43 @@ def create_door(
     lining_props = create_default_lining_properties()
     lining_props.update(frame_properties)
     
+    # CRITICAL: add_door_representation does NOT auto-convert meters to project units
+    # (unlike add_wall_representation which does). We must pre-scale all dimensions
+    # from meters to the project's unit system (e.g., mm) before calling the API.
+    # The scale factor is 1/unit_scale (for mm projects: 1/0.001 = 1000).
+    s = 1.0 / unit_scale if unit_scale and unit_scale != 0 else 1.0
+    
     if custom_lining:
-        lining_dict = custom_lining
+        lining_dict = {k: v * s if isinstance(v, (int, float)) and v is not None else v 
+                       for k, v in custom_lining.items()}
     else:
         lining_dict = {
-            "LiningDepth": lining_props.get("lining_depth", 0.05),
-            "LiningThickness": lining_props.get("lining_thickness", 0.05), 
-            "LiningOffset": lining_props.get("lining_offset", 0.0),
-            "LiningToPanelOffsetX": lining_props.get("lining_to_panel_offset_x", 0.025),
-            "LiningToPanelOffsetY": lining_props.get("lining_to_panel_offset_y", 0.025),
-            "TransomThickness": lining_props.get("transom_thickness", 0.0),
-            "TransomOffset": lining_props.get("transom_offset", 1.525),
-            "CasingDepth": lining_props.get("casing_depth", 0.005),
-            "CasingThickness": lining_props.get("casing_thickness", 0.075),
-            "ThresholdDepth": lining_props.get("threshold_depth", 0.1),
-            "ThresholdThickness": lining_props.get("threshold_thickness", 0.025),
-            "ThresholdOffset": lining_props.get("threshold_offset", 0.0)
+            "LiningDepth": lining_props.get("lining_depth", 0.05) * s,
+            "LiningThickness": lining_props.get("lining_thickness", 0.05) * s, 
+            "LiningOffset": lining_props.get("lining_offset", 0.0) * s,
+            "LiningToPanelOffsetX": lining_props.get("lining_to_panel_offset_x", 0.025) * s,
+            "LiningToPanelOffsetY": lining_props.get("lining_to_panel_offset_y", 0.025) * s,
+            "TransomThickness": lining_props.get("transom_thickness", 0.0) * s,
+            "TransomOffset": lining_props.get("transom_offset", 1.525) * s,
+            "CasingDepth": lining_props.get("casing_depth", 0.005) * s,
+            "CasingThickness": lining_props.get("casing_thickness", 0.075) * s,
+            "ThresholdDepth": lining_props.get("threshold_depth", 0.1) * s,
+            "ThresholdThickness": lining_props.get("threshold_thickness", 0.025) * s,
+            "ThresholdOffset": lining_props.get("threshold_offset", 0.0) * s
         }
     
     panel_props = create_default_panel_properties()
     panel_props.update(panel_properties)
     
     if custom_panels:
-        panel_dict = custom_panels
+        panel_dict = {k: v * s if isinstance(v, (int, float)) and v is not None else v 
+                      for k, v in custom_panels.items()}
     else:
         panel_dict = {
-            "PanelDepth": panel_props.get("panel_depth", 0.035),
-            "PanelWidth": panel_props.get("panel_width", 1.0),
-            "FrameDepth": panel_props.get("frame_depth", 0.035),
-            "FrameThickness": panel_props.get("frame_thickness", 0.035)
+            "PanelDepth": panel_props.get("panel_depth", 0.035) * s,
+            "PanelWidth": panel_props.get("panel_width", 1.0) * s,
+            "FrameDepth": panel_props.get("frame_depth", 0.035) * s,
+            "FrameThickness": panel_props.get("frame_thickness", 0.035) * s
         }
     
     try:
@@ -218,12 +226,12 @@ def create_door(
             "geometry.add_door_representation",
             ifc_file,
             context=body_context,
-            overall_width=overall_width,
-            overall_height=overall_height,
+            overall_width=overall_width * s,
+            overall_height=overall_height * s,
             operation_type=operation_type,
             lining_properties=lining_dict,
             panel_properties=panel_dict,
-            unit_scale=unit_scale,
+            unit_scale=1.0,  # already in project units
             part_of_product=part_of_product
         )
     except Exception as e:

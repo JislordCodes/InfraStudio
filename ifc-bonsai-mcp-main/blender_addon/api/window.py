@@ -239,31 +239,36 @@ def create_window(
     
     body_context = get_or_create_body_context(ifc_file)
     
+    # CRITICAL: add_window_representation does NOT auto-convert meters to project units
+    # (unlike add_wall_representation which does). Pre-scale all dimensions.
+    s = 1.0 / unit_scale if unit_scale and unit_scale != 0 else 1.0
+    
     lining_props = WindowLiningProperties(
-        LiningDepth=frame_properties.get("lining_depth", 0.05),
-        LiningThickness=frame_properties.get("lining_thickness", 0.05), 
-        LiningOffset=frame_properties.get("lining_offset", 0.05),
-        LiningToPanelOffsetX=frame_properties.get("lining_to_panel_offset_x", 0.025),
-        LiningToPanelOffsetY=frame_properties.get("lining_to_panel_offset_y", 0.025),
-        MullionThickness=frame_properties.get("mullion_thickness", 0.05),
-        FirstMullionOffset=frame_properties.get("first_mullion_offset", 0.3),
-        SecondMullionOffset=frame_properties.get("second_mullion_offset", 0.45),
-        TransomThickness=frame_properties.get("transom_thickness", 0.05),
-        FirstTransomOffset=frame_properties.get("first_transom_offset", 0.3),
-        SecondTransomOffset=frame_properties.get("second_transom_offset", 0.6)
+        LiningDepth=frame_properties.get("lining_depth", 0.05) * s,
+        LiningThickness=frame_properties.get("lining_thickness", 0.05) * s, 
+        LiningOffset=frame_properties.get("lining_offset", 0.05) * s,
+        LiningToPanelOffsetX=frame_properties.get("lining_to_panel_offset_x", 0.025) * s,
+        LiningToPanelOffsetY=frame_properties.get("lining_to_panel_offset_y", 0.025) * s,
+        MullionThickness=frame_properties.get("mullion_thickness", 0.05) * s,
+        FirstMullionOffset=frame_properties.get("first_mullion_offset", 0.3) * s,
+        SecondMullionOffset=frame_properties.get("second_mullion_offset", 0.45) * s,
+        TransomThickness=frame_properties.get("transom_thickness", 0.05) * s,
+        FirstTransomOffset=frame_properties.get("first_transom_offset", 0.3) * s,
+        SecondTransomOffset=frame_properties.get("second_transom_offset", 0.6) * s
     )
     
     if custom_panels is None:
         panel_props = create_default_panel_properties(
             partition_type, 
-            panel_properties.get("frame_thickness", 0.035), 
-            panel_properties.get("frame_depth", 0.035)
+            panel_properties.get("frame_thickness", 0.035) * s, 
+            panel_properties.get("frame_depth", 0.035) * s
         )
     else:
         panel_props = []
         for props in custom_panels:
             if isinstance(props, dict):
-                panel_props.append(WindowPanelProperties(**props))
+                scaled = {k: v * s if isinstance(v, (int, float)) else v for k, v in props.items()}
+                panel_props.append(WindowPanelProperties(**scaled))
             else:
                 panel_props.append(props)
     
@@ -285,12 +290,12 @@ def create_window(
             "geometry.add_window_representation",
             ifc_file,
             context=body_context,
-            overall_width=overall_width,
-            overall_height=overall_height,
+            overall_width=overall_width * s,
+            overall_height=overall_height * s,
             partition_type=partition_type,
             lining_properties=lining_dict,
             panel_properties=panel_dicts,
-            unit_scale=unit_scale,
+            unit_scale=1.0,  # already in project units
             part_of_product=part_of_product
         )
     except Exception:
@@ -298,10 +303,10 @@ def create_window(
             "geometry.add_window_representation", 
             ifc_file,
             context=body_context,
-            overall_width=overall_width,
-            overall_height=overall_height,
+            overall_width=overall_width * s,
+            overall_height=overall_height * s,
             partition_type=partition_type,
-            unit_scale=unit_scale
+            unit_scale=1.0
         )
     
     ifcopenshell.api.run(
