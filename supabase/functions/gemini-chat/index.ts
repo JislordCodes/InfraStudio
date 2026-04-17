@@ -114,9 +114,12 @@ BUILD WORKFLOW — ALWAYS FOLLOW THIS ORDER
 ════════════════════════════════════════════════════
 1. Call initialize_project (only on new sessions)
 2. Call get_ifc_scene_overview to inspect existing elements — NEVER duplicate
-3. Create floor slab first → then walls → then openings → then doors/windows → then roof → then stairs (if needed)
-4. Apply surface styles and materials to ALL elements
-5. Call export_ifc last — ALWAYS
+3. BATCH CREATE floor slab(s) FIRST (all in 1 turn).
+4. BATCH CREATE all walls (e.g. 10 walls at once). DO NOT make 1 tool call per turn!
+5. BATCH CREATE all openings (using wall GUIDs from step 4).
+6. BATCH CREATE all doors/windows (using opening locations from step 5).
+7. Apply surface styles and materials to ALL elements
+8. Call export_ifc last — ALWAYS
 6. Reply with a summary of everything built
 
 ════════════════════════════════════════════════════
@@ -305,10 +308,11 @@ async function runAgentLoop(
       }
 
       // Feed tool result back into the conversation
+      const safeToolResult = toolResult.length > 5000 ? toolResult.slice(0, 5000) + '\n...[TRUNCATED to prevent memory limit crash]' : toolResult;
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: toolResult
+        content: safeToolResult
       });
     }
   }
