@@ -156,8 +156,8 @@ def create_window(
         except:
             pass
         
-        window_width = dimensions.get("width", 1.2) if dimensions else 1.2
-        window_height = dimensions.get("height", 1.5) if dimensions else 1.5
+        window_width = float(dimensions.get("overall_width", dimensions.get("width", 1.2))) if dimensions else 1.2
+        window_height = float(dimensions.get("overall_height", dimensions.get("height", 1.5))) if dimensions else 1.5
         window_location = location if location else [0.0, 0.0, 1.0]
         window_rotation = rotation if rotation else [0.0, 0.0, 0.0]
         

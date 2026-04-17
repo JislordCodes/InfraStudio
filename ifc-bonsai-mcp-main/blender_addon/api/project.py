@@ -142,3 +142,20 @@ def create_storey(name: str, elevation: float = 0.0) -> dict:
     except Exception as e:
         logger.error(f"Failed to create storey: {e}")
         return {"success": False, "error": str(e)}
+
+@register_command('export_ifc', description="Save and export the current IFC project")
+def export_ifc(params=None) -> dict:
+    """Save the current IFC project to disk."""
+    from .ifc_utils import save_and_load_ifc
+    try:
+        save_and_load_ifc()
+        return {
+            "success": True,
+            "message": "Successfully exported and saved IFC project."
+        }
+    except Exception as e:
+        logger.error(f"Failed to export IFC: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }

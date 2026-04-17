@@ -144,8 +144,8 @@ def create_door(
     if panel_properties is None:
         panel_properties = {}
     
-    overall_width = float(dimensions.get("width", 0.9))
-    overall_height = float(dimensions.get("height", 2.0))
+    overall_width = float(dimensions.get("overall_width", dimensions.get("width", 0.9)))
+    overall_height = float(dimensions.get("overall_height", dimensions.get("height", 2.0)))
 
     if overall_width <= 0 or overall_height <= 0:
         raise ValueError("Door dimensions must be positive values")

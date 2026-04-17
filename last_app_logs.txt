@@ -1,63 +1,86 @@
-[2026-04-11T16:11:09.487Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:11:09.488Z] TELEMETRY: Stateless RPC method=tools/call id=1
-[2026-04-11T16:11:09.511Z] INFO:     127.0.0.1:49244 - "POST /embeddings HTTP/1.1" 200 OK
-[2026-04-11T16:11:09.521Z] INFO:     169.254.172.2:35522 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:11:09.521Z] TELEMETRY: Stateless response OK for tools/call
-[2026-04-11T16:12:01.210Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:12:01.210Z] TELEMETRY: Stateless RPC method=tools/call id=1
-[2026-04-11T16:12:01.234Z] INFO:     127.0.0.1:56466 - "POST /embeddings HTTP/1.1" 200 OK
-[2026-04-11T16:12:01.242Z] INFO:     169.254.172.2:56248 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:12:01.242Z] TELEMETRY: Stateless response OK for tools/call
-[2026-04-11T16:15:26.406Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:26.406Z] TELEMETRY: Stateless RPC method=initialize id=1
-[2026-04-11T16:15:26.406Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:15:26.406Z] TELEMETRY: Stateless response OK for initialize
-[2026-04-11T16:15:26.409Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:26.409Z] TELEMETRY: Stateless RPC method=notifications/initialized id=None
-[2026-04-11T16:15:26.409Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 204 No Content
-[2026-04-11T16:15:26.412Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:26.412Z] TELEMETRY: Stateless RPC method=tools/list id=2
-[2026-04-11T16:15:26.415Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:15:26.415Z] TELEMETRY: Stateless response OK for tools/list
-[2026-04-11T16:15:26.422Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:26.423Z] TELEMETRY: Stateless RPC method=tools/call id=1775924126421
-[2026-04-11T16:15:26.423Z] 2026-04-11 16:15:26,423 [INFO] BlenderMCPServer: Sending command: initialize_project with params: {'project_name': 'InfraStudio Project'}
-[2026-04-11T16:15:26.423Z] 2026-04-11 16:15:26,423 [INFO] BlenderMCPServer: Command sent, waiting for response...
-[2026-04-11T16:15:26.425Z] 2026-04-11 16:15:26,425 [INFO] blender: Created geometric contexts: Model=16, Body=17, Plan=21, Axis=22
-[2026-04-11T16:15:26.463Z] 2026-04-11 16:15:26,463 [INFO] blender: Starting import
-[2026-04-11T16:15:26.463Z] 2026-04-11 16:15:26,463 [INFO] blender: loading file new_project.ifc
-[2026-04-11T16:15:26.465Z] 2026-04-11 16:15:26,465 [INFO] blender: Creating object #1=IfcProject('3ScSh19ILB8wi2GI$u1GFj',$,'InfraStudio Project',$,$,$,$,(#16,#21),#5)
-[2026-04-11T16:15:26.465Z] 2026-04-11 16:15:26,465 [INFO] blender: Creating object #8=IfcBuildingStorey('1JjTHZ62j6ixdB3pyjLIp8',$,'Level 0',$,$,$,$,$,$,$)
-[2026-04-11T16:15:26.466Z] 2026-04-11 16:15:26,466 [INFO] blender: Creating object #6=IfcSite('0DJyYdgQ9A9PzNDzqDbhiW',$,'Default Site',$,$,$,$,$,$,$,$,$,$,$)
-[2026-04-11T16:15:26.466Z] 2026-04-11 16:15:26,466 [INFO] blender: Creating object #7=IfcBuilding('2fWfNFoS17xh0QZ4V9Hh05',$,'Default Building',$,$,$,$,$,$,$,$,$)
-[2026-04-11T16:15:26.522Z] 2026-04-11 16:15:26,522 [INFO] blender: Import finished in 0.06 seconds
-[2026-04-11T16:15:26.526Z] 2026-04-11 16:15:26,526 [INFO] BlenderMCPServer: Received 186 bytes of data
-[2026-04-11T16:15:26.526Z] 2026-04-11 16:15:26,526 [INFO] BlenderMCPServer: Response status: success
-[2026-04-11T16:15:26.527Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:15:26.527Z] TELEMETRY: Stateless response OK for tools/call
-[2026-04-11T16:15:26.530Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:26.531Z] TELEMETRY: Stateless RPC method=tools/call id=1775924126529
-[2026-04-11T16:15:26.555Z] INFO:     127.0.0.1:38052 - "POST /embeddings HTTP/1.1" 200 OK
-[2026-04-11T16:15:26.564Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:15:26.564Z] TELEMETRY: Stateless response OK for tools/call
-[2026-04-11T16:15:27.339Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:27.339Z] TELEMETRY: Stateless RPC method=initialize id=1
-[2026-04-11T16:15:27.339Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:15:27.339Z] TELEMETRY: Stateless response OK for initialize
-[2026-04-11T16:15:27.342Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:15:27.342Z] TELEMETRY: Stateless RPC method=notifications/initialized id=None
-[2026-04-11T16:15:27.342Z] INFO:     169.254.172.2:60398 - "POST /mcp HTTP/1.1" 204 No Content
-[2026-04-11T16:17:32.217Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:17:32.217Z] TELEMETRY: Stateless RPC method=initialize id=1
-[2026-04-11T16:17:32.217Z] INFO:     169.254.172.2:50078 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:17:32.218Z] TELEMETRY: Stateless response OK for initialize
-[2026-04-11T16:17:32.221Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:17:32.221Z] TELEMETRY: Stateless RPC method=notifications/initialized id=None
-[2026-04-11T16:17:32.221Z] INFO:     169.254.172.2:50078 - "POST /mcp HTTP/1.1" 204 No Content
-[2026-04-11T16:18:43.308Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:18:43.308Z] TELEMETRY: Stateless RPC method=initialize id=1
-[2026-04-11T16:18:43.308Z] INFO:     169.254.172.2:45866 - "POST /mcp HTTP/1.1" 200 OK
-[2026-04-11T16:18:43.308Z] TELEMETRY: Stateless response OK for initialize
-[2026-04-11T16:18:43.311Z] TELEMETRY: Stateless bridge mode
-[2026-04-11T16:18:43.312Z] TELEMETRY: Stateless RPC method=notifications/initialized id=None
-[2026-04-11T16:18:43.312Z] INFO:     169.254.172.2:45866 - "POST /mcp HTTP/1.1" 204 No Content
+[2026-04-16T23:36:50.693Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:36:50.693Z] TELEMETRY: Stateless RPC method=initialize id=1
+[2026-04-16T23:36:50.693Z] INFO:     169.254.172.2:46774 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:36:50.693Z] TELEMETRY: Stateless response OK for initialize
+[2026-04-16T23:36:50.780Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:36:50.780Z] TELEMETRY: Stateless RPC method=notifications/initialized id=None
+[2026-04-16T23:36:50.780Z] INFO:     169.254.172.2:46774 - "POST /mcp HTTP/1.1" 204 No Content
+[2026-04-16T23:36:50.867Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:36:50.867Z] TELEMETRY: Stateless RPC method=tools/list id=2
+[2026-04-16T23:36:50.870Z] INFO:     169.254.172.2:46774 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:36:50.871Z] TELEMETRY: Stateless response OK for tools/list
+[2026-04-16T23:37:16.778Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:37:16.778Z] TELEMETRY: Stateless RPC method=tools/call id=1776382636734
+[2026-04-16T23:37:16.778Z] 2026-04-16 23:37:16,778 [INFO] BlenderMCPServer: Sending command: initialize_project with params: {'project_name': 'Concrete Wall Demo'}
+[2026-04-16T23:37:16.779Z] 2026-04-16 23:37:16,778 [INFO] BlenderMCPServer: Command sent, waiting for response...
+[2026-04-16T23:37:16.781Z] 2026-04-16 23:37:16,781 [INFO] blender: Created geometric contexts: Model=16, Body=17, Plan=21, Axis=22
+[2026-04-16T23:37:16.819Z] 2026-04-16 23:37:16,819 [INFO] blender: Starting import
+[2026-04-16T23:37:16.819Z] 2026-04-16 23:37:16,819 [INFO] blender: loading file new_project.ifc
+[2026-04-16T23:37:16.821Z] 2026-04-16 23:37:16,821 [INFO] blender: Creating object #1=IfcProject('3ca2eHy3v7BOX$2WYsaiSD',$,'Concrete Wall Demo',$,$,$,$,(#16,#21),#5)
+[2026-04-16T23:37:16.822Z] 2026-04-16 23:37:16,821 [INFO] blender: Creating object #7=IfcBuilding('1Jtjknyo544Q_yejO1ekK5',$,'Default Building',$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:16.822Z] 2026-04-16 23:37:16,822 [INFO] blender: Creating object #8=IfcBuildingStorey('2eum3ouxD4sQR_sXhCyJ69',$,'Level 0',$,$,$,$,$,$,$)
+[2026-04-16T23:37:16.822Z] 2026-04-16 23:37:16,822 [INFO] blender: Creating object #6=IfcSite('2Om7gfRgf3Vg2mmxB8mJwT',$,'Default Site',$,$,$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:16.878Z] 2026-04-16 23:37:16,877 [INFO] blender: Import finished in 0.06 seconds
+[2026-04-16T23:37:16.882Z] 2026-04-16 23:37:16,882 [INFO] BlenderMCPServer: Received 185 bytes of data
+[2026-04-16T23:37:16.882Z] 2026-04-16 23:37:16,882 [INFO] BlenderMCPServer: Response status: success
+[2026-04-16T23:37:16.882Z] INFO:     169.254.172.2:53190 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:37:16.882Z] TELEMETRY: Stateless response OK for tools/call
+[2026-04-16T23:37:27.187Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:37:27.187Z] TELEMETRY: Stateless RPC method=tools/call id=1776382646890
+[2026-04-16T23:37:27.187Z] 2026-04-16 23:37:27,187 [INFO] BlenderMCPServer: Sending command: create_slab with params: {'name': 'Ground Floor Slab', 'polyline': [(0.0, 0.0), (5.0, 0.0), (5.0, 2.0), (0.0, 2.0)], 'depth': 0.2, 'location': [0.0, 0.0, 0.0], 'rotation': [0.0, 0.0, 0.0], 'geometry_properties': {'represents_3d': True}, 'transformation_matrix': None, 'material': 'Reinforced Concrete', 'slab_type': None, 'verbose': False}
+[2026-04-16T23:37:27.188Z] 2026-04-16 23:37:27,187 [INFO] BlenderMCPServer: Command sent, waiting for response...
+[2026-04-16T23:37:27.192Z] 2026-04-16 23:37:27,192 [INFO] blender: loading file /app/new_project.ifc
+[2026-04-16T23:37:27.199Z] 2026-04-16 23:37:27,199 [INFO] blender: Creating object #1=IfcProject('3ca2eHy3v7BOX$2WYsaiSD',$,'Concrete Wall Demo',$,$,$,$,(#16,#21),#5)
+[2026-04-16T23:37:27.210Z] 2026-04-16 23:37:27,210 [INFO] blender: Creating object #23=IfcSlab('22ScEImznAtu_FMcsupTPY',$,'Ground Floor Slab',$,$,#36,#31,$,$)
+[2026-04-16T23:37:27.211Z] 2026-04-16 23:37:27,211 [INFO] blender: Creating object #7=IfcBuilding('1Jtjknyo544Q_yejO1ekK5',$,'Default Building',$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:27.211Z] 2026-04-16 23:37:27,211 [INFO] blender: Creating object #8=IfcBuildingStorey('2eum3ouxD4sQR_sXhCyJ69',$,'Level 0',$,$,$,$,$,$,$)
+[2026-04-16T23:37:27.211Z] 2026-04-16 23:37:27,211 [INFO] blender: Creating object #6=IfcSite('2Om7gfRgf3Vg2mmxB8mJwT',$,'Default Site',$,$,$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:27.277Z] 2026-04-16 23:37:27,277 [INFO] BlenderMCPServer: Received 360 bytes of data
+[2026-04-16T23:37:27.277Z] 2026-04-16 23:37:27,277 [INFO] BlenderMCPServer: Response status: success
+[2026-04-16T23:37:27.277Z] INFO:     169.254.172.2:44656 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:37:27.277Z] TELEMETRY: Stateless response OK for tools/call
+[2026-04-16T23:37:30.332Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:37:30.332Z] TELEMETRY: Stateless RPC method=tools/call id=1776382650289
+[2026-04-16T23:37:30.333Z] 2026-04-16 23:37:30,333 [INFO] BlenderMCPServer: Sending command: create_wall with params: {'name': 'South Wall', 'dimensions': {'thickness': 0.2, 'height': 3.0, 'length': 5.0}, 'location': [0.0, 0.0, 0.0], 'rotation': [0.0, 0.0, 0.0], 'geometry_properties': {'represents_3d': True}, 'transformation_matrix': None, 'material': 'Concrete', 'wall_type': '', 'verbose': False}
+[2026-04-16T23:37:30.333Z] 2026-04-16 23:37:30,333 [INFO] BlenderMCPServer: Command sent, waiting for response...
+[2026-04-16T23:37:30.338Z] 2026-04-16 23:37:30,338 [INFO] blender: loading file /app/new_project.ifc
+[2026-04-16T23:37:30.345Z] 2026-04-16 23:37:30,345 [INFO] blender: Creating object #1=IfcProject('3ca2eHy3v7BOX$2WYsaiSD',$,'Concrete Wall Demo',$,$,$,$,(#16,#21),#5)
+[2026-04-16T23:37:30.356Z] 2026-04-16 23:37:30,356 [INFO] blender: Creating object #23=IfcSlab('22ScEImznAtu_FMcsupTPY',$,'Ground Floor Slab',$,$,#36,#31,$,$)
+[2026-04-16T23:37:30.357Z] 2026-04-16 23:37:30,357 [INFO] blender: Creating object #37=IfcWall('3hT8jJ64r25wI90Zuqvi_4',$,'South Wall',$,$,#56,#48,$,$)
+[2026-04-16T23:37:30.358Z] 2026-04-16 23:37:30,357 [INFO] blender: Creating object #7=IfcBuilding('1Jtjknyo544Q_yejO1ekK5',$,'Default Building',$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:30.358Z] 2026-04-16 23:37:30,358 [INFO] blender: Creating object #8=IfcBuildingStorey('2eum3ouxD4sQR_sXhCyJ69',$,'Level 0',$,$,$,$,$,$,$)
+[2026-04-16T23:37:30.358Z] 2026-04-16 23:37:30,358 [INFO] blender: Creating object #6=IfcSite('2Om7gfRgf3Vg2mmxB8mJwT',$,'Default Site',$,$,$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:30.424Z] 2026-04-16 23:37:30,424 [INFO] BlenderMCPServer: Received 334 bytes of data
+[2026-04-16T23:37:30.424Z] 2026-04-16 23:37:30,424 [INFO] BlenderMCPServer: Response status: success
+[2026-04-16T23:37:30.425Z] INFO:     169.254.172.2:44656 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:37:30.425Z] TELEMETRY: Stateless response OK for tools/call
+[2026-04-16T23:37:37.592Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:37:37.592Z] TELEMETRY: Stateless RPC method=tools/call id=1776382657548
+[2026-04-16T23:37:37.592Z] 2026-04-16 23:37:37,592 [INFO] BlenderMCPServer: Sending command: create_opening with params: {'width': 0.9, 'height': 2.1, 'depth': 0.3, 'location': [1.25, 0.0, 1.05], 'rotation': [0.0, 0.0, 0.0], 'element_guid': '3hT8jJ64r25wI90Zuqvi_4', 'wall_guid': '3hT8jJ64r25wI90Zuqvi_4', 'slab_guid': None, 'opening_type': 'OPENING', 'name': 'Door Opening', 'verbose': False}
+[2026-04-16T23:37:37.592Z] 2026-04-16 23:37:37,592 [INFO] BlenderMCPServer: Command sent, waiting for response...
+[2026-04-16T23:37:37.599Z] 2026-04-16 23:37:37,599 [INFO] blender: loading file /app/new_project.ifc
+[2026-04-16T23:37:37.607Z] 2026-04-16 23:37:37,607 [INFO] blender: Creating object #1=IfcProject('3ca2eHy3v7BOX$2WYsaiSD',$,'Concrete Wall Demo',$,$,$,$,(#16,#21),#5)
+[2026-04-16T23:37:37.618Z] 2026-04-16 23:37:37,618 [INFO] blender: Creating object #23=IfcSlab('22ScEImznAtu_FMcsupTPY',$,'Ground Floor Slab',$,$,#36,#31,$,$)
+[2026-04-16T23:37:37.619Z] 2026-04-16 23:37:37,619 [INFO] blender: Creating object #37=IfcWall('3hT8jJ64r25wI90Zuqvi_4',$,'South Wall',$,$,#56,#48,$,$)
+[2026-04-16T23:37:37.620Z] 2026-04-16 23:37:37,620 [INFO] blender: Creating object #8=IfcBuildingStorey('2eum3ouxD4sQR_sXhCyJ69',$,'Level 0',$,$,$,$,$,$,$)
+[2026-04-16T23:37:37.620Z] 2026-04-16 23:37:37,620 [INFO] blender: Creating object #6=IfcSite('2Om7gfRgf3Vg2mmxB8mJwT',$,'Default Site',$,$,$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:37.620Z] 2026-04-16 23:37:37,620 [INFO] blender: Creating object #7=IfcBuilding('1Jtjknyo544Q_yejO1ekK5',$,'Default Building',$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:37.687Z] 2026-04-16 23:37:37,687 [INFO] BlenderMCPServer: Received 337 bytes of data
+[2026-04-16T23:37:37.687Z] 2026-04-16 23:37:37,687 [INFO] BlenderMCPServer: Response status: success
+[2026-04-16T23:37:37.687Z] INFO:     169.254.172.2:48292 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:37:37.687Z] TELEMETRY: Stateless response OK for tools/call
+[2026-04-16T23:37:38.024Z] TELEMETRY: Stateless bridge mode
+[2026-04-16T23:37:38.024Z] TELEMETRY: Stateless RPC method=tools/call id=1776382657731
+[2026-04-16T23:37:38.024Z] 2026-04-16 23:37:38,024 [INFO] BlenderMCPServer: Sending command: create_opening with params: {'width': 1.2, 'height': 1.2, 'depth': 0.3, 'location': [3.75, 0.0, 1.5], 'rotation': [0.0, 0.0, 0.0], 'element_guid': '3hT8jJ64r25wI90Zuqvi_4', 'wall_guid': '3hT8jJ64r25wI90Zuqvi_4', 'slab_guid': None, 'opening_type': 'OPENING', 'name': 'Window Opening', 'verbose': False}
+[2026-04-16T23:37:38.025Z] 2026-04-16 23:37:38,024 [INFO] BlenderMCPServer: Command sent, waiting for response...
+[2026-04-16T23:37:38.031Z] 2026-04-16 23:37:38,031 [INFO] blender: loading file /app/new_project.ifc
+[2026-04-16T23:37:38.039Z] 2026-04-16 23:37:38,039 [INFO] blender: Creating object #1=IfcProject('3ca2eHy3v7BOX$2WYsaiSD',$,'Concrete Wall Demo',$,$,$,$,(#16,#21),#5)
+[2026-04-16T23:37:38.050Z] 2026-04-16 23:37:38,049 [INFO] blender: Creating object #23=IfcSlab('22ScEImznAtu_FMcsupTPY',$,'Ground Floor Slab',$,$,#36,#31,$,$)
+[2026-04-16T23:37:38.060Z] 2026-04-16 23:37:38,060 [INFO] blender: Creating object #37=IfcWall('3hT8jJ64r25wI90Zuqvi_4',$,'South Wall',$,$,#56,#48,$,$)
+[2026-04-16T23:37:38.061Z] 2026-04-16 23:37:38,061 [INFO] blender: Creating object #7=IfcBuilding('1Jtjknyo544Q_yejO1ekK5',$,'Default Building',$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:38.062Z] 2026-04-16 23:37:38,062 [INFO] blender: Creating object #8=IfcBuildingStorey('2eum3ouxD4sQR_sXhCyJ69',$,'Level 0',$,$,$,$,$,$,$)
+[2026-04-16T23:37:38.062Z] 2026-04-16 23:37:38,062 [INFO] blender: Creating object #6=IfcSite('2Om7gfRgf3Vg2mmxB8mJwT',$,'Default Site',$,$,$,$,$,$,$,$,$,$,$)
+[2026-04-16T23:37:38.128Z] 2026-04-16 23:37:38,128 [INFO] BlenderMCPServer: Received 338 bytes of data
+[2026-04-16T23:37:38.128Z] 2026-04-16 23:37:38,128 [INFO] BlenderMCPServer: Response status: success
+[2026-04-16T23:37:38.129Z] INFO:     169.254.172.2:48292 - "POST /mcp HTTP/1.1" 200 OK
+[2026-04-16T23:37:38.129Z] TELEMETRY: Stateless response OK for tools/call

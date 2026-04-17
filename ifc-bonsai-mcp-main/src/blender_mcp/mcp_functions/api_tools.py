@@ -54,6 +54,30 @@ def execute_blender_code(ctx: Context, code: str) -> str:
         return json.dumps({"error": f"Error executing code: {str(e)}"}, indent=2)
 
 @mcp.tool()
+def export_ifc(ctx: Context) -> str:
+    """
+    Export and upload the completed architectural IFC model.
+    ALWAYS call this as the LAST step in your workflow after building all geometric elements.
+    It saves the project and returns the 3D model URL to the user.
+    """
+    try:
+        blender = get_blender_connection()
+        # Trigger blender to write the file to disk
+        save_result = blender.send_command("export_ifc", {})
+        if save_result.get("status") == "error":
+            return json.dumps(save_result, indent=2)
+            
+        # Upload the saved file to Supabase Storage
+        from ..supabase_uploader import upload_ifc_to_supabase
+        session_id = str(getattr(ctx, "session_id", "default"))
+        result = upload_ifc_to_supabase(session_id=session_id)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error exporting IFC: {str(e)}")
+        return json.dumps({"error": f"Error exporting IFC: {str(e)}"}, indent=2)
+
+
+@mcp.tool()
 def list_blender_commands() -> str:
     """
     List all available Blender addon commands with descriptions.
