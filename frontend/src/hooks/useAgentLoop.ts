@@ -1,322 +1,53 @@
 /**
  * Client-side agentic loop using Puter.js + Claude Sonnet.
- * Replaces the Supabase Edge Function entirely.
+ * The Supabase Edge Function is used purely as an MCP tool proxy.
  */
 
 // ══ CONFIG ══
-const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
+const EDGE_PROXY_URL = "https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat";
 const LLM_MODEL = "claude-sonnet-4-6";
 const MAX_TURNS = 25;
+
+// We use the anon key so the Edge Function accepts the request
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU";
 
 // ══ Puter.js global ══
 declare const puter: any;
 
-// ══ MCP CLIENT ══
-let mcpSessionId = "";
+// ══ EDGE FUNCTION PROXY CLIENT ══
 
-function extractText(content: unknown): string | undefined {
-  if (!content) return undefined;
-  if (Array.isArray(content)) {
-    for (const item of content) {
-      if (Array.isArray(item)) {
-        const r = extractText(item);
-        if (r) return r;
-      } else if (typeof item === "object" && item !== null) {
-        const o = item as Record<string, unknown>;
-        if (typeof o.text === "string") return o.text;
-      }
-    }
-  }
-  return undefined;
-}
-
-async function mcpPost(body: unknown): Promise<unknown> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
-
-  const res = await fetch(MCP_URL, {
+async function proxyRequest(action: string, payload: Record<string, unknown> = {}): Promise<any> {
+  const sessionId = window.sessionStorage.getItem('mcpSessionId') || '';
+  
+  const res = await fetch(EDGE_PROXY_URL, {
     method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120000),
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": SUPABASE_ANON_KEY,
+      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`
+    },
+    body: JSON.stringify({
+      action,
+      ...payload
+    })
   });
 
-  const s = res.headers.get("mcp-session-id");
-  if (s) mcpSessionId = s;
-
-  const text = await res.text();
-  if (text.trim().startsWith("data:")) {
-    const l = text.split("\n").find((l) => l.startsWith("data:"));
-    return l ? JSON.parse(l.slice(5).trim()) : {};
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Edge Proxy Error: ${res.status} - ${text}`);
   }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
+
+  const data = await res.json();
+  
+  if (data.error) {
+    throw new Error(`Edge Proxy Error: ${data.error}`);
   }
-}
 
-async function mcpInit(): Promise<void> {
-  await mcpPost({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "infrastudio", version: "9.0" },
-    },
-  });
-  await mcpPost({
-    jsonrpc: "2.0",
-    method: "notifications/initialized",
-    params: {},
-  }).catch(() => {});
-}
+  if (data.session_id) {
+    window.sessionStorage.setItem('mcpSessionId', data.session_id);
+  }
 
-async function mcpCallTool(
-  name: string,
-  args: Record<string, unknown>
-): Promise<string> {
-  const res = (await mcpPost({
-    jsonrpc: "2.0",
-    id: Date.now(),
-    method: "tools/call",
-    params: { name, arguments: args },
-  })) as Record<string, unknown>;
-
-  return (
-    extractText((res?.result as Record<string, unknown>)?.content) ||
-    JSON.stringify(res?.result ?? res?.error ?? "done")
-  );
-}
-
-// ══ FETCH MCP TOOLS ══
-let cachedTools: any[] = [];
-
-async function fetchMcpTools(): Promise<any[]> {
-  if (cachedTools.length > 0) return cachedTools;
-
-  const res = (await mcpPost({
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/list",
-    params: {},
-  })) as Record<string, unknown>;
-
-  const tools = ((res?.result as any)?.tools || []) as any[];
-
-  cachedTools = tools.map((t: any) => ({
-    type: "function",
-    function: {
-      name: t.name,
-      description: (t.description || "").slice(0, 1024),
-      parameters: t.inputSchema || { type: "object", properties: {} },
-    },
-  }));
-
-  return cachedTools;
-}
-
-// ══ SYSTEM PROMPT ══
-function buildSystemPrompt(): string {
-  return `You are InfraStudio — an expert AI BIM architect. Your job is to build complete, realistic, architectural IFC models by calling the available MCP tools.
-
-════════════════════════════════════════════════════
-STEP 0 — MANDATORY PLANNING (before ANY tool call)
-════════════════════════════════════════════════════
-Before calling any tool, you MUST first plan the ENTIRE layout in your head:
-1. Determine the overall footprint dimensions (W × L meters)
-2. Sketch the wall positions (which walls form the perimeter, which are interior partitions)
-3. Identify every opening, door, and window position along each wall
-4. Verify that ALL walls connect at corners to form FULLY ENCLOSED rooms
-5. Only then start executing tool calls
-
-You are an architect. Think like one. Every room must be FULLY ENCLOSED by walls on all sides.
-
-════════════════════════════════════════════════════
-CRITICAL RULES
-════════════════════════════════════════════════════
-- NEVER pass null, None, or omit any parameter. Every parameter MUST have a real value.
-- NEVER leave a room open — every room needs 4 walls (or 3 walls + 1 shared wall).
-- ALWAYS apply surface styles and materials to every element. No plain white models.
-- ALWAYS call export_ifc as the very last step.
-- ALWAYS add doors between rooms and at entry points.
-- For interior partition walls, connect them precisely from one exterior wall to another.
-
-════════════════════════════════════════════════════
-BUILD WORKFLOW — ALWAYS FOLLOW THIS ORDER
-════════════════════════════════════════════════════
-1. initialize_project
-2. get_ifc_scene_overview — inspect existing elements, NEVER duplicate
-3. Create floor slab (covering the full footprint)
-4. Create ALL perimeter walls (4 walls forming a closed rectangle)
-5. Create interior partition walls (dividing into rooms)
-6. Create openings in walls for doors/windows
-7. Create doors and windows inside those openings
-8. Create surface styles and apply to ALL elements
-9. Create roof (if requested)
-10. Call export_ifc — ALWAYS the last tool call
-11. Reply with a summary
-
-════════════════════════════════════════════════════
-WALL PLACEMENT — HOW TO FORM ENCLOSED ROOMS
-════════════════════════════════════════════════════
-For a W×L footprint (e.g. 8×6 meters, wall thickness T=0.2):
-
-  Perimeter walls:
-    South wall: location=[0, 0, 0], length=W, rotation=[0,0,0]
-    North wall: location=[0, L, 0], length=W, rotation=[0,0,0]
-    West wall:  location=[0, 0, 0], length=L, rotation=[0,0,1.5708]
-    East wall:  location=[W, 0, 0], length=L, rotation=[0,0,1.5708]
-
-  Interior partition (e.g. dividing at x=5.0 from south to north):
-    Partition:  location=[5.0, 0, 0], length=L, rotation=[0,0,1.5708]
-
-  Interior partition (e.g. horizontal divider from x=5 to x=W at y=3):
-    Partition:  location=[5.0, 3.0, 0], length=(W-5.0), rotation=[0,0,0]
-
-Floor slab: polyline=[[0,0,0],[W,0,0],[W,L,0],[0,L,0]], depth=0.2
-
-════════════════════════════════════════════════════
-EXACT TOOL SIGNATURES — ALWAYS USE ALL PARAMS
-════════════════════════════════════════════════════
-
-create_wall — ALWAYS specify ALL of these:
-  name: string — meaningful name e.g. "North Wall", "Bathroom Partition"
-  dimensions: { "height": 3.0, "length": 5.0, "thickness": 0.2 }
-  location: [x, y, z] — starting corner of the wall
-  rotation: [0.0, 0.0, 0.0] — use [0,0,1.5708] for walls running in Y direction
-  geometry_properties: { "represents_3d": true }
-  material: "Concrete" — e.g. "Concrete", "Brick", "Timber"
-  wall_type_guid: "" — empty string if no specific type
-
-create_slab — ALWAYS specify ALL of these:
-  name: string
-  polyline: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] — corner points of slab
-  depth: 0.2 — thickness in meters
-  location: [0.0, 0.0, 0.0]
-  rotation: [0.0, 0.0, 0.0]
-  geometry_properties: { "represents_3d": true }
-  material: "Reinforced Concrete"
-
-create_opening — creates a void hole in a wall for a door or window:
-  width: float — opening width in meters
-  height: float — opening height in meters
-  depth: 0.3 — slightly larger than wall thickness
-  location: [x, y, z] — position of the opening center along the wall
-  element_guid: "wall_guid" — GUID of the wall to cut into
-  wall_guid: "wall_guid" — same as element_guid
-  name: string — e.g. "Door Opening", "Window Opening"
-
-create_door — ALWAYS specify ALL of these:
-  name: string — e.g. "Entry Door", "Bathroom Door"
-  dimensions: { "overall_height": 2.1, "overall_width": 0.9 }
-  operation_type: "SINGLE_SWING_LEFT"
-  location: [x, y, z] — MUST BE IDENTICAL to the opening location
-  rotation: [0.0, 0.0, 0.0]
-  frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
-  panel_properties: { "panel_depth": 0.035, "panel_width": 0.84 }
-
-create_window — ALWAYS specify ALL of these:
-  name: string
-  dimensions: { "overall_height": 1.2, "overall_width": 1.0 }
-  partition_type: "SINGLE_PANEL"
-  location: [x, y, z] — MUST BE IDENTICAL to the opening location
-  rotation: [0.0, 0.0, 0.0]
-  frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
-  panel_properties: { "panel_depth": 0.025 }
-  wall_guid: "guid_of_host_wall"
-  create_opening: true
-
-create_roof — ALWAYS specify ALL of these:
-  polyline: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] — corners at roof level
-  roof_type: "FLAT" or "GABLE" or "HIP"
-  angle: 0 — degrees (0 for FLAT)
-  thickness: 0.3
-  name: string
-  rotation: [0.0, 0.0, 0.0]
-
-create_surface_style — ALWAYS specify ALL of these:
-  name: string — e.g. "Concrete Style"
-  color: [R, G, B] — values 0.0-1.0
-  transparency: 0.0
-  style_type: "shading"
-
-apply_style_to_object:
-  object_guids: ["guid1", "guid2"]
-  style_name: string — MUST match a created style name
-
-════════════════════════════════════════════════════
-MATERIAL COLOR GUIDE
-════════════════════════════════════════════════════
-Concrete:     [0.75, 0.75, 0.75], transparency=0.0
-Brick:        [0.72, 0.35, 0.20], transparency=0.0
-Timber:       [0.55, 0.35, 0.15], transparency=0.0
-Glass:        [0.60, 0.80, 0.90], transparency=0.7
-Steel:        [0.60, 0.65, 0.72], transparency=0.0
-Plaster:      [0.95, 0.93, 0.88], transparency=0.0
-White Tile:   [0.95, 0.95, 0.95], transparency=0.0
-Floor Tile:   [0.85, 0.82, 0.78], transparency=0.0
-
-════════════════════════════════════════════════════
-HOW TO PLAN ANY BUILDING — MANDATORY THINKING PROCESS
-════════════════════════════════════════════════════
-Before making ANY tool call, you MUST think through these steps for EVERY request:
-
-STEP A — DETERMINE THE FOOTPRINT:
-  Read the user's request carefully. Decide the overall rectangular footprint W×L.
-  If the user says "a room", pick a realistic size (e.g. 6×5m for a bedroom, 8×6m for a living room).
-  If the user says "a house", pick a full house footprint (e.g. 12×10m).
-  If the user specifies dimensions, use exactly those.
-
-STEP B — PLAN EVERY ROOM:
-  Divide the footprint into rooms. For each room, define its X and Y range:
-    Room 1: x=[0 → Xdiv], y=[0 → L]    (the main/larger room)
-    Room 2: x=[Xdiv → W], y=[0 → Ydiv]  (a smaller room like bathroom)
-    Room 3: x=[Xdiv → W], y=[Ydiv → L]  (another room like toilet)
-  Every room MUST be fully enclosed by walls on ALL 4 sides (exterior + partition walls).
-
-STEP C — COMPUTE WALL COORDINATES:
-  Perimeter (these ALWAYS exist for any enclosed building):
-    South wall: location=[0, 0, 0],   length=W,   rotation=[0,0,0]
-    North wall: location=[0, L, 0],   length=W,   rotation=[0,0,0]
-    West wall:  location=[0, 0, 0],   length=L,   rotation=[0,0,1.5708]
-    East wall:  location=[W, 0, 0],   length=L,   rotation=[0,0,1.5708]
-  Partition walls (to divide rooms):
-    Vertical partition at x=Xdiv:   location=[Xdiv, 0, 0], length=L, rotation=[0,0,1.5708]
-    Horizontal partition at y=Ydiv: location=[Xdiv, Ydiv, 0], length=(W-Xdiv), rotation=[0,0,0]
-  ALL walls: height=3.0, thickness=0.2
-
-STEP D — PLAN DOORS AND WINDOWS:
-  Every room needs at least one door for access.
-  Door opening z-position: half the door height (e.g. z=1.05 for a 2.1m door)
-  Window opening z-position: typically 1.0-1.5m above floor
-  Door/window location MUST be along the wall they sit in.
-  For a door on a south wall (runs in X): location=[X_pos_along_wall, 0, z]
-  For a door on a west wall (runs in Y):  location=[0, Y_pos_along_wall, z]
-  For a door on a partition at x=Xdiv:    location=[Xdiv, Y_pos, z]
-
-STEP E — PLAN MATERIALS:
-  Create a surface style for EVERY material type used (concrete, brick, glass, tile, etc.)
-  Apply the appropriate style to EVERY element. No element should be left unstyled.
-
-STEP F — EXECUTE: Now call tools in this order:
-  1. initialize_project → 2. create_slab → 3. all create_wall calls → 4. create_opening for each door/window → 5. create_door / create_window → 6. create_surface_style → 7. apply_style_to_object → 8. create_roof (if needed) → 9. export_ifc
-
-IMPORTANT RULES FOR ANY REQUEST:
-- If the user asks for "a room" → build 4 walls forming a closed rectangle. No open sides.
-- If the user asks for multiple rooms → every room must be enclosed. Use partition walls.
-- If the user asks for specific room types (bedroom, kitchen, bathroom) → use appropriate sizes.
-- If the user doesn't specify dimensions → use realistic architectural dimensions.
-- ALWAYS add an entry door. ALWAYS add windows for natural light.
-- NEVER leave any wall gap. Walls must meet at corners precisely.
-- NEVER skip applying materials/styles. The model must look realistic.
-
-Think deeply. Be precise. Build a complete, realistic, fully enclosed building.`;
+  return data;
 }
 
 // ══ MAIN AGENT LOOP (runs in browser via Puter.js) ══
@@ -330,18 +61,18 @@ export async function runPuterAgentLoop(
   userMessage: string,
   onStep: (step: string) => void
 ): Promise<AgentResult> {
-  // Initialize MCP connection
-  onStep("🔌 Connecting to MCP backend...");
-  await mcpInit();
+  // 1. Initialize MCP and fetch tools and system prompt via Edge proxy
+  onStep("🔌 Connecting to MCP proxy...");
+  
+  const initData = await proxyRequest("init");
+  const tools = initData.tools || [];
+  const systemPrompt = initData.system_prompt || "You are an AI architect.";
 
-  // Fetch available tools
-  onStep("🔧 Loading tools...");
-  const tools = await fetchMcpTools();
   onStep(`✅ Loaded ${tools.length} tools`);
 
   // Build conversation
   const messages: any[] = [
-    { role: "system", content: buildSystemPrompt() },
+    { role: "system", content: systemPrompt },
     { role: "user", content: userMessage },
   ];
 
@@ -351,7 +82,7 @@ export async function runPuterAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
-    // Call Claude via Puter.js
+    // Call Claude via Puter.js on the client-side
     const response = await puter.ai.chat(messages, {
       model: LLM_MODEL,
       tools,
@@ -375,7 +106,7 @@ export async function runPuterAgentLoop(
       return { reply, ifc_url, steps };
     }
 
-    // Execute each tool call via MCP
+    // Execute each tool call via Edge proxy
     for (const call of toolCalls) {
       const toolName = call.function?.name;
       let toolArgs: Record<string, unknown> = {};
@@ -391,7 +122,8 @@ export async function runPuterAgentLoop(
 
       let toolResult = "";
       try {
-        toolResult = await mcpCallTool(toolName, toolArgs);
+        const proxyRes = await proxyRequest("call_tool", { name: toolName, args: toolArgs });
+        toolResult = proxyRes.result;
 
         // Track IFC URL from export_ifc
         if (toolName === "export_ifc") {
@@ -408,11 +140,6 @@ export async function runPuterAgentLoop(
         toolResult = JSON.stringify({ error: String(e) });
         steps.push(`  ✗ Error: ${String(e).slice(0, 100)}`);
         onStep(`  ✗ ${toolName} failed`);
-      }
-
-      // Truncate large results
-      if (toolResult.length > 3000) {
-        toolResult = toolResult.slice(0, 3000) + "... [truncated]";
       }
 
       // Feed tool result back into the conversation

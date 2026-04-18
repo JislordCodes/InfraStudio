@@ -2,19 +2,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_MODEL = "claude-sonnet-4-6";
-const LLM_URL = "https://api.puter.com/puterai/openai/v1/chat/completions";
-const PUTER_TOKEN = Deno.env.get("PUTER_AUTH_TOKEN") || "";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-
-// ══ LOGGING ══
-const debugLog: string[] = [];
-function log(msg: string) { console.log(msg); debugLog.push(msg); }
 
 // ══ MCP CLIENT ══
 let mcpSessionId = "";
@@ -58,46 +51,103 @@ async function mcpPost(body: unknown): Promise<unknown> {
 async function mcpInit(): Promise<void> {
   await mcpPost({
     jsonrpc: "2.0", id: 1, method: "initialize",
-    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "8.0" } }
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
   });
   await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }).catch(() => {});
-  log("MCP ready");
 }
 
 async function mcpCallTool(name: string, args: Record<string, unknown>): Promise<string> {
-  log(`CALL ${name}(${JSON.stringify(args).slice(0, 200)})`);
   const res = await mcpPost({
     jsonrpc: "2.0", id: Date.now(), method: "tools/call",
     params: { name, arguments: args }
   }) as Record<string, unknown>;
-  const text = extractText((res?.result as Record<string, unknown>)?.content) || JSON.stringify(res?.result ?? res?.error ?? "done");
-  log(`=> ${name}: ${text.slice(0, 300)}`);
-  return text;
+  return extractText((res?.result as Record<string, unknown>)?.content) || JSON.stringify(res?.result ?? res?.error ?? "done");
 }
 
-// ══ FETCH FULL TOOL LIST FOR THE LLM ══
-let cachedMcpTools: any[] = [];
 async function fetchMcpTools(): Promise<any[]> {
-  if (cachedMcpTools.length > 0) return cachedMcpTools;
-  try {
-    const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) as Record<string, unknown>;
-    const tools = ((res?.result as any)?.tools || []) as any[];
-    // Convert MCP tool schema → OpenAI function schema
-    cachedMcpTools = tools.map(t => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: (t.description || "").slice(0, 1024),
-        parameters: t.inputSchema || { type: "object", properties: {} }
-      }
-    }));
-    log(`Loaded ${cachedMcpTools.length} MCP tools for LLM`);
-    return cachedMcpTools;
-  } catch (e) {
-    log("Failed to load tool catalog: " + e);
-    return [];
-  }
+  const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) as Record<string, unknown>;
+  const tools = ((res?.result as any)?.tools || []) as any[];
+  return tools.map(t => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: (t.description || "").slice(0, 1024),
+      parameters: t.inputSchema || { type: "object", properties: {} }
+    }
+  }));
 }
+
+// ══ HTTP HANDLER — MCP PROXY ══
+// The frontend runs the LLM (Puter.js + Claude, free).
+// This Edge Function is just a proxy for MCP tool operations.
+//
+// Actions:
+//   { action: "init" }         → initializes MCP session, returns tools + system prompt
+//   { action: "call_tool", name: "...", args: {...} }  → executes a tool, returns result
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405, headers: { ...CORS, "Content-Type": "application/json" }
+    });
+  }
+
+  try {
+    const payload = await req.json();
+    const action = payload.action || "init";
+
+    if (action === "init") {
+      // Initialize MCP and return the tool list + system prompt
+      await mcpInit();
+      const tools = await fetchMcpTools();
+      return new Response(JSON.stringify({
+        tools,
+        system_prompt: buildSystemPrompt(),
+        session_id: mcpSessionId,
+      }), {
+        headers: { ...CORS, "Content-Type": "application/json" }
+      });
+    }
+
+    if (action === "call_tool") {
+      const { name, args } = payload;
+      if (!name) {
+        return new Response(JSON.stringify({ error: "Missing tool name" }), {
+          status: 400, headers: { ...CORS, "Content-Type": "application/json" }
+        });
+      }
+
+      // Make sure MCP is initialized
+      if (!mcpSessionId) await mcpInit();
+
+      const result = await mcpCallTool(name, args || {});
+
+      // Truncate large results to avoid bloating the chat history
+      const truncated = result.length > 3000 ? result.slice(0, 3000) + "... [truncated]" : result;
+
+      return new Response(JSON.stringify({
+        result: truncated,
+        session_id: mcpSessionId,
+      }), {
+        headers: { ...CORS, "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {
+      status: 400, headers: { ...CORS, "Content-Type": "application/json" }
+    });
+
+  } catch (err) {
+    return new Response(JSON.stringify({
+      error: String(err).slice(0, 800),
+      status: "error"
+    }), {
+      status: 200,
+      headers: { ...CORS, "Content-Type": "application/json" }
+    });
+  }
+});
 
 // ══ SYSTEM PROMPT ══
 function buildSystemPrompt(): string {
@@ -113,7 +163,7 @@ Before calling any tool, you MUST first plan the ENTIRE layout in your head:
 4. Verify that ALL walls connect at corners to form FULLY ENCLOSED rooms
 5. Only then start executing tool calls
 
-You are an architect. Think like one. Every room must be FULLY ENCLOSED by walls on all sides. Interior partition walls must run from one wall to the opposite wall to divide the space.
+You are an architect. Think like one. Every room must be FULLY ENCLOSED by walls on all sides.
 
 ════════════════════════════════════════════════════
 CRITICAL RULES
@@ -296,189 +346,3 @@ IMPORTANT RULES FOR ANY REQUEST:
 
 Think deeply. Be precise. Build a complete, realistic, fully enclosed building.`;
 }
-
-// ══ AGENTIC TOOL-CALLING LOOP ══
-async function runAgentLoop(
-  messages: any[],
-  tools: any[],
-  steps: string[]
-): Promise<{ reply: string; ifc_url?: string; steps: string[] }> {
-  const MAX_TURNS = 20;
-  const MAX_TOOL_RESULT_LEN = 2000;
-  const MAX_MESSAGES = 40;
-  let ifc_url: string | undefined;
-
-  for (let turn = 0; turn < MAX_TURNS; turn++) {
-    log(`Agent turn ${turn + 1}/${MAX_TURNS}`);
-
-    // Call Claude via Puter's OpenAI-compatible API
-    const res = await fetch(LLM_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${PUTER_TOKEN}`
-      },
-      body: JSON.stringify({
-        model: LLM_MODEL,
-        messages,
-        tools,
-        tool_choice: "auto",
-        stream: false
-      }),
-      signal: AbortSignal.timeout(120000)
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Puter API error ${res.status}: ${errText.slice(0, 300)}`);
-    }
-
-    const llmData = await res.json();
-    const choice = llmData.choices?.[0];
-    if (!choice) throw new Error("No LLM response choice");
-
-    const assistantMsg = choice.message;
-
-    // Normalize content — Claude may return array of content blocks
-    if (assistantMsg.content && Array.isArray(assistantMsg.content)) {
-      const textBlock = assistantMsg.content.find((b: any) => b.type === "text");
-      if (textBlock) assistantMsg.content = textBlock.text;
-      else assistantMsg.content = assistantMsg.content.map((b: any) => b.text || "").join("");
-    }
-
-    messages.push(assistantMsg);
-
-    const toolCalls = assistantMsg.tool_calls || [];
-
-    // No tool calls → agent is done
-    if (toolCalls.length === 0) {
-      const reply = assistantMsg.content || "I have completed building your IFC model.";
-      return { reply, ifc_url, steps };
-    }
-
-    // Execute each tool call
-    for (const call of toolCalls) {
-      const toolName = call.function?.name;
-      let toolArgs: Record<string, unknown> = {};
-      try {
-        toolArgs = JSON.parse(call.function?.arguments || "{}");
-      } catch {
-        toolArgs = {};
-      }
-
-      steps.push(`🔧 ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)})`);
-
-      let toolResult = "";
-      try {
-        toolResult = await mcpCallTool(toolName, toolArgs);
-
-        // Track IFC URL from export_ifc
-        if (toolName === "export_ifc") {
-          try {
-            const parsed = JSON.parse(toolResult);
-            if (parsed.file_url) ifc_url = parsed.file_url;
-            else if (parsed.success && parsed.ifc_url) ifc_url = parsed.ifc_url;
-          } catch {}
-        }
-
-        steps.push(`  ✓ ${toolResult.slice(0, 100)}`);
-      } catch (e) {
-        toolResult = JSON.stringify({ error: String(e) });
-        steps.push(`  ✗ Error: ${String(e).slice(0, 100)}`);
-      }
-
-      // Truncate large tool results to prevent memory exhaustion
-      if (toolResult.length > MAX_TOOL_RESULT_LEN) {
-        toolResult = toolResult.slice(0, MAX_TOOL_RESULT_LEN) + "... [truncated]";
-      }
-
-      // Feed tool result back into the conversation
-      messages.push({
-        role: "tool",
-        tool_call_id: call.id,
-        content: toolResult
-      });
-
-      // Trim debug log to avoid memory buildup
-      if (debugLog.length > 50) debugLog.splice(0, debugLog.length - 50);
-    }
-
-    // Sliding window: keep system prompt + last N messages to avoid OOM
-    if (messages.length > MAX_MESSAGES) {
-      const system = messages[0]; // system prompt
-      messages.splice(1, messages.length - MAX_MESSAGES);
-      messages[0] = system;
-      log(`Trimmed conversation to ${messages.length} messages`);
-    }
-  }
-
-  return { reply: "Building complete (max turns reached).", ifc_url, steps };
-}
-
-// ══ HTTP HANDLER ══
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
-  if (!PUTER_TOKEN) return new Response(JSON.stringify({ error: "No Puter auth token configured" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
-
-  debugLog.length = 0;
-
-  try {
-    const payload = await req.json() as any;
-    mcpSessionId = payload.session_id || "";
-
-    const incomingMsgs: any[] = payload.messages || [];
-    if (!incomingMsgs.length) {
-      return new Response(JSON.stringify({ error: "No messages provided" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
-    }
-
-    // Strip any internal helper tags from history if passed from frontend
-    const cleanHistory = incomingMsgs
-      .filter(m => m.role === "user" || m.role === "assistant" || m.role === "tool")
-      .filter(m => !m.content?.includes("[INFRASTUDIO_RAG_DONE]") && !m.content?.includes("[INFRASTUDIO_EXEC_ERROR]"))
-      .map(m => ({ role: m.role, content: m.content || "", ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.tool_call_id && { tool_call_id: m.tool_call_id }) }));
-
-    // Init MCP
-    await mcpInit();
-
-    // Fetch all available tools
-    const tools = await fetchMcpTools();
-
-    // Build message array: system + clean history
-    const messages = [
-      { role: "system", content: buildSystemPrompt() },
-      ...cleanHistory
-    ];
-
-    const steps: string[] = [];
-
-    log(`Starting agent loop | ${tools.length} tools | ${messages.length} messages`);
-
-    const result = await runAgentLoop(messages, tools, steps);
-
-    const responseBody = {
-      status: "completed",
-      reply: result.reply,
-      ifc_url: result.ifc_url,
-      steps: result.steps,
-      success: true,
-      session_id: mcpSessionId,
-      debug: debugLog
-    };
-
-    return new Response(JSON.stringify(responseBody), {
-      headers: { ...CORS, "Content-Type": "application/json" }
-    });
-
-  } catch (err) {
-    log("FATAL: " + err);
-    return new Response(JSON.stringify({
-      error: String(err).slice(0, 800),
-      debug: debugLog,
-      status: "error"
-    }), {
-      status: 200,
-      headers: { ...CORS, "Content-Type": "application/json" }
-    });
-  }
-});
