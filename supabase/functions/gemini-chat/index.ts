@@ -1,10 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { init } from 'npm:@heyputer/puter.js';
 
 // ══ CONFIG ══
-const LLM_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_MODEL = "gemma-4-31b-it";
-const LLM_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const LLM_MODEL = "claude-sonnet-4-6";
+
+// Initialize Puter.js with auth token
+const puter = init(Deno.env.get("PUTER_AUTH_TOKEN") || "");
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -311,47 +313,32 @@ async function runAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     log(`Agent turn ${turn + 1}/${MAX_TURNS}`);
 
-    // Call LLM with full tool schema
-    const res = await fetch(LLM_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${LLM_API_KEY}`
-      },
-      body: JSON.stringify({
+    // Call Claude via Puter.js
+    let assistantMsg: any;
+    try {
+      const response = await puter.ai.chat(messages, {
         model: LLM_MODEL,
-        messages,
         tools,
         tool_choice: "auto",
-        temperature: 0.5,
-        max_tokens: 4096,
-        stream: false
-      }),
-      signal: AbortSignal.timeout(90000)
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`LLM API error ${res.status}: ${errText.slice(0, 300)}`);
+      });
+      assistantMsg = response.message || response;
+    } catch (e) {
+      throw new Error(`Puter AI error: ${String(e).slice(0, 300)}`);
     }
 
-    const llmData = await res.json();
-    const choice = llmData.choices?.[0];
-    if (!choice) throw new Error("No LLM response choice");
-
-    const assistantMsg = choice.message;
-    // Strip <thought> tags from content if present
-    if (assistantMsg.content) {
-      assistantMsg.content = assistantMsg.content.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
+    // Normalize content to string
+    if (assistantMsg.content && Array.isArray(assistantMsg.content)) {
+      const textBlock = assistantMsg.content.find((b: any) => b.type === "text");
+      if (textBlock) assistantMsg.content = textBlock.text;
+      else assistantMsg.content = assistantMsg.content.map((b: any) => b.text || "").join("");
     }
 
     messages.push(assistantMsg);
 
-    const finishReason = choice.finish_reason;
     const toolCalls = assistantMsg.tool_calls || [];
 
     // No tool calls → agent is done
-    if (toolCalls.length === 0 || finishReason === "stop") {
+    if (toolCalls.length === 0) {
       const reply = assistantMsg.content || "I have completed building your IFC model.";
       return { reply, ifc_url, steps };
     }
