@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown } from 'lucide-react';
+import { runPuterAgentLoop } from '../hooks/useAgentLoop';
 
 interface Message {
   id: string;
@@ -10,19 +11,13 @@ interface Message {
   tool_call_id?: string;
 }
 
-// Map our internal roles
-const toGeminiRole = (role: 'user' | 'assistant' | 'tool') => {
-  if (role === 'tool') return 'tool';
-  return role === 'assistant' ? 'assistant' : 'user';
-};
-
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
 }
 
 export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'assistant', content: "Hello! I'm your BIM Assistant powered by Gemini AI. Ask me anything about this model." }
+    { id: '1', role: 'assistant', content: "Hello! I'm your BIM Assistant powered by Claude Sonnet. Ask me to build anything — rooms, houses, offices." }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -54,51 +49,26 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     setCurrentSteps([]);
 
     try {
-      setCurrentSteps(['🤖 Agent thinking...']);
+      setCurrentSteps(['🤖 Agent starting...']);
 
-      // Build clean message history (only user/assistant roles)
-      const history = currentMessages
-        .filter(m => m.id !== '1')
-        .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content || '' }));
+      const result = await runPuterAgentLoop(
+        userMsg.content,
+        (step: string) => {
+          setCurrentSteps(prev => [...prev.slice(-15), step]);
+        }
+      );
 
-      const controller = new AbortController();
-      // Agent loop can run for up to 5 minutes building complex models
-      const timeoutId = setTimeout(() => controller.abort(), 300000);
-
-      const res = await fetch('https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU',
-        },
-        body: JSON.stringify({
-          messages: history,
-          session_id: window.sessionStorage.getItem('mcpSessionId') || ''
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-
-      const data = await res.json();
-
-      if (data.error) throw new Error(data.error);
-      if (data.session_id) window.sessionStorage.setItem('mcpSessionId', data.session_id);
-
-      // Show tool call steps in the progress area
-      if (data.steps?.length > 0) setCurrentSteps(data.steps);
+      // Show final steps
+      if (result.steps?.length > 0) setCurrentSteps(result.steps.slice(-10));
 
       // Auto-load IFC model if returned
-      if (data.ifc_url && onLoadIfcUrl) {
-        console.log('Auto-loading IFC model:', data.ifc_url);
-        onLoadIfcUrl(data.ifc_url);
+      if (result.ifc_url && onLoadIfcUrl) {
+        console.log('Auto-loading IFC model:', result.ifc_url);
+        onLoadIfcUrl(result.ifc_url);
       }
 
       // Append final reply
-      const replyText = data.reply || 'I have completed your request.';
+      const replyText = result.reply || 'I have completed your request.';
       const finalMsg: Message = { id: Date.now().toString(), role: 'assistant', content: replyText };
       currentMessages = [...currentMessages, finalMsg];
       setMessages(currentMessages);
@@ -107,13 +77,10 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     } catch (err) {
       console.error('Agent error:', err);
       const detail = err instanceof Error ? err.message : String(err);
-      const isTimeout = detail.toLowerCase().includes('timeout') || detail.toLowerCase().includes('aborted');
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: isTimeout
-          ? '⏱️ The agent timed out. Try a simpler request or check if Blender is running.'
-          : `⚠️ Agent failed: ${detail.slice(0, 200)}`,
+        content: `⚠️ Agent failed: ${detail.slice(0, 300)}`,
       }]);
       setCurrentSteps([]);
     } finally {
