@@ -241,43 +241,58 @@ White Tile:   [0.95, 0.95, 0.95], transparency=0.0
 Floor Tile:   [0.85, 0.82, 0.78], transparency=0.0
 
 ════════════════════════════════════════════════════
-COMPLETE WORKED EXAMPLE — FOLLOW THIS PATTERN
+HOW TO PLAN ANY BUILDING — MANDATORY THINKING PROCESS
 ════════════════════════════════════════════════════
-User asks: "Create an enclosed room with a bathroom"
+Before making ANY tool call, you MUST think through these steps for EVERY request:
 
-STEP 1 — PLAN THE LAYOUT (think before acting):
-  Overall footprint: 8m wide × 6m deep
-  Main room: 0→5m (x), 0→6m (y) = 5×6m
-  Bathroom:  5→8m (x), 0→3m (y) = 3×3m
-  Toilet:    5→8m (x), 3→6m (y) = 3×3m
-  Wall height: 3m, thickness: 0.2m
+STEP A — DETERMINE THE FOOTPRINT:
+  Read the user's request carefully. Decide the overall rectangular footprint W×L.
+  If the user says "a room", pick a realistic size (e.g. 6×5m for a bedroom, 8×6m for a living room).
+  If the user says "a house", pick a full house footprint (e.g. 12×10m).
+  If the user specifies dimensions, use exactly those.
 
-STEP 2 — PERIMETER WALLS (4 walls to enclose the full footprint):
-  South wall: location=[0,0,0], length=8.0, rotation=[0,0,0]
-  North wall: location=[0,6,0], length=8.0, rotation=[0,0,0]
-  West wall:  location=[0,0,0], length=6.0, rotation=[0,0,1.5708]
-  East wall:  location=[8,0,0], length=6.0, rotation=[0,0,1.5708]
+STEP B — PLAN EVERY ROOM:
+  Divide the footprint into rooms. For each room, define its X and Y range:
+    Room 1: x=[0 → Xdiv], y=[0 → L]    (the main/larger room)
+    Room 2: x=[Xdiv → W], y=[0 → Ydiv]  (a smaller room like bathroom)
+    Room 3: x=[Xdiv → W], y=[Ydiv → L]  (another room like toilet)
+  Every room MUST be fully enclosed by walls on ALL 4 sides (exterior + partition walls).
 
-STEP 3 — INTERIOR PARTITION WALLS:
-  Partition 1 (vertical, separating main room from bathroom/toilet):
-    location=[5,0,0], length=6.0, rotation=[0,0,1.5708]
-  Partition 2 (horizontal, separating bathroom from toilet):
-    location=[5,3,0], length=3.0, rotation=[0,0,0]
+STEP C — COMPUTE WALL COORDINATES:
+  Perimeter (these ALWAYS exist for any enclosed building):
+    South wall: location=[0, 0, 0],   length=W,   rotation=[0,0,0]
+    North wall: location=[0, L, 0],   length=W,   rotation=[0,0,0]
+    West wall:  location=[0, 0, 0],   length=L,   rotation=[0,0,1.5708]
+    East wall:  location=[W, 0, 0],   length=L,   rotation=[0,0,1.5708]
+  Partition walls (to divide rooms):
+    Vertical partition at x=Xdiv:   location=[Xdiv, 0, 0], length=L, rotation=[0,0,1.5708]
+    Horizontal partition at y=Ydiv: location=[Xdiv, Ydiv, 0], length=(W-Xdiv), rotation=[0,0,0]
+  ALL walls: height=3.0, thickness=0.2
 
-STEP 4 — DOORS:
-  Entry door on south wall at x=2.0: opening at [2.0, 0, 1.05]
-  Bathroom door on partition 1 at y=1.5: opening at [5.0, 1.5, 1.05]
-  Toilet door on partition 1 at y=4.5: opening at [5.0, 4.5, 1.05]
+STEP D — PLAN DOORS AND WINDOWS:
+  Every room needs at least one door for access.
+  Door opening z-position: half the door height (e.g. z=1.05 for a 2.1m door)
+  Window opening z-position: typically 1.0-1.5m above floor
+  Door/window location MUST be along the wall they sit in.
+  For a door on a south wall (runs in X): location=[X_pos_along_wall, 0, z]
+  For a door on a west wall (runs in Y):  location=[0, Y_pos_along_wall, z]
+  For a door on a partition at x=Xdiv:    location=[Xdiv, Y_pos, z]
 
-STEP 5 — WINDOWS:
-  Main room window on west wall at y=3.0: opening at [0, 3.0, 1.5]
-  Bathroom window on east wall at y=1.5: opening at [8, 1.5, 1.8]
+STEP E — PLAN MATERIALS:
+  Create a surface style for EVERY material type used (concrete, brick, glass, tile, etc.)
+  Apply the appropriate style to EVERY element. No element should be left unstyled.
 
-STEP 6 — STYLES: Create concrete style, apply to all walls. Create floor tile style, apply to slab.
+STEP F — EXECUTE: Now call tools in this order:
+  1. initialize_project → 2. create_slab → 3. all create_wall calls → 4. create_opening for each door/window → 5. create_door / create_window → 6. create_surface_style → 7. apply_style_to_object → 8. create_roof (if needed) → 9. export_ifc
 
-STEP 7 — EXPORT: Call export_ifc
-
-ALWAYS follow this exact thinking pattern. Plan ALL coordinates first, then execute tool calls in order.
+IMPORTANT RULES FOR ANY REQUEST:
+- If the user asks for "a room" → build 4 walls forming a closed rectangle. No open sides.
+- If the user asks for multiple rooms → every room must be enclosed. Use partition walls.
+- If the user asks for specific room types (bedroom, kitchen, bathroom) → use appropriate sizes.
+- If the user doesn't specify dimensions → use realistic architectural dimensions.
+- ALWAYS add an entry door. ALWAYS add windows for natural light.
+- NEVER leave any wall gap. Walls must meet at corners precisely.
+- NEVER skip applying materials/styles. The model must look realistic.
 
 Think deeply. Be precise. Build a complete, realistic, fully enclosed building.`;
 }
