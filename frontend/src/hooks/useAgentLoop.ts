@@ -1,18 +1,14 @@
 /**
- * Client-side agentic loop using Puter.js + Claude Sonnet.
- * The Supabase Edge Function is used purely as an MCP tool proxy.
+ * Client-side agentic loop using Gemini.
+ * The Supabase Edge Function is used as a stateless LLM and MCP tool proxy, bypassing edge timeouts!
  */
 
 // ══ CONFIG ══
 const EDGE_PROXY_URL = "https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat";
-const LLM_MODEL = "claude-sonnet-4-6";
 const MAX_TURNS = 25;
 
 // We use the anon key so the Edge Function accepts the request
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU";
-
-// ══ Puter.js global ══
-declare const puter: any;
 
 // ══ EDGE FUNCTION PROXY CLIENT ══
 
@@ -50,14 +46,14 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
   return data;
 }
 
-// ══ MAIN AGENT LOOP (runs in browser via Puter.js) ══
+// ══ MAIN AGENT LOOP (runs in browser, calls proxy) ══
 export interface AgentResult {
   reply: string;
   ifc_url?: string;
   steps: string[];
 }
 
-export async function runPuterAgentLoop(
+export async function runGeminiAgentLoop(
   userMessage: string,
   onStep: (step: string) => void
 ): Promise<AgentResult> {
@@ -82,14 +78,16 @@ export async function runPuterAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
-    // Call Claude via Puter.js on the client-side
-    const response = await puter.ai.chat(messages, {
-      model: LLM_MODEL,
-      tools,
-      tool_choice: "auto",
+    // Call Gemini via Edge Proxy
+    const response = await proxyRequest("chat", {
+      messages,
+      tools
     });
 
-    const assistantMsg = response.message;
+    const choice = response.choices?.[0];
+    if (!choice) throw new Error("No response choice from LLM proxy");
+
+    const assistantMsg = choice.message;
 
     // Add assistant message to history
     messages.push(assistantMsg);
@@ -98,11 +96,7 @@ export async function runPuterAgentLoop(
 
     // No tool calls → agent is done
     if (toolCalls.length === 0) {
-      const reply =
-        typeof assistantMsg.content === "string"
-          ? assistantMsg.content
-          : assistantMsg.content?.[0]?.text ||
-            "I have completed building your IFC model.";
+      const reply = assistantMsg.content || "I have completed building your IFC model.";
       return { reply, ifc_url, steps };
     }
 

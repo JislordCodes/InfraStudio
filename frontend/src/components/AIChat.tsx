@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown } from 'lucide-react';
-import { runPuterAgentLoop } from '../hooks/useAgentLoop';
+import { runGeminiAgentLoop } from '../hooks/useAgentLoop';
 
 interface Message {
   id: string;
@@ -17,7 +17,7 @@ interface AIChatProps {
 
 export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'assistant', content: "Hello! I'm your BIM Assistant powered by Claude Sonnet. Ask me to build anything — rooms, houses, offices." }
+    { id: '1', role: 'assistant', content: "Hello! I'm your BIM Assistant powered by Gemini. Ask me to build anything — rooms, houses, offices." }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -51,7 +51,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     try {
       setCurrentSteps(['🤖 Agent starting...']);
 
-      const result = await runPuterAgentLoop(
+      const result = await runGeminiAgentLoop(
         userMsg.content,
         (step: string) => {
           setCurrentSteps(prev => [...prev.slice(-15), step]);

@@ -2,6 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+const LLM_MODEL = "gemma-4-31b-it";
+const LLM_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -130,6 +133,40 @@ Deno.serve(async (req: Request) => {
         result: truncated,
         session_id: mcpSessionId,
       }), {
+        headers: { ...CORS, "Content-Type": "application/json" }
+      });
+    }
+
+
+    if (action === "chat") {
+      const { messages, tools } = payload;
+      
+      const res = await fetch(LLM_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GEMINI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: LLM_MODEL,
+          messages: messages || [],
+          ...(tools && { tools, tool_choice: "auto" }),
+          temperature: 0.5,
+          max_tokens: 4096,
+          stream: false
+        }),
+        signal: AbortSignal.timeout(60000)
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return new Response(JSON.stringify({ error: `LLM API error ${res.status}: ${errText.slice(0, 300)}` }), {
+          status: 500, headers: { ...CORS, "Content-Type": "application/json" }
+        });
+      }
+
+      const llmData = await res.json();
+      return new Response(JSON.stringify(llmData), {
         headers: { ...CORS, "Content-Type": "application/json" }
       });
     }
