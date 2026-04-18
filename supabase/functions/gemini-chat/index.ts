@@ -1,12 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { init } from 'npm:@heyputer/puter.js';
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 const LLM_MODEL = "claude-sonnet-4-6";
-
-// Initialize Puter.js with auth token
-const puter = init(Deno.env.get("PUTER_AUTH_TOKEN") || "");
+const LLM_URL = "https://api.puter.com/puterai/openai/v1/chat/completions";
+const PUTER_TOKEN = Deno.env.get("PUTER_AUTH_TOKEN") || "";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -313,20 +311,35 @@ async function runAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     log(`Agent turn ${turn + 1}/${MAX_TURNS}`);
 
-    // Call Claude via Puter.js
-    let assistantMsg: any;
-    try {
-      const response = await puter.ai.chat(messages, {
+    // Call Claude via Puter's OpenAI-compatible API
+    const res = await fetch(LLM_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${PUTER_TOKEN}`
+      },
+      body: JSON.stringify({
         model: LLM_MODEL,
+        messages,
         tools,
         tool_choice: "auto",
-      });
-      assistantMsg = response.message || response;
-    } catch (e) {
-      throw new Error(`Puter AI error: ${String(e).slice(0, 300)}`);
+        stream: false
+      }),
+      signal: AbortSignal.timeout(120000)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Puter API error ${res.status}: ${errText.slice(0, 300)}`);
     }
 
-    // Normalize content to string
+    const llmData = await res.json();
+    const choice = llmData.choices?.[0];
+    if (!choice) throw new Error("No LLM response choice");
+
+    const assistantMsg = choice.message;
+
+    // Normalize content — Claude may return array of content blocks
     if (assistantMsg.content && Array.isArray(assistantMsg.content)) {
       const textBlock = assistantMsg.content.find((b: any) => b.type === "text");
       if (textBlock) assistantMsg.content = textBlock.text;
