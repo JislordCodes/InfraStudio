@@ -419,7 +419,7 @@ async function runAgentLoop(
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
-  if (!LLM_API_KEY) return new Response(JSON.stringify({ error: "No API key configured" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
+  if (!PUTER_TOKEN) return new Response(JSON.stringify({ error: "No Puter auth token configured" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
 
   debugLog.length = 0;
 
