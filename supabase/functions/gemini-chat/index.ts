@@ -227,11 +227,10 @@ BUILD WORKFLOW — ALWAYS FOLLOW THIS ORDER
 4. Create WALL 2 (North)
 5. Create WALL 3 (West)
 6. Create WALL 4 (East) -> DO NOT SKIP THIS. Confirm all 4 walls enclose the room.
-7. Create openings in walls for doors/windows
-8. Create doors and windows inside those openings
-9. Create surface styles and apply to ALL elements
-10. Call export_ifc — ALWAYS the last tool call
-11. Reply with a summary
+7. Create doors and windows inside walls (Set create_opening: true to automatically cut holes)
+8. Create surface styles and apply to ALL elements
+9. Call export_ifc — ALWAYS the last tool call
+10. Reply with a summary
 
 ════════════════════════════════════════════════════
 WALL PLACEMENT — HOW TO FORM ENCLOSED ROOMS
@@ -281,17 +280,19 @@ create_door — ALWAYS specify ALL of these:
   name: string — e.g. "Entry Door", "Bathroom Door"
   dimensions: { "overall_height": 2.1, "overall_width": 0.9 }
   operation_type: "SINGLE_SWING_LEFT"
-  location: [x, y, z] — MUST BE IDENTICAL to the opening location
-  rotation: [0.0, 0.0, 0.0]
+  location: [x, y, z] — EXACTLY on the wall line. For a wall along X-axis, y must match wall y.
+  rotation: [0.0, 0.0, 0.0] — CRITICAL: MUST EXACTLY MATCH THE HOST WALL'S ROTATION! If the wall is rotated [0,0,1.5708], the door MUST be rotated [0,0,1.5708].
   frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
   panel_properties: { "panel_depth": 0.035, "panel_width": 0.84 }
+  wall_guid: "guid_of_host_wall"
+  create_opening: true
 
 create_window — ALWAYS specify ALL of these:
   name: string
   dimensions: { "overall_height": 1.2, "overall_width": 1.0 }
   partition_type: "SINGLE_PANEL"
-  location: [x, y, z] — MUST BE IDENTICAL to the opening location
-  rotation: [0.0, 0.0, 0.0]
+  location: [x, y, z] — EXACTLY on the wall line (e.g., Z=1.0 for sill height).
+  rotation: [0.0, 0.0, 0.0] — CRITICAL: MUST EXACTLY MATCH THE HOST WALL'S ROTATION! If the wall is rotated [0,0,1.5708], the window MUST be rotated [0,0,1.5708] or it will float in the air.
   frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
   panel_properties: { "panel_depth": 0.025 }
   wall_guid: "guid_of_host_wall"
