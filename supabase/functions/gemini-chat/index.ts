@@ -240,8 +240,8 @@ For a W×L footprint (e.g. 8×6 meters, wall thickness T=0.2):
   Perimeter walls: (You must explicitly call create_wall 4 times)
     South wall: location=[0, 0, 0], length=W, rotation=[0,0,0]
     North wall: location=[0, L, 0], length=W, rotation=[0,0,0]
-    West wall:  location=[0, 0, 0], length=L, rotation=[0,0,1.5708]
-    East wall:  location=[W, 0, 0], length=L, rotation=[0,0,1.5708]
+    West wall:  location=[0, 0, 0], length=L, rotation=[0,0,90.0]
+    East wall:  location=[W, 0, 0], length=L, rotation=[0,0,90.0]
 
 Floor slab: polyline=[[0,0,0],[W,0,0],[W,L,0],[0,L,0]], depth=0.2
 
@@ -253,7 +253,7 @@ create_wall — ALWAYS specify ALL of these:
   name: string — meaningful name e.g. "North Wall", "Bathroom Partition"
   dimensions: { "height": 3.0, "length": 5.0, "thickness": 0.2 }
   location: [x, y, z] — starting corner of the wall
-  rotation: [0.0, 0.0, 0.0] — use [0,0,1.5708] for walls running in Y direction
+  rotation: [0.0, 0.0, 0.0] — CRITICAL: USE DEGREES! e.g., use [0,0,90.0] for walls running in Y direction
   geometry_properties: { "represents_3d": true }
   material: "Concrete" — e.g. "Concrete", "Brick", "Timber"
   wall_type_guid: "" — empty string if no specific type
@@ -281,7 +281,7 @@ create_door — ALWAYS specify ALL of these:
   dimensions: { "overall_height": 2.1, "overall_width": 0.9 }
   operation_type: "SINGLE_SWING_LEFT"
   location: [x, y, z] — EXACTLY on the wall line. For a wall along X-axis, y must match wall y.
-  rotation: [0.0, 0.0, 0.0] — CRITICAL: MUST EXACTLY MATCH THE HOST WALL'S ROTATION! If the wall is rotated [0,0,1.5708], the door MUST be rotated [0,0,1.5708].
+  rotation: [0.0, 0.0, 0.0] — CRITICAL: MUST EXACTLY MATCH THE HOST WALL'S ROTATION! If the wall is rotated [0,0,90.0], the door MUST be rotated [0,0,90.0].
   frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
   panel_properties: { "panel_depth": 0.035, "panel_width": 0.84 }
   wall_guid: "guid_of_host_wall"
@@ -292,7 +292,7 @@ create_window — ALWAYS specify ALL of these:
   dimensions: { "overall_height": 1.2, "overall_width": 1.0 }
   partition_type: "SINGLE_PANEL"
   location: [x, y, z] — EXACTLY on the wall line (e.g., Z=1.0 for sill height).
-  rotation: [0.0, 0.0, 0.0] — CRITICAL: MUST EXACTLY MATCH THE HOST WALL'S ROTATION! If the wall is rotated [0,0,1.5708], the window MUST be rotated [0,0,1.5708] or it will float in the air.
+  rotation: [0.0, 0.0, 0.0] — CRITICAL: MUST EXACTLY MATCH THE HOST WALL'S ROTATION! If the wall is rotated [0,0,90.0], the window MUST be rotated [0,0,90.0] or it will float in the air.
   frame_properties: { "frame_depth": 0.05, "frame_thickness": 0.05 }
   panel_properties: { "panel_depth": 0.025 }
   wall_guid: "guid_of_host_wall"
