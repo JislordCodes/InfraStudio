@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
-const LLM_MODEL = "gemma-4-31b-it";
-const LLM_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") || "";
+const LLM_MODEL = "qwen3.6-plus-2026-04-02";
+const LLM_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -145,7 +145,7 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${GEMINI_API_KEY}`
+          "Authorization": `Bearer ${QWEN_API_KEY}`
         },
         body: JSON.stringify({
           model: LLM_MODEL,
