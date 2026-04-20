@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const MODAL_API_KEY = Deno.env.get("MODAL_API_KEY") || "";
-const LLM_MODEL = "zai-org/GLM-5.1-FP8";
-const LLM_URL = "https://api.us-west-2.modal.direct/v1/chat/completions";
+const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") || "";
+const LLM_MODEL = "z-ai/glm-4.5-air:free";
+const LLM_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -139,9 +139,9 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const modalKey = Deno.env.get("MODAL_API_KEY");
-      if (!modalKey) {
-        return new Response(JSON.stringify({ error: "MODAL_API_KEY secret is missing in Edge Function environment" }), {
+      const orKey = Deno.env.get("OPENROUTER_API_KEY");
+      if (!orKey) {
+        return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY secret is missing in Edge Function environment" }), {
           status: 500, headers: { ...CORS, "Content-Type": "application/json" }
         });
       }
@@ -152,7 +152,9 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${modalKey}`
+          "Authorization": `Bearer ${orKey}`,
+          "HTTP-Referer": "https://infrastudio.ai",
+          "X-Title": "InfraStudio"
         },
         body: JSON.stringify({
           model: LLM_MODEL,
