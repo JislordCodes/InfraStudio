@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") || "";
-const LLM_MODEL = "z-ai/glm-4.5-air:free";
+const LLM_MODEL = "openai/gpt-oss-120b:free";
 const LLM_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 const CORS = {
