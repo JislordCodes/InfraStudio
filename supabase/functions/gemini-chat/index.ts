@@ -162,7 +162,7 @@ Deno.serve(async (req: Request) => {
           max_tokens: 8192,
           stream: false
         }),
-        signal: AbortSignal.timeout(60000)
+        signal: AbortSignal.timeout(300000)
       });
 
       if (!res.ok) {
