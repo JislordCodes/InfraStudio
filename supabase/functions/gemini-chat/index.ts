@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") || "";
-const LLM_MODEL = "qwen3.6-plus-2026-04-02";
-const LLM_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions";
+const MODAL_API_KEY = Deno.env.get("MODAL_API_KEY") || "";
+const LLM_MODEL = "zai-org/GLM-5.1-FP8";
+const LLM_URL = "https://api.us-west-2.modal.direct/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -139,9 +139,9 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const qwenKey = Deno.env.get("QWEN_API_KEY");
-      if (!qwenKey) {
-        return new Response(JSON.stringify({ error: "QWEN_API_KEY secret is missing in Edge Function environment" }), {
+      const modalKey = Deno.env.get("MODAL_API_KEY");
+      if (!modalKey) {
+        return new Response(JSON.stringify({ error: "MODAL_API_KEY secret is missing in Edge Function environment" }), {
           status: 500, headers: { ...CORS, "Content-Type": "application/json" }
         });
       }
@@ -152,14 +152,14 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${qwenKey}`
+          "Authorization": `Bearer ${modalKey}`
         },
         body: JSON.stringify({
           model: LLM_MODEL,
           messages: messages || [],
           ...(tools && { tools, tool_choice: "auto" }),
           temperature: 0.5,
-          max_tokens: 4096,
+          max_tokens: 8192,
           stream: false
         }),
         signal: AbortSignal.timeout(60000)
