@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const NVIDIA_API_KEY = Deno.env.get("NVIDIA_API_KEY") || "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";
+const NVIDIA_API_KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
 const LLM_MODEL = "z-ai/glm-5.1";
 const LLM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
