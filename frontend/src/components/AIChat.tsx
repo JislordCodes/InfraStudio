@@ -101,8 +101,8 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     setExpanded(true);
     setCurrentSteps([]);
 
-    // Persist user message
-    await saveMessage(targetSessionId, userMsg);
+    // Persist user message silently — never let DB errors block the agent
+    saveMessage(targetSessionId, userMsg).catch(console.warn);
 
     try {
       setCurrentSteps(['🤖 Agent starting...']);
@@ -138,10 +138,10 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       const replyText = result.reply || 'I have completed your request.';
       const finalMsg: ChatMessage = { role: 'assistant', content: replyText };
       setMessages(prev => [...prev, finalMsg]);
-      await saveMessage(targetSessionId, finalMsg);
+      saveMessage(targetSessionId, finalMsg).catch(console.warn);
 
       if (result.mcp_session_id || result.ifc_url) {
-        await updateSessionData(targetSessionId, result.mcp_session_id || clientSessionId, result.ifc_url);
+        updateSessionData(targetSessionId, result.mcp_session_id || clientSessionId, result.ifc_url).catch(console.warn);
         if (result.ifc_url && onLoadIfcUrl) {
           onLoadIfcUrl(result.ifc_url);
         }
@@ -156,7 +156,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
         content: `⚠️ Agent failed: ${detail.slice(0, 300)}`,
       };
       setMessages(prev => [...prev, errorMsg]);
-      await saveMessage(targetSessionId, errorMsg);
+      saveMessage(targetSessionId, errorMsg).catch(console.warn);
       setCurrentSteps([]);
     } finally {
       setIsLoading(false);

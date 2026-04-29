@@ -97,21 +97,15 @@ export function useSessions() {
 
   const saveMessage = useCallback(async (sessionId: string, msg: ChatMessage) => {
     const { role, content, tool_calls, tool_call_id, reasoning_details } = msg;
-    const { data, error } = await supabase.from('ifc_messages').insert({
+    const { error } = await supabase.from('ifc_messages').insert({
       session_id: sessionId,
       role,
       content: content || '',
       tool_calls,
       tool_call_id,
       reasoning_details
-    }).select().single();
-
-    if (error) { console.error('Error saving message:', error); return; }
-
-    // Append to local messages state immediately for instant UI update
-    if (data) {
-      setMessages(prev => [...prev, data]);
-    }
+    });
+    if (error) { console.warn('Error saving message:', error); }
   }, []);
 
   async function appendUserMessage(sessionId: string, msg: ChatMessage) {
