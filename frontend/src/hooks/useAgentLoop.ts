@@ -12,9 +12,7 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 // ══ EDGE FUNCTION PROXY CLIENT ══
 
-async function proxyRequest(action: string, payload: Record<string, unknown> = {}): Promise<any> {
-  const sessionId = window.sessionStorage.getItem('mcpSessionId') || '';
-  
+async function proxyRequest(action: string, payload: Record<string, unknown> = {}, clientSessionId: string = ''): Promise<any> {
   const res = await fetch(EDGE_PROXY_URL, {
     method: "POST",
     headers: {
@@ -24,6 +22,7 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
     },
     body: JSON.stringify({
       action,
+      session_id: clientSessionId,
       ...payload
     })
   });
@@ -39,10 +38,6 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
     throw new Error(`Edge Proxy Error: ${data.error}`);
   }
 
-  if (data.session_id) {
-    window.sessionStorage.setItem('mcpSessionId', data.session_id);
-  }
-
   return data;
 }
 
@@ -51,26 +46,33 @@ export interface AgentResult {
   reply: string;
   ifc_url?: string;
   steps: string[];
+  mcp_session_id?: string;
 }
 
 export async function runQwenAgentLoop(
   userMessage: string,
-  onStep: (step: string) => void
+  previousMessages: any[],
+  clientSessionId: string,
+  onStep: (step: string) => void,
+  onAssistantMessage?: (msg: any) => void
 ): Promise<AgentResult> {
   // 1. Initialize MCP and fetch tools and system prompt via Edge proxy
-  onStep("🔌 Connecting to MCP proxy...");
+  onStep("🔌 Connecting to backend proxy...");
   
-  const initData = await proxyRequest("init");
+  const initData = await proxyRequest("init", {}, clientSessionId);
   const tools = initData.tools || [];
   const systemPrompt = initData.system_prompt || "You are an AI architect.";
+  const activeSessionId = initData.session_id || clientSessionId;
 
   onStep(`✅ Loaded ${tools.length} tools`);
 
-  // Build conversation
-  const messages: any[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userMessage },
-  ];
+  // Build conversation using complete history to allow iterative editing
+  const systemMsg = { role: "system", content: systemPrompt };
+  const userMsg = { role: "user", content: userMessage };
+  
+  const messages = previousMessages.length > 0 
+    ? [systemMsg, ...previousMessages, userMsg] 
+    : [systemMsg, userMsg];
 
   const steps: string[] = [];
   let ifc_url: string | undefined;
@@ -82,7 +84,7 @@ export async function runQwenAgentLoop(
     const response = await proxyRequest("chat", {
       messages,
       tools
-    });
+    }, activeSessionId);
 
     const choice = response.choices?.[0];
     if (!choice) throw new Error("No response choice from LLM proxy");
@@ -92,12 +94,17 @@ export async function runQwenAgentLoop(
     // Add assistant message to history
     messages.push(assistantMsg);
 
+    // Call the callback immediately so the UI can store the thought/response
+    if (onAssistantMessage) {
+        onAssistantMessage(assistantMsg);
+    }
+
     const toolCalls = assistantMsg.tool_calls || [];
 
     // No tool calls → agent is done
     if (toolCalls.length === 0) {
       const reply = assistantMsg.content || "I have completed building your IFC model.";
-      return { reply, ifc_url, steps };
+      return { reply, ifc_url, steps, mcp_session_id: activeSessionId };
     }
 
     // Execute each tool call via Edge proxy
@@ -116,7 +123,7 @@ export async function runQwenAgentLoop(
 
       let toolResult = "";
       try {
-        const proxyRes = await proxyRequest("call_tool", { name: toolName, args: toolArgs });
+        const proxyRes = await proxyRequest("call_tool", { name: toolName, args: toolArgs }, activeSessionId);
         toolResult = proxyRes.result;
 
         // Track IFC URL from export_ifc
@@ -149,5 +156,6 @@ export async function runQwenAgentLoop(
     reply: "Building complete (max turns reached).",
     ifc_url,
     steps,
+    mcp_session_id: activeSessionId
   };
 }

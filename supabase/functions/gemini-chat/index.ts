@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") || "";
-const LLM_MODEL = "openai/gpt-oss-120b:free";
-const LLM_URL = "https://openrouter.ai/api/v1/chat/completions";
+const NVIDIA_API_KEY = Deno.env.get("NVIDIA_API_KEY") || "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";
+const LLM_MODEL = "z-ai/glm-5.1";
+const LLM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -13,7 +13,6 @@ const CORS = {
 };
 
 // ══ MCP CLIENT ══
-let mcpSessionId = "";
 
 function extractText(content: unknown): string | undefined {
   if (!content) return undefined;
@@ -29,55 +28,76 @@ function extractText(content: unknown): string | undefined {
   return undefined;
 }
 
-async function mcpPost(body: unknown): Promise<unknown> {
+async function mcpPost(body: unknown, clientSessionId: string): Promise<{ data: unknown; session: string }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream"
   };
-  if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
+  if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
+  
   const res = await fetch(MCP_URL, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120000)
   });
-  const s = res.headers.get("mcp-session-id");
-  if (s) mcpSessionId = s;
+  
+  const returnedSession = res.headers.get("mcp-session-id") || clientSessionId;
   const text = await res.text();
+  
   if (text.trim().startsWith("data:")) {
     const l = text.split("\n").find(l => l.startsWith("data:"));
-    return l ? JSON.parse(l.slice(5).trim()) : {};
+    const data = l ? JSON.parse(l.slice(5).trim()) : {};
+    return { data, session: returnedSession };
   }
-  try { return JSON.parse(text); } catch { return { raw: text }; }
+  
+  try { 
+    return { data: JSON.parse(text), session: returnedSession }; 
+  } catch { 
+    return { data: { raw: text }, session: returnedSession }; 
+  }
 }
 
-async function mcpInit(): Promise<void> {
-  await mcpPost({
+async function mcpInit(clientSessionId: string): Promise<string> {
+  const res1 = await mcpPost({
     jsonrpc: "2.0", id: 1, method: "initialize",
     params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
-  });
-  await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }).catch(() => {});
+  }, clientSessionId);
+  
+  const newSession = res1.session;
+  await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, newSession).catch(() => {});
+  
+  return newSession;
 }
 
-async function mcpCallTool(name: string, args: Record<string, unknown>): Promise<string> {
+async function mcpCallTool(name: string, args: Record<string, unknown>, clientSessionId: string): Promise<{ resultText: string, session: string }> {
   const res = await mcpPost({
     jsonrpc: "2.0", id: Date.now(), method: "tools/call",
     params: { name, arguments: args }
-  }) as Record<string, unknown>;
-  return extractText((res?.result as Record<string, unknown>)?.content) || JSON.stringify(res?.result ?? res?.error ?? "done");
+  }, clientSessionId);
+  
+  const payload = res.data as Record<string, unknown>;
+  const resultText = extractText((payload?.result as Record<string, unknown>)?.content) || JSON.stringify(payload?.result ?? payload?.error ?? "done");
+  
+  return { resultText, session: res.session };
 }
 
-async function fetchMcpTools(): Promise<any[]> {
-  const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) as Record<string, unknown>;
-  const tools = ((res?.result as any)?.tools || []) as any[];
-  return tools.map(t => ({
-    type: "function",
-    function: {
-      name: t.name,
-      description: (t.description || "").slice(0, 1024),
-      parameters: t.inputSchema || { type: "object", properties: {} }
-    }
-  }));
+async function fetchMcpTools(clientSessionId: string): Promise<{ tools: any[], session: string }> {
+  const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, clientSessionId);
+  const data = res.data as Record<string, unknown>;
+  const tools = ((data?.result as any)?.tools || []) as any[];
+  
+  return {
+    tools: tools.map(t => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: (t.description || "").slice(0, 1024),
+        parameters: t.inputSchema || { type: "object", properties: {} }
+      }
+    })),
+    session: res.session
+  };
 }
 
 // ══ HTTP HANDLER — MCP PROXY ══
@@ -99,15 +119,17 @@ Deno.serve(async (req: Request) => {
   try {
     const payload = await req.json();
     const action = payload.action || "init";
+    const inboundSessionId = payload.session_id || "";
 
     if (action === "init") {
       // Initialize MCP and return the tool list + system prompt
-      await mcpInit();
-      const tools = await fetchMcpTools();
+      const initSession = await mcpInit(inboundSessionId);
+      const toolsResult = await fetchMcpTools(initSession);
+      
       return new Response(JSON.stringify({
-        tools,
+        tools: toolsResult.tools,
         system_prompt: buildSystemPrompt(),
-        session_id: mcpSessionId,
+        session_id: toolsResult.session,
       }), {
         headers: { ...CORS, "Content-Type": "application/json" }
       });
@@ -121,17 +143,20 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // Make sure MCP is initialized
-      if (!mcpSessionId) await mcpInit();
+      // If no session passed, init one implicitly and then call
+      let activeSession = inboundSessionId;
+      if (!activeSession) {
+        activeSession = await mcpInit("");
+      }
 
-      const result = await mcpCallTool(name, args || {});
+      const { resultText, session } = await mcpCallTool(name, args || {}, activeSession);
 
       // Truncate large results to avoid bloating the chat history
-      const truncated = result.length > 3000 ? result.slice(0, 3000) + "... [truncated]" : result;
+      const truncated = resultText.length > 3000 ? resultText.slice(0, 3000) + "... [truncated]" : resultText;
 
       return new Response(JSON.stringify({
         result: truncated,
-        session_id: mcpSessionId,
+        session_id: session,
       }), {
         headers: { ...CORS, "Content-Type": "application/json" }
       });
@@ -139,12 +164,7 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const orKey = Deno.env.get("OPENROUTER_API_KEY");
-      if (!orKey) {
-        return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY secret is missing in Edge Function environment" }), {
-          status: 500, headers: { ...CORS, "Content-Type": "application/json" }
-        });
-      }
+      const nvidiaKey = Deno.env.get("NVIDIA_API_KEY") || "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";
 
       const { messages, tools } = payload;
       
@@ -152,16 +172,16 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${orKey}`,
-          "HTTP-Referer": "https://infrastudio.ai",
-          "X-Title": "InfraStudio"
+          "Authorization": `Bearer ${nvidiaKey}`,
         },
         body: JSON.stringify({
           model: LLM_MODEL,
           messages: messages || [],
           ...(tools && { tools, tool_choice: "auto" }),
-          temperature: 0.5,
-          max_tokens: 8192,
+          temperature: 1,
+          top_p: 1,
+          max_tokens: 16384,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, clear_thinking: false } },
           stream: false
         }),
         signal: AbortSignal.timeout(300000)
