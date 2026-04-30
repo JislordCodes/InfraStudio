@@ -178,10 +178,9 @@ Deno.serve(async (req: Request) => {
           model: LLM_MODEL,
           messages: messages || [],
           ...(tools && { tools, tool_choice: "auto" }),
-          temperature: 1,
-          top_p: 1,
-          max_tokens: 16384,
-          extra_body: { chat_template_kwargs: { enable_thinking: true, clear_thinking: false } },
+          temperature: 0.6,
+          top_p: 0.9,
+          max_tokens: 4096,
           stream: false
         }),
         signal: AbortSignal.timeout(300000)
