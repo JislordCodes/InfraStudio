@@ -191,34 +191,50 @@ Deno.serve(async (req: Request) => {
       }
 
 
-      // Retry loop for intermittent 502/503 from YepAPI/Cloudflare
+      // Use streaming to avoid Cloudflare 502 from Supabase Edge IPs
       const llmBody = JSON.stringify({
         model: LLM_MODEL,
         messages: messages || [],
         maxTokens: 4096,
-        stream: false
+        stream: true
       });
-      let res: Response | null = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        res = await fetch(LLM_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-          body: llmBody,
-          signal: AbortSignal.timeout(120000)
-        });
-        if (res.ok || (res.status !== 502 && res.status !== 503)) break;
-        console.warn(`YepAPI returned ${res.status}, retry ${attempt}/3...`);
-        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 2000));
-      }
 
-      if (!res!.ok) {
-        const errText = await res!.text();
-        return new Response(JSON.stringify({ error: `LLM API error ${res!.status}: ${errText.slice(0, 300)}` }), {
+      const res = await fetch(LLM_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+        body: llmBody,
+        signal: AbortSignal.timeout(120000)
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return new Response(JSON.stringify({ error: `LLM API error ${res.status}: ${errText.slice(0, 300)}` }), {
           status: 500, headers: { ...CORS, "Content-Type": "application/json" }
         });
       }
 
-      const llmData = await res.json();
+      // Collect streamed SSE chunks into a single response
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") break;
+          try {
+            const parsed = JSON.parse(data);
+            const text = parsed.delta?.content ?? "";
+            fullContent += text;
+          } catch {}
+        }
+      }
+
+      // Build a normalized response object
+      const llmData = { data: { message: { role: "assistant", content: fullContent }, model: LLM_MODEL, usage: {} } };
 
       // YepAPI returns { data: { message: {...} } } - normalize to OpenAI format
       if (llmData.data && llmData.data.message && !llmData.choices) {
