@@ -35,7 +35,8 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
   const data = await res.json();
   
   if (data.error) {
-    throw new Error(`Edge Proxy Error: ${data.error}`);
+    const errMsg = typeof data.error === 'string' ? data.error : (data.error.message || JSON.stringify(data.error));
+    throw new Error(`Edge Proxy Error: ${errMsg}`);
   }
 
   return data;
