@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const NVIDIA_API_KEY = Deno.env.get("NVIDIA_API_KEY") ?? "";
-const LLM_MODEL = "z-ai/glm-5.1";
-const LLM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const LLM_API_KEY = Deno.env.get("ROUTEWAY_API_KEY") ?? "";
+const LLM_MODEL = "ling-2.6-flash:free";
+const LLM_URL = "https://api.routeway.ai/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,7 +164,7 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const nvidiaKey = Deno.env.get("NVIDIA_API_KEY") || "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";
+      const apiKey = Deno.env.get("ROUTEWAY_API_KEY") || "";
 
       const { messages, tools } = payload;
       
@@ -172,7 +172,7 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${nvidiaKey}`,
+          "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model: LLM_MODEL,
