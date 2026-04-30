@@ -217,11 +217,11 @@ Deno.serve(async (req: Request) => {
         
         // -- SMART TOOL EXTRACTION --
         // Check if Claude output our <tool_call> XML block
-        const toolMatch = content.match(/<tool_call>[\s\S]*?\{([\s\S]*?)\}[\s\S]*?<\/tool_call>/);
+        const toolMatch = content.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
         if (toolMatch) {
           try {
             // Extract the JSON part between the tags
-            const jsonStr = "{" + toolMatch[1] + "}";
+            const jsonStr = toolMatch[1].trim();
             const parsed = JSON.parse(jsonStr);
             
             // Format it exactly like OpenAI's native tool_calls array
