@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_API_KEY = Deno.env.get("ROUTEWAY_API_KEY") ?? "";
-const LLM_MODEL = "ling-2.6-flash:free";
-const LLM_URL = "https://api.routeway.ai/v1/chat/completions";
+const LLM_API_KEY = Deno.env.get("YEP_API_KEY") ?? "";
+const LLM_MODEL = "anthropic/claude-opus-4.7";
+const LLM_URL = "https://api.yepapi.com/v1/ai/chat";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,7 +164,7 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const apiKey = Deno.env.get("ROUTEWAY_API_KEY") || "";
+      const apiKey = Deno.env.get("YEP_API_KEY") || "";
 
       const { messages, tools } = payload;
       
@@ -172,15 +172,13 @@ Deno.serve(async (req: Request) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
+          "x-api-key": apiKey,
         },
         body: JSON.stringify({
           model: LLM_MODEL,
           messages: messages || [],
           ...(tools && { tools, tool_choice: "auto" }),
-          temperature: 0.6,
-          top_p: 0.9,
-          max_tokens: 4096,
+          maxTokens: 4096,
           stream: false
         }),
         signal: AbortSignal.timeout(300000)
