@@ -191,24 +191,29 @@ Deno.serve(async (req: Request) => {
       }
 
 
-      const res = await fetch(LLM_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey
-        },
-        body: JSON.stringify({
-          model: LLM_MODEL,
-          messages: messages || [],
-          maxTokens: 4096,
-          stream: false
-        }),
-        signal: AbortSignal.timeout(300000)
+      // Retry loop for intermittent 502/503 from YepAPI/Cloudflare
+      const llmBody = JSON.stringify({
+        model: LLM_MODEL,
+        messages: messages || [],
+        maxTokens: 4096,
+        stream: false
       });
+      let res: Response | null = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        res = await fetch(LLM_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+          body: llmBody,
+          signal: AbortSignal.timeout(120000)
+        });
+        if (res.ok || (res.status !== 502 && res.status !== 503)) break;
+        console.warn(`YepAPI returned ${res.status}, retry ${attempt}/3...`);
+        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 2000));
+      }
 
-      if (!res.ok) {
-        const errText = await res.text();
-        return new Response(JSON.stringify({ error: `LLM API error ${res.status}: ${errText.slice(0, 300)}` }), {
+      if (!res!.ok) {
+        const errText = await res!.text();
+        return new Response(JSON.stringify({ error: `LLM API error ${res!.status}: ${errText.slice(0, 300)}` }), {
           status: 500, headers: { ...CORS, "Content-Type": "application/json" }
         });
       }
