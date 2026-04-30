@@ -192,6 +192,19 @@ Deno.serve(async (req: Request) => {
       }
 
       const llmData = await res.json();
+
+      // YepAPI returns { data: { message: {...} } } - normalize to OpenAI format
+      if (llmData.data && llmData.data.message && !llmData.choices) {
+        const normalized = {
+          choices: [{ message: llmData.data.message, finish_reason: "stop" }],
+          usage: llmData.data.usage || {},
+          model: llmData.data.model || LLM_MODEL,
+        };
+        return new Response(JSON.stringify(normalized), {
+          headers: { ...CORS, "Content-Type": "application/json" }
+        });
+      }
+
       return new Response(JSON.stringify(llmData), {
         headers: { ...CORS, "Content-Type": "application/json" }
       });
