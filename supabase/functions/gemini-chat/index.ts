@@ -174,17 +174,22 @@ Deno.serve(async (req: Request) => {
       let promptTools = tools;
       if (tools && tools.length > 0 && messages && messages.length > 0) {
         let systemPrompt = messages[0].content || "";
-        systemPrompt += "\n\n# AVAILABLE TOOLS\nYou have access to the following tools:\n";
         
-        tools.forEach(t => {
-          systemPrompt += `\nTool Name: ${t.function.name}\nDescription: ${t.function.description}\nParameters: ${JSON.stringify(t.function.parameters)}\n`;
-        });
-        
-        systemPrompt += "\n\nTo use a tool, you MUST output an XML block exactly like this:\n<tool_call>\n{\n  \"name\": \"tool_name\",\n  \"arguments\": {\"param1\": 123}\n}\n</tool_call>\n\nDo NOT execute more than one tool at a time. Output the XML block and nothing else when using a tool.";
-        
-        messages[0].content = systemPrompt;
+        // Prevent exponential payload growth on multiple turns
+        if (!systemPrompt.includes("# AVAILABLE TOOLS")) {
+          systemPrompt += "\n\n# AVAILABLE TOOLS\nYou have access to the following tools:\n";
+          
+          tools.forEach((t: any) => {
+            systemPrompt += `\nTool Name: ${t.function.name}\nDescription: ${t.function.description}\nParameters: ${JSON.stringify(t.function.parameters)}\n`;
+          });
+          
+          systemPrompt += "\n\nTo use a tool, you MUST output an XML block exactly like this:\n<tool_call>\n{\n  \"name\": \"tool_name\",\n  \"arguments\": {\"param1\": 123}\n}\n</tool_call>\n\nDo NOT execute more than one tool at a time. Output the XML block and nothing else when using a tool.";
+          
+          messages[0].content = systemPrompt;
+        }
         promptTools = undefined; // Remove native tools array so API doesn't trip up
       }
+
 
       const res = await fetch(LLM_URL, {
         method: "POST",
