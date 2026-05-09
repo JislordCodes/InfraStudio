@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-const LLM_MODEL = "gemini-2.5-flash";
-const LLM_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
+const LLM_MODEL = "openai/gpt-oss-120b";
+const LLM_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,10 +164,10 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const apiKey = Deno.env.get("GOOGLE_AI_KEY") || "";
+      const apiKey = Deno.env.get("GROQ_API_KEY") || "";
       const { messages, tools } = payload;
 
-      // Google AI Studio supports native tool calling — no hacks needed
+      // Groq supports native OpenAI-compatible tool calling
       const res = await fetch(LLM_URL, {
         method: "POST",
         headers: {
