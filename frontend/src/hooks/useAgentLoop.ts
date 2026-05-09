@@ -1,14 +1,14 @@
 /**
  * Client-side agentic loop.
  * - Edge Function handles: init (MCP), call_tool (MCP)
- * - Browser calls YepAPI DIRECTLY for LLM chat (avoids Cloudflare blocking Supabase Edge IPs)
+ * - Browser calls Google AI Studio (Gemma 4) DIRECTLY for LLM chat with native tool calling
  */
 
 // ══ CONFIG ══
 const EDGE_PROXY_URL = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1/gemini-chat";
-const YEP_API_URL = "https://api.yepapi.com/v1/ai/chat";
-const YEP_API_KEY = "yep_sk_91f813627b0713b732d2864302fb47b989e21c8ce08097af";
-const YEP_MODEL = "anthropic/claude-opus-4.7";
+const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const GOOGLE_AI_KEY = "AIzaSyC8lS6V2f7b6BirsrZHRuxZ688LJFUf3WQ";
+const LLM_MODEL = "gemma-4-31b-it";
 const MAX_TURNS = 25;
 
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
@@ -45,83 +45,29 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
   return data;
 }
 
-// ══ DIRECT YepAPI CALL (from browser, bypasses Cloudflare edge blocks) ══
+// ══ GOOGLE AI STUDIO — DIRECT CALL WITH NATIVE TOOL CALLING ══
 
-async function callYepAPIDirectly(messages: any[], tools: any[]): Promise<any> {
-  // Inject tools into the system prompt for YepAPI (doesn't support native tools)
-  const injectedMessages = [...messages];
-  if (tools.length > 0 && injectedMessages.length > 0) {
-    const sysContent = injectedMessages[0].content || "";
-    if (!sysContent.includes("# AVAILABLE TOOLS")) {
-      let toolPrompt = "\n\n# AVAILABLE TOOLS\nYou have access to the following tools:\n";
-      tools.forEach((t: any) => {
-        toolPrompt += `\nTool Name: ${t.function.name}\nDescription: ${t.function.description}\nParameters: ${JSON.stringify(t.function.parameters)}\n`;
-      });
-      toolPrompt += "\n\nTo use a tool, you MUST output an XML block exactly like this:\n<tool_call>\n{\n  \"name\": \"tool_name\",\n  \"arguments\": {\"param1\": 123}\n}\n</tool_call>\n\nDo NOT execute more than one tool at a time. Output the XML block and nothing else when using a tool.";
-      injectedMessages[0] = { ...injectedMessages[0], content: sysContent + toolPrompt };
-    }
-  }
-
-  // Call YepAPI with streaming (collect chunks)
-  const res = await fetch(YEP_API_URL, {
+async function callLLM(messages: any[], tools: any[]): Promise<any> {
+  const res = await fetch(GOOGLE_AI_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": YEP_API_KEY
+      "Authorization": `Bearer ${GOOGLE_AI_KEY}`
     },
     body: JSON.stringify({
-      model: YEP_MODEL,
-      messages: injectedMessages,
-      maxTokens: 4096,
-      stream: true
+      model: LLM_MODEL,
+      messages,
+      ...(tools.length > 0 && { tools, tool_choice: "auto" }),
+      max_tokens: 4096
     })
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`YepAPI error ${res.status}: ${errText.slice(0, 200)}`);
+    throw new Error(`LLM error ${res.status}: ${errText.slice(0, 200)}`);
   }
 
-  // Collect streamed content
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let fullContent = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    for (const line of chunk.split("\n")) {
-      if (!line.startsWith("data: ")) continue;
-      const data = line.slice(6).trim();
-      if (data === "[DONE]") break;
-      try {
-        const parsed = JSON.parse(data);
-        const text = parsed.delta?.content ?? "";
-        fullContent += text;
-      } catch { /* skip malformed chunks */ }
-    }
-  }
-
-  // Extract <tool_call> XML if present
-  const message: any = { role: "assistant", content: fullContent };
-  const toolMatch = fullContent.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
-  if (toolMatch) {
-    try {
-      const parsed = JSON.parse(toolMatch[1].trim());
-      message.tool_calls = [{
-        id: "call_" + Math.random().toString(36).substring(2, 9),
-        type: "function",
-        function: {
-          name: parsed.name,
-          arguments: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments)
-        }
-      }];
-      message.content = fullContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/, '').trim();
-    } catch { /* keep as plain text */ }
-  }
-
-  return { choices: [{ message, finish_reason: message.tool_calls ? "tool_calls" : "stop" }] };
+  return res.json();
 }
 
 // ══ MAIN AGENT LOOP ══
@@ -162,8 +108,8 @@ export async function runQwenAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
-    // 2. Call YepAPI DIRECTLY from browser (bypasses Cloudflare edge blocks)
-    const response = await callYepAPIDirectly(messages, tools);
+    // 2. Call Google AI Studio DIRECTLY from browser (native tool calling)
+    const response = await callLLM(messages, tools);
 
     const choice = response.choices?.[0];
     if (!choice) throw new Error("No response choice from LLM");
