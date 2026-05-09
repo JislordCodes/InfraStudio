@@ -62,7 +62,8 @@ export async function runQwenAgentLoop(
   
   const initData = await proxyRequest("init", {}, clientSessionId);
   const tools = initData.tools || [];
-  const systemPrompt = initData.system_prompt || "You are an AI architect.";
+  const systemPrompt = (initData.system_prompt || "You are an AI architect.") + 
+    "\n\nCRITICAL RULE: When you finish building or modifying elements, YOU MUST ALWAYS CALL the `export_ifc` tool as your final action so the 3D scene can update. Do not just say you finished it, explicitly call the tool.";
   const activeSessionId = initData.session_id || clientSessionId;
 
   onStep(`✅ Loaded ${tools.length} tools`);
@@ -97,6 +98,20 @@ export async function runQwenAgentLoop(
 
     if (toolCalls.length === 0) {
       const reply = assistantMsg.content || "I have completed building your IFC model.";
+      
+      // Auto-export the IFC to guarantee the 3D viewer updates even if LLM forgot
+      onStep("📦 Auto-exporting IFC model to update 3D scene...");
+      try {
+        const exportRes = await proxyRequest("call_tool", { name: "export_ifc", args: {} }, activeSessionId);
+        const parsed = JSON.parse(exportRes.result);
+        if (parsed.file_url) ifc_url = parsed.file_url;
+        else if (parsed.success && parsed.ifc_url) ifc_url = parsed.ifc_url;
+        steps.push(`  ✓ Auto-export completed`);
+      } catch (e) {
+        console.error("Auto-export failed:", e);
+        steps.push(`  ✗ Auto-export failed`);
+      }
+
       return { reply, ifc_url, steps, mcp_session_id: activeSessionId };
     }
 
