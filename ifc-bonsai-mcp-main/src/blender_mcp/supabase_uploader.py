@@ -15,10 +15,10 @@ from urllib.error import URLError, HTTPError
 logger = logging.getLogger("SupabaseUploader")
 
 # Configuration from environment variables
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://gitfkenmwzrldzqunvww.supabase.co")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://pzeoilvqeyuheslkfhjq.supabase.co")
 SUPABASE_ANON_KEY = os.environ.get(
     "SUPABASE_ANON_KEY",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU"
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc"
 )
 BUCKET_NAME = "ifc-models"
 
