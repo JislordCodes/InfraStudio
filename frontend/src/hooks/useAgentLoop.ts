@@ -6,14 +6,11 @@
 
 // ══ CONFIG ══
 const EDGE_PROXY_URL = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1/gemini-chat";
-const GOOGLE_AI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const GOOGLE_AI_KEY = "AIzaSyC8lS6V2f7b6BirsrZHRuxZ688LJFUf3WQ";
-const LLM_MODEL = "gemma-4-31b-it";
 const MAX_TURNS = 25;
 
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
 
-// ══ EDGE FUNCTION PROXY (for MCP operations only) ══
+// ══ EDGE FUNCTION PROXY ══
 
 async function proxyRequest(action: string, payload: Record<string, unknown> = {}, clientSessionId: string = ''): Promise<any> {
   const res = await fetch(EDGE_PROXY_URL, {
@@ -43,31 +40,6 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
   }
 
   return data;
-}
-
-// ══ GOOGLE AI STUDIO — DIRECT CALL WITH NATIVE TOOL CALLING ══
-
-async function callLLM(messages: any[], tools: any[]): Promise<any> {
-  const res = await fetch(GOOGLE_AI_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${GOOGLE_AI_KEY}`
-    },
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      messages,
-      ...(tools.length > 0 && { tools, tool_choice: "auto" }),
-      max_tokens: 4096
-    })
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`LLM error ${res.status}: ${errText.slice(0, 200)}`);
-  }
-
-  return res.json();
 }
 
 // ══ MAIN AGENT LOOP ══
@@ -108,8 +80,8 @@ export async function runQwenAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
-    // 2. Call Google AI Studio DIRECTLY from browser (native tool calling)
-    const response = await callLLM(messages, tools);
+    // 2. Call LLM via Edge Function (Gemma 4 with native tool calling)
+    const response = await proxyRequest("chat", { messages, tools }, activeSessionId);
 
     const choice = response.choices?.[0];
     if (!choice) throw new Error("No response choice from LLM");

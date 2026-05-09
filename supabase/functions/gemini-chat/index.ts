@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_API_KEY = Deno.env.get("YEP_API_KEY") ?? "";
-const LLM_MODEL = "anthropic/claude-opus-4.7";
-const LLM_URL = "https://api.yepapi.com/v1/ai/chat";
+const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
+const LLM_MODEL = "gemma-4-31b-it";
+const LLM_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,45 +164,22 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const apiKey = Deno.env.get("YEP_API_KEY") || "";
+      const apiKey = Deno.env.get("GOOGLE_AI_KEY") || "";
+      const { messages, tools } = payload;
 
-      let { messages, tools } = payload;
-      
-      // -- SMART TOOL CALLING INJECTION --
-      // Since YepAPI ignores the native "tools" array, we inject the tool schema
-      // directly into the system prompt and instruct Claude to use a specific XML format.
-      let promptTools = tools;
-      if (tools && tools.length > 0 && messages && messages.length > 0) {
-        let systemPrompt = messages[0].content || "";
-        
-        // Prevent exponential payload growth on multiple turns
-        if (!systemPrompt.includes("# AVAILABLE TOOLS")) {
-          systemPrompt += "\n\n# AVAILABLE TOOLS\nYou have access to the following tools:\n";
-          
-          tools.forEach((t: any) => {
-            systemPrompt += `\nTool Name: ${t.function.name}\nDescription: ${t.function.description}\nParameters: ${JSON.stringify(t.function.parameters)}\n`;
-          });
-          
-          systemPrompt += "\n\nTo use a tool, you MUST output an XML block exactly like this:\n<tool_call>\n{\n  \"name\": \"tool_name\",\n  \"arguments\": {\"param1\": 123}\n}\n</tool_call>\n\nDo NOT execute more than one tool at a time. Output the XML block and nothing else when using a tool.";
-          
-          messages[0].content = systemPrompt;
-        }
-        promptTools = undefined; // Remove native tools array so API doesn't trip up
-      }
-
-
-      // Use streaming to avoid Cloudflare 502 from Supabase Edge IPs
-      const llmBody = JSON.stringify({
-        model: LLM_MODEL,
-        messages: messages || [],
-        maxTokens: 4096,
-        stream: true
-      });
-
+      // Google AI Studio supports native tool calling — no hacks needed
       const res = await fetch(LLM_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-        body: llmBody,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: LLM_MODEL,
+          messages: messages || [],
+          ...(tools && tools.length > 0 && { tools, tool_choice: "auto" }),
+          max_tokens: 4096
+        }),
         signal: AbortSignal.timeout(120000)
       });
 
@@ -213,68 +190,7 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // Collect streamed SSE chunks into a single response
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") break;
-          try {
-            const parsed = JSON.parse(data);
-            const text = parsed.delta?.content ?? "";
-            fullContent += text;
-          } catch {}
-        }
-      }
-
-      // Build a normalized response object
-      const llmData = { data: { message: { role: "assistant", content: fullContent }, model: LLM_MODEL, usage: {} } };
-
-      // YepAPI returns { data: { message: {...} } } - normalize to OpenAI format
-      if (llmData.data && llmData.data.message && !llmData.choices) {
-        let message = llmData.data.message;
-        let content = message.content || "";
-        
-        // -- SMART TOOL EXTRACTION --
-        // Check if Claude output our <tool_call> XML block
-        const toolMatch = content.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
-        if (toolMatch) {
-          try {
-            // Extract the JSON part between the tags
-            const jsonStr = toolMatch[1].trim();
-            const parsed = JSON.parse(jsonStr);
-            
-            // Format it exactly like OpenAI's native tool_calls array
-            message.tool_calls = [{
-              id: "call_" + Math.random().toString(36).substring(2, 9),
-              type: "function",
-              function: {
-                name: parsed.name,
-                arguments: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments)
-              }
-            }];
-            message.content = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/, '').trim();
-          } catch (e) {
-            console.error("Failed to parse smart tool call JSON", e);
-          }
-        }
-
-        const normalized = {
-          choices: [{ message: message, finish_reason: message.tool_calls ? "tool_calls" : "stop" }],
-          usage: llmData.data.usage || {},
-          model: llmData.data.model || LLM_MODEL,
-        };
-        return new Response(JSON.stringify(normalized), {
-          headers: { ...CORS, "Content-Type": "application/json" }
-        });
-      }
-
+      const llmData = await res.json();
       return new Response(JSON.stringify(llmData), {
         headers: { ...CORS, "Content-Type": "application/json" }
       });
