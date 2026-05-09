@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY") ?? "";
-const LLM_MODEL = "gemma-4-31b-it";
+const LLM_MODEL = "gemini-2.5-flash";
 const LLM_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 const CORS = {
