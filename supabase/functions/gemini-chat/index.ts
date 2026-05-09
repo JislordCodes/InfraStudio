@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
-const LLM_MODEL = "openai/gpt-oss-120b";
+const LLM_MODEL = "llama-3.3-70b-versatile";
 const LLM_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const CORS = {
