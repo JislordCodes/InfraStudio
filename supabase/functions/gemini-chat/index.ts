@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY") ?? "";
-const LLM_MODEL = "llama-3.3-70b-versatile";
-const LLM_URL = "https://api.groq.com/openai/v1/chat/completions";
+const QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") ?? "";
+const LLM_MODEL = "qwen-max-latest";
+const LLM_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,10 +164,10 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const apiKey = Deno.env.get("GROQ_API_KEY") || "";
+      const apiKey = Deno.env.get("QWEN_API_KEY") || "";
       const { messages, tools } = payload;
 
-      // Groq supports native OpenAI-compatible tool calling
+      // Qwen supports native OpenAI-compatible tool calling
       const res = await fetch(LLM_URL, {
         method: "POST",
         headers: {
@@ -178,7 +178,8 @@ Deno.serve(async (req: Request) => {
           model: LLM_MODEL,
           messages: messages || [],
           ...(tools && tools.length > 0 && { tools, tool_choice: "auto" }),
-          max_tokens: 4096
+          max_tokens: 4096,
+          enable_thinking: false
         }),
         signal: AbortSignal.timeout(120000)
       });
