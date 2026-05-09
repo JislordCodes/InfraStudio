@@ -1,7 +1,7 @@
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- gen_random_uuid() is built into Postgres 13+, no extension needed
 
 CREATE TABLE ifc_sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL DEFAULT 'New Session',
     mcp_session_id TEXT,
     last_ifc_url TEXT,
@@ -9,7 +9,7 @@ CREATE TABLE ifc_sessions (
 );
 
 CREATE TABLE ifc_messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID REFERENCES ifc_sessions(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     content TEXT,

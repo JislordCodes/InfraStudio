@@ -5,13 +5,13 @@
  */
 
 // ══ CONFIG ══
-const EDGE_PROXY_URL = "https://gitfkenmwzrldzqunvww.supabase.co/functions/v1/gemini-chat";
+const EDGE_PROXY_URL = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1/gemini-chat";
 const YEP_API_URL = "https://api.yepapi.com/v1/ai/chat";
 const YEP_API_KEY = "yep_sk_91f813627b0713b732d2864302fb47b989e21c8ce08097af";
 const YEP_MODEL = "anthropic/claude-opus-4.7";
 const MAX_TURNS = 25;
 
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpdGZrZW5td3pybGR6cXVudnd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU3Nzg4NzYsImV4cCI6MjA3MTM1NDg3Nn0.7WQtp9TSHnJjoq39_LVhqjDYU2HbGAxfnleaHMS5VZU";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
 
 // ══ EDGE FUNCTION PROXY (for MCP operations only) ══
 
