@@ -68,6 +68,20 @@ export async function runQwenAgentLoop(
 
   onStep(`✅ Loaded ${tools.length} tools`);
 
+  // 2. Reset the backend IFC project for new sessions to prevent stale data
+  if (previousMessages.length === 0) {
+    onStep("🗑️ Resetting IFC project for fresh session...");
+    try {
+      await proxyRequest("call_tool", { 
+        name: "initialize_project", 
+        args: { project_name: "InfraStudio Session" } 
+      }, activeSessionId);
+      onStep("✅ Fresh IFC project initialized");
+    } catch (e) {
+      console.warn("initialize_project failed (non-fatal):", e);
+    }
+  }
+
   const systemMsg = { role: "system", content: systemPrompt };
   const userMsg = { role: "user", content: userMessage };
   
