@@ -1,7 +1,7 @@
 /**
  * Client-side agentic loop.
- * - Edge Function handles: init (MCP), call_tool (MCP)
- * - Browser calls Google AI Studio (Gemma 4) DIRECTLY for LLM chat with native tool calling
+ * - Edge Function handles: init (MCP), call_tool (MCP), chat (LLM)
+ * - Enforces strict material/style workflow and spatial reasoning
  */
 
 // ══ CONFIG ══
@@ -42,6 +42,101 @@ async function proxyRequest(action: string, payload: Record<string, unknown> = {
   return data;
 }
 
+// ══ ARGUMENT SANITIZER ══
+// Recursively strip null, undefined, "none", "null" values from tool arguments
+// so the MCP backend always receives real values.
+function sanitizeArgs(obj: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === null || val === undefined) continue;
+    if (typeof val === 'string' && (val.toLowerCase() === 'none' || val.toLowerCase() === 'null' || val === '')) continue;
+    if (typeof val === 'object' && !Array.isArray(val) && val !== null) {
+      const nested = sanitizeArgs(val as Record<string, unknown>);
+      if (Object.keys(nested).length > 0) clean[key] = nested;
+    } else {
+      clean[key] = val;
+    }
+  }
+  return clean;
+}
+
+// ══ ENHANCED SYSTEM PROMPT ══
+const ARCHITECT_PROMPT = `
+You are InfraStudio AI — an expert BIM architect and IFC engineer. You think carefully and methodically about spatial relationships, real-world dimensions, and material properties before calling any tool.
+
+━━━ SPATIAL REASONING RULES ━━━
+
+COORDINATE SYSTEM: Right-hand rule. X = East, Y = North, Z = Up. All units are METERS.
+- A standard residential storey is 3.0m floor-to-floor.
+- A standard door is 0.9m wide × 2.1m tall.
+- A standard window is 1.2m wide × 1.5m tall, sill height 0.9m from floor.
+- A standard wall is 0.2m thick (interior) or 0.3m thick (exterior).
+
+PLACEMENT LOGIC — Think step by step:
+- Walls along the X-axis: rotation [0, 0, 0]. Location [x, y, 0] where x is the START point.
+- Walls along the Y-axis: rotation [0, 0, 1.5708] (90° in radians).
+- A door at the CENTER of a 5m wall: door location offset = (5.0 - 0.9) / 2 = 2.05m from wall start.
+- A window at height 0.9m from floor: set the window's Z location to 0.9.
+- Multiple walls forming a room: compute each wall's start/end coordinates so corners meet precisely.
+
+DIMENSION DEFAULTS — Always provide explicit numeric values:
+- Wall: height=3.0, length=5.0, thickness=0.2
+- Door: height=2.1, width=0.9
+- Window: height=1.5, width=1.2
+- Column: height=3.0, diameter=0.3
+- Slab: thickness=0.2
+
+━━━ TOOL PARAMETER RULES ━━━
+
+EVERY parameter you pass to a tool MUST have an explicit, meaningful value.
+- NEVER pass null, None, empty string, or omit required fields.
+- For "material": always pass a material name string like "Concrete", "Timber", "Steel", "Glass".
+- For "dimensions": always pass an object like {"height": 3.0, "length": 5.0, "thickness": 0.2}.
+- For "location": always pass [x, y, z] coordinates like [0.0, 0.0, 0.0].
+- For "rotation": always pass [rx, ry, rz] in radians like [0.0, 0.0, 0.0].
+- For "geometry_properties": always pass {"represents_3d": true}.
+
+━━━ MANDATORY BUILD WORKFLOW ━━━
+
+For EVERY building element you create, follow ALL 4 steps:
+
+STEP 1 — CREATE: Call the creation tool (create_wall, create_door, create_window, etc.)
+  → Read the JSON response and extract the "guid" or "element_guid" field.
+
+STEP 2 — STYLE: Call create_surface_style with the correct RGB color:
+  | Material   | RGB Color                | Transparency |
+  |------------|--------------------------|-------------|
+  | Concrete   | [0.65, 0.65, 0.65]       | 0.0         |
+  | Wood       | [0.55, 0.35, 0.17]       | 0.0         |
+  | Glass      | [0.7, 0.85, 1.0]         | 0.6         |
+  | Steel      | [0.6, 0.6, 0.65]         | 0.0         |
+  | Brick      | [0.72, 0.32, 0.2]        | 0.0         |
+  | Marble     | [0.92, 0.91, 0.88]       | 0.0         |
+  | Aluminium  | [0.75, 0.75, 0.78]       | 0.0         |
+  | Plaster    | [0.9, 0.88, 0.82]        | 0.0         |
+  → Give each style a descriptive name like "Concrete Wall Style".
+
+STEP 3 — APPLY: Call apply_style_to_object with:
+  - object_guids = the GUID from Step 1
+  - style_name = the name from Step 2
+
+STEP 4 — EXPORT: After ALL elements are created and styled, call export_ifc ONCE as the final action.
+
+NEVER skip Steps 2-3. Without them, elements appear as plain white in the 3D viewer.
+NEVER say "I've finished" without calling export_ifc first.
+
+━━━ THINKING PROCESS ━━━
+
+Before calling any tool, briefly plan:
+1. What elements are needed?
+2. What are their exact dimensions in meters?
+3. Where does each element go (x, y, z)?
+4. What material and color does each element need?
+5. How do elements connect spatially (walls meeting at corners, doors centered in walls)?
+
+Then execute your plan step by step using tools.
+`;
+
 // ══ MAIN AGENT LOOP ══
 export interface AgentResult {
   reply: string;
@@ -57,27 +152,12 @@ export async function runQwenAgentLoop(
   onStep: (step: string) => void,
   onAssistantMessage?: (msg: any) => void
 ): Promise<AgentResult> {
-  // 1. Initialize MCP via Edge proxy (this always works)
+  // 1. Initialize MCP via Edge proxy
   onStep("🔌 Connecting to backend proxy...");
   
   const initData = await proxyRequest("init", {}, clientSessionId);
   const tools = initData.tools || [];
-  const systemPrompt = (initData.system_prompt || "You are an AI architect.") + `
-
-CRITICAL WORKFLOW — YOU MUST FOLLOW THESE STEPS IN ORDER FOR EVERY ELEMENT:
-
-1. CREATE the element (create_wall, create_door, create_window, etc.) — save the GUID from the response.
-2. CREATE a surface style using create_surface_style with the correct RGB color:
-   - Concrete: color=[0.65, 0.65, 0.65]
-   - Wood/Timber: color=[0.55, 0.35, 0.17]
-   - Glass: color=[0.7, 0.85, 1.0], transparency=0.6
-   - Steel: color=[0.6, 0.6, 0.65]
-   - Brick: color=[0.72, 0.32, 0.2]
-3. APPLY the style using apply_style_to_object with the element's GUID and the style name.
-4. After ALL elements are created and styled, call export_ifc as your FINAL action.
-
-NEVER skip steps 2-3. Without them, elements appear as plain white in the viewer.
-Parse each tool response JSON to extract the "guid" or "element_guid" field for use in apply_style_to_object.`;
+  const systemPrompt = (initData.system_prompt || "") + ARCHITECT_PROMPT;
   const activeSessionId = initData.session_id || clientSessionId;
 
   onStep(`✅ Loaded ${tools.length} tools`);
@@ -109,7 +189,7 @@ Parse each tool response JSON to extract the "guid" or "element_guid" field for 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
-    // 2. Call LLM via Edge Function (Gemma 4 with native tool calling)
+    // Call LLM via Edge Function
     const response = await proxyRequest("chat", { messages, tools }, activeSessionId);
 
     const choice = response.choices?.[0];
@@ -143,12 +223,13 @@ Parse each tool response JSON to extract the "guid" or "element_guid" field for 
       return { reply, ifc_url, steps, mcp_session_id: activeSessionId };
     }
 
-    // 3. Execute tool calls via Edge proxy (MCP operations)
+    // Execute tool calls via Edge proxy (MCP operations)
     for (const call of toolCalls) {
       const toolName = call.function?.name;
       let toolArgs: Record<string, unknown> = {};
       try {
-        toolArgs = JSON.parse(call.function?.arguments || "{}");
+        const raw = JSON.parse(call.function?.arguments || "{}");
+        toolArgs = sanitizeArgs(raw); // Strip null/none/empty values
       } catch {
         toolArgs = {};
       }
@@ -193,3 +274,4 @@ Parse each tool response JSON to extract the "guid" or "element_guid" field for 
     mcp_session_id: activeSessionId
   };
 }
+
