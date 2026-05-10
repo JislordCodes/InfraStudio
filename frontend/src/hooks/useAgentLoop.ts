@@ -75,14 +75,19 @@ COORDINATE SYSTEM: Right-hand rule. X = East, Y = North, Z = Up. All units are M
 PLACEMENT LOGIC — Think step by step:
 - Walls along the X-axis: rotation [0, 0, 0]. Location [x, y, 0] where x is the START point.
 - Walls along the Y-axis: rotation [0, 0, 1.5708] (90° in radians).
-- A door at the CENTER of a 5m wall starting at [0,0,0]: opening location = [2.05, 0.0, 0.0]
-- A window at height 0.9m from floor: opening location z = 0.9.
-- Multiple walls forming a room: compute each wall's start/end coordinates so corners meet precisely.
+- A door at the CENTER of a 5m wall starting at [0,0,0]: location = [2.05, 0.0, 0.0]
+
+HOW TO BUILD AN ENCLOSED ROOM (4 WALLS):
+To build a 5m x 5m enclosed room, you MUST create 4 walls that form a closed rectangle:
+1. South Wall (X-axis): length=5, location=[0, 0, 0], rotation=[0, 0, 0]
+2. East Wall (Y-axis): length=5, location=[5, 0, 0], rotation=[0, 0, 1.5708]
+3. North Wall (X-axis): length=5, location=[0, 5, 0], rotation=[0, 0, 0]
+4. West Wall (Y-axis): length=5, location=[0, 0, 0], rotation=[0, 0, 1.5708]
 
 DIMENSION DEFAULTS — Always provide explicit numeric values:
 - Wall: height=3.0, length=5.0, thickness=0.2
-- Door: height=2.1, width=0.9
-- Window: height=1.5, width=1.2
+- Door: dimensions={"height": 2.1, "width": 0.9}
+- Window: dimensions={"height": 1.5, "width": 1.2}
 - Column: height=3.0, diameter=0.3
 - Slab: thickness=0.2
 
@@ -100,6 +105,7 @@ EVERY parameter you pass to a tool MUST have an explicit, meaningful value.
 
 To place a door or window IN a wall, you MUST follow this exact 3-step process.
 If you skip any step, the door will clip through the wall with no hole.
+CRITICAL: The 'location' of the door MUST EXACTLY MATCH the 'location' of the opening!
 
 STEP A — CUT THE OPENING:
   Call create_opening to cut a void in the wall:
@@ -108,14 +114,21 @@ STEP A — CUT THE OPENING:
       width = 0.9,        // door width
       height = 2.1,       // door height  
       depth = 0.3,        // slightly > wall thickness
-      location = [2.05, 0.0, 0.0],  // position along wall
+      location = [2.05, 0.0, 0.0],  // position relative to world
       opening_type = "OPENING",
       name = "Door Opening"
     )
   → Extract "opening_guid" from the response.
 
 STEP B — CREATE THE ELEMENT:
-  Call create_door or create_window.
+  Call create_door or create_window. 
+  CRITICAL: The 'location' and 'rotation' here MUST EXACTLY MATCH Step A so it fits inside the hole!
+    create_door(
+      name = "Front Door",
+      dimensions = {"height": 2.1, "width": 0.9},
+      location = [2.05, 0.0, 0.0], // MUST MATCH OPENING LOCATION EXACTLY
+      rotation = [0.0, 0.0, 0.0]   // MUST MATCH WALL ROTATION
+    )
   → Extract "guid" or "element_guid" from the response.
 
 STEP C — FILL THE OPENING:
