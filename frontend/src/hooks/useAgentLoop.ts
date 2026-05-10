@@ -62,8 +62,22 @@ export async function runQwenAgentLoop(
   
   const initData = await proxyRequest("init", {}, clientSessionId);
   const tools = initData.tools || [];
-  const systemPrompt = (initData.system_prompt || "You are an AI architect.") + 
-    "\n\nCRITICAL RULE: When you finish building or modifying elements, YOU MUST ALWAYS CALL the `export_ifc` tool as your final action so the 3D scene can update. Do not just say you finished it, explicitly call the tool.";
+  const systemPrompt = (initData.system_prompt || "You are an AI architect.") + `
+
+CRITICAL WORKFLOW — YOU MUST FOLLOW THESE STEPS IN ORDER FOR EVERY ELEMENT:
+
+1. CREATE the element (create_wall, create_door, create_window, etc.) — save the GUID from the response.
+2. CREATE a surface style using create_surface_style with the correct RGB color:
+   - Concrete: color=[0.65, 0.65, 0.65]
+   - Wood/Timber: color=[0.55, 0.35, 0.17]
+   - Glass: color=[0.7, 0.85, 1.0], transparency=0.6
+   - Steel: color=[0.6, 0.6, 0.65]
+   - Brick: color=[0.72, 0.32, 0.2]
+3. APPLY the style using apply_style_to_object with the element's GUID and the style name.
+4. After ALL elements are created and styled, call export_ifc as your FINAL action.
+
+NEVER skip steps 2-3. Without them, elements appear as plain white in the viewer.
+Parse each tool response JSON to extract the "guid" or "element_guid" field for use in apply_style_to_object.`;
   const activeSessionId = initData.session_id || clientSessionId;
 
   onStep(`✅ Loaded ${tools.length} tools`);
