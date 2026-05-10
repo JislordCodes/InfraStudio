@@ -183,6 +183,16 @@ Before calling any tool, plan:
 5. For doors/windows: where is the opening in the wall? What are the 3 steps (open → create → fill)?
 
 Then execute step by step.
+
+━━━ EDITING EXISTING ELEMENTS ━━━
+
+When the user asks to modify an existing model (e.g. "align the door", "add a lintel"):
+1. First call get_scene_info(include_bbox=true, include_transform=true) to see all current elements and their GUIDs.
+2. Use the GUIDs from the scene info or from previous tool results to reference existing elements.
+3. Use update_door, update_window, or get_object_info to inspect/modify elements.
+4. For repositioning, use the element's GUID with the appropriate update tool.
+5. For adding new elements to an existing model, just create them — do NOT call initialize_project.
+6. Always call export_ifc after modifications.
 `;
 
 // ══ MAIN AGENT LOOP ══
@@ -198,7 +208,8 @@ export async function runQwenAgentLoop(
   previousMessages: any[],
   clientSessionId: string,
   onStep: (step: string) => void,
-  onAssistantMessage?: (msg: any) => void
+  onAssistantMessage?: (msg: any) => void,
+  onToolResult?: (msg: any) => void
 ): Promise<AgentResult> {
   // 1. Initialize MCP via Edge proxy
   onStep("🔌 Connecting to backend proxy...");
@@ -230,6 +241,25 @@ export async function runQwenAgentLoop(
   const messages = previousMessages.length > 0 
     ? [systemMsg, ...previousMessages, userMsg] 
     : [systemMsg, userMsg];
+
+  // For follow-up messages, inject current scene state so LLM knows existing elements
+  if (previousMessages.length > 0) {
+    onStep("🔎 Loading current model state for editing...");
+    try {
+      const sceneRes = await proxyRequest("call_tool", {
+        name: "get_scene_info",
+        args: { include_bbox: true, include_transform: true }
+      }, activeSessionId);
+      const sceneData = sceneRes.result;
+      messages.push({
+        role: "user",
+        content: `[SYSTEM: Current model state for reference — use these GUIDs to edit existing elements]\n${sceneData}`
+      });
+      onStep("✅ Model state loaded");
+    } catch (e) {
+      console.warn("Scene state load failed (non-fatal):", e);
+    }
+  }
 
   const steps: string[] = [];
   let ifc_url: string | undefined;
@@ -338,6 +368,15 @@ export async function runQwenAgentLoop(
         tool_call_id: call.id,
         content: toolResult,
       });
+
+      // Persist tool result so follow-up messages have access to GUIDs
+      if (onToolResult) {
+        onToolResult({
+          role: "tool",
+          tool_call_id: call.id,
+          content: toolResult,
+        });
+      }
     }
   }
 

@@ -120,10 +120,23 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       const sessionObj = sessions.find(s => s.id === sid);
       const clientMcpId = sessionObj?.mcp_session_id || '';
 
-      // Build history for LLM context
-      const history = messages
-        .filter(m => m.role === 'user' || (m.role === 'assistant' && !m.tool_calls))
-        .map(m => ({ role: m.role, content: m.content }));
+      // Build history for LLM context — include tool call results so LLM knows existing GUIDs
+      const history: any[] = [];
+      for (const m of messages) {
+        if (m.role === 'user') {
+          history.push({ role: 'user', content: m.content });
+        } else if (m.role === 'assistant') {
+          if (m.tool_calls) {
+            // Include assistant messages with tool calls so LLM knows what was executed
+            history.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls });
+          } else if (m.content && m.content.trim()) {
+            history.push({ role: 'assistant', content: m.content });
+          }
+        } else if (m.role === 'tool' && m.tool_call_id) {
+          // Include tool results — these contain the GUIDs the LLM needs for editing
+          history.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
+        }
+      }
 
       const result = await runQwenAgentLoop(
         userContent,
@@ -136,6 +149,14 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
             role: 'assistant',
             content: assistantObj.content || '',
             tool_calls: assistantObj.tool_calls,
+          });
+        },
+        async (toolMsg: any) => {
+          // Save tool results silently
+          await saveMessage(sid!, {
+            role: 'tool',
+            content: toolMsg.content || '',
+            tool_call_id: toolMsg.tool_call_id,
           });
         }
       );
