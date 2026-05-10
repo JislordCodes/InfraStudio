@@ -162,6 +162,17 @@ STEP 3 — EXPORT: After ALL elements are built and styled, call export_ifc ONCE
 8. apply_style_to_object(object_guids=door_guid, style_name="Wood Door Style")
 9. export_ifc()
 
+━━━ SELF-VALIDATION ━━━
+
+After creating all elements and BEFORE exporting, you will receive a scene validation
+report from get_scene_info showing every object's position, bounding box, and IFC class.
+Review it carefully:
+- Are all requested elements present? (e.g. wall + opening + door)
+- Do bounding boxes make sense? (a 5m wall should have ~5m X dimension)
+- Are doors/windows inside their parent wall's bounding box?
+- Are there any elements at [0,0,0] that should be elsewhere?
+If something looks wrong, fix it by calling the appropriate tools, then verify again.
+
 ━━━ THINKING PROCESS ━━━
 
 Before calling any tool, plan:
@@ -244,7 +255,33 @@ export async function runQwenAgentLoop(
     if (toolCalls.length === 0) {
       const reply = assistantMsg.content || "I have completed building your IFC model.";
       
-      // Auto-export the IFC to guarantee the 3D viewer updates even if LLM forgot
+      // ── SELF-VALIDATION: Inspect the scene before export ──
+      // Only validate if the LLM actually built something (not just a text reply)
+      if (!ifc_url && turn > 0) {
+        onStep("🔍 Validating model before export...");
+        try {
+          const sceneRes = await proxyRequest("call_tool", {
+            name: "get_scene_info",
+            args: { include_bbox: true, include_transform: true }
+          }, activeSessionId);
+          const sceneData = sceneRes.result;
+          
+          // Feed scene info back to LLM for self-check
+          messages.push({
+            role: "user",
+            content: `VALIDATION CHECK — Here is the current scene state. Review it and confirm everything looks correct. If there are issues (missing elements, wrong positions, overlapping geometry), fix them now. If everything is correct, call export_ifc to finalize.\n\nScene data:\n${sceneData}`
+          });
+          steps.push(`  🔍 Scene validated (${JSON.parse(sceneData).count || '?'} objects)`);
+          onStep("🔍 Scene validation sent to AI for review...");
+          
+          // Continue the loop so the LLM can review and either fix or export
+          continue;
+        } catch (e) {
+          console.warn("Scene validation failed (non-fatal):", e);
+        }
+      }
+      
+      // Auto-export the IFC to guarantee the 3D viewer updates
       onStep("📦 Auto-exporting IFC model to update 3D scene...");
       try {
         const exportRes = await proxyRequest("call_tool", { name: "export_ifc", args: {} }, activeSessionId);
