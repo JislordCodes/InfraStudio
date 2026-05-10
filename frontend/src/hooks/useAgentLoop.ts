@@ -75,8 +75,8 @@ COORDINATE SYSTEM: Right-hand rule. X = East, Y = North, Z = Up. All units are M
 PLACEMENT LOGIC — Think step by step:
 - Walls along the X-axis: rotation [0, 0, 0]. Location [x, y, 0] where x is the START point.
 - Walls along the Y-axis: rotation [0, 0, 1.5708] (90° in radians).
-- A door at the CENTER of a 5m wall: door location offset = (5.0 - 0.9) / 2 = 2.05m from wall start.
-- A window at height 0.9m from floor: set the window's Z location to 0.9.
+- A door at the CENTER of a 5m wall starting at [0,0,0]: opening location = [2.05, 0.0, 0.0]
+- A window at height 0.9m from floor: opening location z = 0.9.
 - Multiple walls forming a room: compute each wall's start/end coordinates so corners meet precisely.
 
 DIMENSION DEFAULTS — Always provide explicit numeric values:
@@ -90,20 +90,51 @@ DIMENSION DEFAULTS — Always provide explicit numeric values:
 
 EVERY parameter you pass to a tool MUST have an explicit, meaningful value.
 - NEVER pass null, None, empty string, or omit required fields.
-- For "material": always pass a material name string like "Concrete", "Timber", "Steel", "Glass".
+- For "material": always pass a string like "Concrete", "Timber", "Steel", "Glass".
 - For "dimensions": always pass an object like {"height": 3.0, "length": 5.0, "thickness": 0.2}.
-- For "location": always pass [x, y, z] coordinates like [0.0, 0.0, 0.0].
+- For "location": always pass [x, y, z] like [0.0, 0.0, 0.0].
 - For "rotation": always pass [rx, ry, rz] in radians like [0.0, 0.0, 0.0].
 - For "geometry_properties": always pass {"represents_3d": true}.
 
-━━━ MANDATORY BUILD WORKFLOW ━━━
+━━━ DOOR & WINDOW WORKFLOW (CRITICAL!) ━━━
 
-For EVERY building element you create, follow ALL 4 steps:
+To place a door or window IN a wall, you MUST follow this exact 3-step process.
+If you skip any step, the door will clip through the wall with no hole.
 
-STEP 1 — CREATE: Call the creation tool (create_wall, create_door, create_window, etc.)
-  → Read the JSON response and extract the "guid" or "element_guid" field.
+STEP A — CUT THE OPENING:
+  Call create_opening to cut a void in the wall:
+    create_opening(
+      wall_guid = "<wall_guid from create_wall>",
+      width = 0.9,        // door width
+      height = 2.1,       // door height  
+      depth = 0.3,        // slightly > wall thickness
+      location = [2.05, 0.0, 0.0],  // position along wall
+      opening_type = "OPENING",
+      name = "Door Opening"
+    )
+  → Extract "opening_guid" from the response.
 
-STEP 2 — STYLE: Call create_surface_style with the correct RGB color:
+STEP B — CREATE THE ELEMENT:
+  Call create_door or create_window.
+  → Extract "guid" or "element_guid" from the response.
+
+STEP C — FILL THE OPENING:
+  Call fill_opening to link the door/window into the void:
+    fill_opening(
+      opening_guid = "<opening_guid from Step A>",
+      element_guid = "<door_guid from Step B>"
+    )
+
+This 3-step process is MANDATORY for doors and windows. Without it:
+- No hole is cut in the wall
+- The door/window clips through solid geometry
+- The IFC file is structurally incorrect
+
+━━━ MATERIAL & STYLE WORKFLOW ━━━
+
+After creating elements, style them:
+
+STEP 1 — CREATE STYLE: Call create_surface_style with RGB color:
   | Material   | RGB Color                | Transparency |
   |------------|--------------------------|-------------|
   | Concrete   | [0.65, 0.65, 0.65]       | 0.0         |
@@ -114,27 +145,33 @@ STEP 2 — STYLE: Call create_surface_style with the correct RGB color:
   | Marble     | [0.92, 0.91, 0.88]       | 0.0         |
   | Aluminium  | [0.75, 0.75, 0.78]       | 0.0         |
   | Plaster    | [0.9, 0.88, 0.82]        | 0.0         |
-  → Give each style a descriptive name like "Concrete Wall Style".
 
-STEP 3 — APPLY: Call apply_style_to_object with:
-  - object_guids = the GUID from Step 1
-  - style_name = the name from Step 2
+STEP 2 — APPLY STYLE: Call apply_style_to_object(object_guids, style_name).
 
-STEP 4 — EXPORT: After ALL elements are created and styled, call export_ifc ONCE as the final action.
+STEP 3 — EXPORT: After ALL elements are built and styled, call export_ifc ONCE.
 
-NEVER skip Steps 2-3. Without them, elements appear as plain white in the 3D viewer.
-NEVER say "I've finished" without calling export_ifc first.
+━━━ FULL EXAMPLE: "Concrete wall with wooden door" ━━━
+
+1. create_wall(name="Main Wall", dimensions={"height":3,"length":5,"thickness":0.2}, location=[0,0,0], material="Concrete") → wall_guid
+2. create_opening(wall_guid=wall_guid, width=0.9, height=2.1, depth=0.3, location=[2.05,0,0]) → opening_guid
+3. create_door(name="Front Door", height=2.1, width=0.9, location=[2.05,0,0], material="Timber") → door_guid
+4. fill_opening(opening_guid=opening_guid, element_guid=door_guid)
+5. create_surface_style(name="Concrete Style", color=[0.65,0.65,0.65])
+6. apply_style_to_object(object_guids=wall_guid, style_name="Concrete Style")
+7. create_surface_style(name="Wood Door Style", color=[0.55,0.35,0.17])
+8. apply_style_to_object(object_guids=door_guid, style_name="Wood Door Style")
+9. export_ifc()
 
 ━━━ THINKING PROCESS ━━━
 
-Before calling any tool, briefly plan:
+Before calling any tool, plan:
 1. What elements are needed?
-2. What are their exact dimensions in meters?
+2. What are their exact dimensions?
 3. Where does each element go (x, y, z)?
-4. What material and color does each element need?
-5. How do elements connect spatially (walls meeting at corners, doors centered in walls)?
+4. What material and color does each need?
+5. For doors/windows: where is the opening in the wall? What are the 3 steps (open → create → fill)?
 
-Then execute your plan step by step using tools.
+Then execute step by step.
 `;
 
 // ══ MAIN AGENT LOOP ══
