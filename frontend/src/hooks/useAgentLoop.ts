@@ -191,6 +191,7 @@ export async function runQwenAgentLoop(
 
   const steps: string[] = [];
   let ifc_url: string | undefined;
+  let validationAttempts = 0;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
@@ -213,10 +214,10 @@ export async function runQwenAgentLoop(
     if (toolCalls.length === 0) {
       const reply = assistantMsg.content || "I have completed building your IFC model.";
       
-      // ── SELF-VALIDATION: Inspect the scene before export ──
-      // Only validate if the LLM actually built something (not just a text reply)
-      if (!ifc_url && turn > 0) {
-        onStep("🔍 Validating model before export...");
+      // ── SELF-VALIDATION: Inspect the scene and force completion ──
+      if (!ifc_url && turn > 0 && validationAttempts < 2) {
+        validationAttempts++;
+        onStep(`🔍 Validating model (check ${validationAttempts}/2)...`);
         try {
           const sceneRes = await proxyRequest("call_tool", {
             name: "get_scene_info",
@@ -224,15 +225,39 @@ export async function runQwenAgentLoop(
           }, activeSessionId);
           const sceneData = sceneRes.result;
           
-          // Feed scene info back to LLM for self-check
+          // Parse scene to detect what's missing
+          let sceneObj: any = {};
+          try { sceneObj = JSON.parse(sceneData); } catch {}
+          const objects = sceneObj.objects || sceneObj.elements || [];
+          const objectList = Array.isArray(objects) ? objects : [];
+          
+          
+          const hasDoors = objectList.some((o: any) => o.ifc_class === 'IfcDoor' || o.type === 'IfcDoor');
+          const hasWindows = objectList.some((o: any) => o.ifc_class === 'IfcWindow' || o.type === 'IfcWindow');
+          const wallCount = objectList.filter((o: any) => o.ifc_class === 'IfcWall' || o.type === 'IfcWall').length;
+          
+          // Build a specific list of what's missing
+          const missing: string[] = [];
+          if (wallCount < 4) missing.push(`Only ${wallCount} walls found — a room needs exactly 4 walls to be enclosed`);
+          if (!hasDoors) missing.push("No doors found — every room needs at least one entry door. Use create_door with wall_guid + create_opening=true");
+          if (!hasWindows) missing.push("No windows found — add at least one window for natural light. Use create_window with wall_guid + create_opening=true");
+          
+          // Always need styles and export
+          missing.push("You MUST create surface styles (create_surface_style) and apply them to ALL elements (apply_style_to_object)");
+          missing.push("You MUST call export_ifc as the very last step");
+          
+          const validationMsg = missing.length > 0
+            ? `⚠️ INCOMPLETE MODEL — You stopped too early! The following items are MISSING and MUST be added NOW:\n\n${missing.map((m, i) => `${i+1}. ${m}`).join('\n')}\n\nDo NOT reply with text. Call the tools NOW to fix these issues. Start with the first missing item.\n\nCurrent scene:\n${sceneData}`
+            : `Model looks complete. Call export_ifc now to finalize.\n\n${sceneData}`;
+          
           messages.push({
             role: "user",
-            content: `VALIDATION CHECK — Here is the current scene state. Review it and confirm everything looks correct. If there are issues (missing elements, wrong positions, overlapping geometry), fix them now. If everything is correct, call export_ifc to finalize.\n\nScene data:\n${sceneData}`
+            content: validationMsg
           });
-          steps.push(`  🔍 Scene validated (${JSON.parse(sceneData).count || '?'} objects)`);
-          onStep("🔍 Scene validation sent to AI for review...");
+          steps.push(`  🔍 Validation: ${missing.length} issues found`);
+          onStep(`🔍 Found ${missing.length} missing items — sending back to AI...`);
           
-          // Continue the loop so the LLM can review and either fix or export
+          // Continue the loop so the LLM can fix issues
           continue;
         } catch (e) {
           console.warn("Scene validation failed (non-fatal):", e);
