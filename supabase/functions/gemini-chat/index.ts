@@ -1,10 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-
+import { GoogleAuth } from "npm:google-auth-library";
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const QWEN_API_KEY = Deno.env.get("QWEN_API_KEY") ?? "";
-const LLM_MODEL = "qwen-max-latest";
-const LLM_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions";
+const LLM_MODEL = "gemini-3.1-pro-preview";
+const LOCATION = "global"; // Can also be us-central1 depending on API availability
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,22 +163,44 @@ Deno.serve(async (req: Request) => {
 
 
     if (action === "chat") {
-      const apiKey = Deno.env.get("QWEN_API_KEY") || "";
       const { messages, tools } = payload;
+      
+      const saJsonString = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "{}";
+      const saJson = JSON.parse(saJsonString);
+      
+      if (!saJson.project_id) {
+        return new Response(JSON.stringify({ error: "Missing or invalid GCP_SERVICE_ACCOUNT_KEY" }), {
+          status: 500, headers: { ...CORS, "Content-Type": "application/json" }
+        });
+      }
 
-      // Qwen supports native OpenAI-compatible tool calling
+      const auth = new GoogleAuth({
+        credentials: {
+          client_email: saJson.client_email,
+          private_key: saJson.private_key,
+        },
+        scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+      });
+      
+      const client = await auth.getClient();
+      const tokenObj = await client.getAccessToken();
+      const accessToken = tokenObj?.token || "";
+      
+      const PROJECT_ID = saJson.project_id;
+      // Vertex AI OpenAI-compatible endpoint
+      const LLM_URL = `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
+
+      // Vertex AI supports native OpenAI-compatible tool calling
       const res = await fetch(LLM_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
+          "Authorization": `Bearer ${accessToken}`
         },
         body: JSON.stringify({
           model: LLM_MODEL,
           messages: messages || [],
           ...(tools && tools.length > 0 && { tools, tool_choice: "auto" }),
-          max_tokens: 4096,
-          enable_thinking: false
         }),
         signal: AbortSignal.timeout(120000)
       });
