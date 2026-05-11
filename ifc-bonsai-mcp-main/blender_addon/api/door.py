@@ -129,9 +129,16 @@ def create_door(
     transformation_matrix: Optional[Union[np.ndarray, List[List[float]]]] = None,
     unit_scale: Optional[float] = None,
     part_of_product: Optional[Any] = None,
+    wall_guid: Optional[str] = None,
+    create_opening: bool = False,
     verbose: bool = False,
 ) -> Dict[str, Any]:
-    """Create parametric IfcDoor with specified properties."""
+    """Create parametric IfcDoor with specified properties.
+    
+    Args:
+        wall_guid: GUID of wall to place door in (for automatic opening creation)
+        create_opening: If True and wall_guid provided, creates opening + fills it automatically
+    """
     
     if dimensions is None:
         dimensions = {"width": 0.9, "height": 2.0}
@@ -143,6 +150,54 @@ def create_door(
         frame_properties = {}
     if panel_properties is None:
         panel_properties = {}
+    
+    # ── Auto-create opening in wall if requested ──
+    opening_guid = None
+    if wall_guid and create_opening:
+        ifc_file_check = get_ifc_file()
+        try:
+            wall = ifc_file_check.by_guid(wall_guid)
+            if not wall or not wall.is_a("IfcWall"):
+                raise ValueError(f"Wall with GUID {wall_guid} not found or not a wall")
+        except Exception as e:
+            raise ValueError(f"Error getting wall: {str(e)}")
+        
+        # Detect wall thickness for opening depth
+        wall_thickness = 0.2
+        try:
+            if hasattr(wall, 'Representation') and wall.Representation:
+                for rep in wall.Representation.Representations:
+                    if rep.RepresentationIdentifier == "Body":
+                        for item in rep.Items:
+                            if hasattr(item, 'SweptArea') and hasattr(item.SweptArea, 'XDim'):
+                                wall_thickness = item.SweptArea.XDim
+                                break
+        except:
+            pass
+        
+        door_width = float(dimensions.get("overall_width", dimensions.get("width", 0.9)))
+        door_height = float(dimensions.get("overall_height", dimensions.get("height", 2.0)))
+        door_location = location if location else [0.0, 0.0, 0.0]
+        door_rotation = rotation if rotation else [0.0, 0.0, 0.0]
+        opening_depth = wall_thickness + 0.1
+        
+        from .feature import create_opening_llm
+        opening_result = create_opening_llm(
+            width=door_width,
+            height=door_height,
+            depth=opening_depth,
+            location=door_location,
+            rotation=door_rotation,
+            element_guid=wall_guid,
+            opening_type="OPENING",
+            name=f"Opening for {name}",
+            verbose=verbose
+        )
+        
+        if not opening_result.get("success"):
+            raise RuntimeError(f"Failed to create opening: {opening_result.get('error', 'Unknown error')}")
+        
+        opening_guid = opening_result["opening_guid"]
     
     overall_width = float(dimensions.get("overall_width", dimensions.get("width", 0.9)))
     overall_height = float(dimensions.get("overall_height", dimensions.get("height", 2.0)))
@@ -270,6 +325,17 @@ def create_door(
     )
     
     save_and_load_ifc()
+    
+    # ── Auto-fill the opening with the door ──
+    if wall_guid and create_opening and opening_guid:
+        from .feature import fill_opening_llm
+        filling_result = fill_opening_llm(
+            opening_guid=opening_guid,
+            element_guid=door.GlobalId,
+            verbose=verbose
+        )
+        if not filling_result.get("success") and verbose:
+            print(f"Warning: Failed to fill opening with door: {filling_result.get('error')}")
     
     if verbose:
         print(f"Created door '{name}' with dimensions {overall_width}x{overall_height}m at {location}")
