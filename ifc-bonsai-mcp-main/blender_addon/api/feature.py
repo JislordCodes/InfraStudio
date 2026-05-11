@@ -262,11 +262,19 @@ def fill_opening(
             try:
                 # Place relative to the OPENING (not the wall)
                 element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement
-                # Zero out local coordinates — element is at the opening's origin
+                # Zero out local coordinates AND rotation — element is perfectly aligned with opening
                 if hasattr(element.ObjectPlacement, "RelativePlacement"):
                     rel = element.ObjectPlacement.RelativePlacement
                     if hasattr(rel, "Location"):
                         rel.Location.Coordinates = (0.0, 0.0, 0.0)
+                    
+                    # Reset rotation to identity (relative to parent opening)
+                    # This prevents the "double rotation" bug where doors stick out 90 degrees
+                    if hasattr(rel, "Axis"):
+                        rel.Axis = None # Defaults to (0,0,1)
+                    if hasattr(rel, "RefDirection"):
+                        rel.RefDirection = None # Defaults to (1,0,0)
+                        
             except Exception as e:
                 if verbose: print(f"Could not fix placement hierarchy for filling: {e}")
         
