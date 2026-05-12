@@ -71,59 +71,58 @@ def _compute_wall_segments(
     origin: Tuple[float, float, float],
     wall_thickness: float = 0.2,
 ) -> Dict[str, Dict[str, Any]]:
-    """Compute the four wall segment CENTRELINES for a rectangular room.
+    """Compute the four wall placement points for a rectangular room.
 
-    Uses wall centreline (axis) coordinates so adjacent walls share a clean
-    corner. Each axis runs from corner-midpoint to corner-midpoint, inset by
-    half the wall thickness from the outer face. The `create_wall` API places
-    the wall body symmetrically around the axis, so the bodies fill exactly
-    to the outer face of the adjacent wall — no gaps, no overlaps.
+    Each wall is placed at its START outer-face corner. The wall body is
+    centred on its axis by passing offset=-thickness/2 to create_wall.
+    This avoids corner gaps: the body fills exactly from outer face to
+    outer face of adjacent walls.
 
-    Corner layout (looking down, +Y = north):
+    Layout (looking down, +Y = north):
 
-        NW-axis ─────────── NE-axis
-           |     interior       |
-        SW-axis ─────────── SE-axis
+        NW ─────── north ─────── NE
+        |                         |
+       west      interior        east
+        |                         |
+        SW ─────── south ─────── SE
 
-    Axis corners are (ox + t2, oy + t2), (ox + W - t2, oy + t2), etc.
-    where t2 = wall_thickness / 2.
+    Wall extents after centring:
+        south: SW → SE  full width
+        east:  SE → NE  full length
+        north: NE → NW  full width
+        west:  NW → SW  full length
     """
     ox, oy, oz = origin
-    t2 = wall_thickness / 2.0
 
-    # Centreline corner points
-    sw = (ox + t2,         oy + t2,          oz)
-    se = (ox + width - t2, oy + t2,          oz)
-    ne = (ox + width - t2, oy + length - t2, oz)
-    nw = (ox + t2,         oy + length - t2, oz)
-
-    # Axis (centreline) lengths
-    horiz = width  - wall_thickness   # south and north
-    vert  = length - wall_thickness   # east and west
+    # Outer-face corner points
+    sw = (ox,         oy,          oz)
+    se = (ox + width, oy,          oz)
+    ne = (ox + width, oy + length, oz)
+    nw = (ox,         oy + length, oz)
 
     return {
         "south": {
             "start": sw,
             "end": se,
-            "wall_length": horiz,
+            "wall_length": width,
             "rotation_deg": 0.0,
         },
         "east": {
             "start": se,
             "end": ne,
-            "wall_length": vert,
+            "wall_length": length,
             "rotation_deg": 90.0,
         },
         "north": {
             "start": ne,
             "end": nw,
-            "wall_length": horiz,
+            "wall_length": width,
             "rotation_deg": 180.0,
         },
         "west": {
             "start": nw,
             "end": sw,
-            "wall_length": vert,
+            "wall_length": length,
             "rotation_deg": 270.0,
         },
     }
@@ -301,52 +300,54 @@ def create_room(
     
     # ── PHASE 1: Create walls ────────────────────────────────────────────────
     #
-    # Use centreline corners from wall_segments (already inset by t/2).
-    # create_polyline_walls with closed=True creates the 4 wall segments,
-    # each wall body centred on its axis — producing a tight-jointed box.
+    # Each wall is created individually so we can set geometry_properties.
     #
-    room_corners = [
-        list(wall_segments["south"]["start"]),   # SW-axis  (t/2 inset)
-        list(wall_segments["east"]["start"]),    # SE-axis
-        list(wall_segments["north"]["start"]),   # NE-axis
-        list(wall_segments["west"]["start"]),    # NW-axis
-    ]
+    # KEY: offset = -(wall_thickness / 2) centres the wall body on its axis.
+    # The default offset=0 extrudes the body entirely to one side (left of
+    # travel), which causes north and west walls to protrude outward.
+    #
+    # With centred offset + outer-face start points, each wall's body spans
+    # exactly from its outer face to the adjacent wall's outer face.
+    #
+    from .wall import create_wall as _create_wall
 
     try:
-        from .wall import create_polyline_walls
+        for cardinal in ["south", "east", "north", "west"]:
+            seg = wall_segments[cardinal]
+            sx, sy, sz = seg["start"]
+            wall_name_c = f"{room_name}_Wall_{cardinal.capitalize()}"
 
-        walls_result = create_polyline_walls(
-            points=[tuple(p) for p in room_corners],
-            name_prefix=f"{room_name}_Wall",
-            thickness=wall_thickness,
-            height=height,
-            closed=True,
-        )
+            wr = _create_wall(
+                name=wall_name_c,
+                dimensions={
+                    "length": seg["wall_length"],
+                    "height": height,
+                    "thickness": wall_thickness,
+                },
+                location=[sx, sy, sz],
+                rotation=[0.0, 0.0, seg["rotation_deg"]],
+                geometry_properties={
+                    "direction_sense": "POSITIVE",
+                    "offset": -(wall_thickness / 2.0),
+                    "x_angle": 0.0,
+                },
+            )
 
-        
-        if walls_result.get("success"):
-            # Map wall indices to cardinal names
-            cardinal_order = ["south", "east", "north", "west"]
-            walls_list = walls_result.get("walls", [])
-            
-            for idx, cardinal in enumerate(cardinal_order):
-                if idx < len(walls_list):
-                    wall_data = walls_list[idx]
-                    result["walls"][cardinal] = {
-                        "guid": wall_data.get("wall_guid"),
-                        "name": wall_data.get("name"),
-                        "length": wall_segments[cardinal]["wall_length"],
-                        "start": list(wall_segments[cardinal]["start"]),
-                        "end": list(wall_segments[cardinal]["end"]),
-                    }
-            
-            if verbose:
-                logger.info(f"Created {len(walls_list)} walls for {room_name}")
-        else:
-            result["errors"].append(f"Wall creation failed: {walls_result}")
-            result["success"] = False
-            return result
-            
+            if wr.get("success"):
+                result["walls"][cardinal] = {
+                    "guid": wr["wall_guid"],
+                    "name": wall_name_c,
+                    "length": seg["wall_length"],
+                    "start": list(seg["start"]),
+                    "end": list(seg["end"]),
+                }
+                if verbose:
+                    logger.info(f"Created {cardinal} wall guid={wr['wall_guid']}")
+            else:
+                result["errors"].append(f"{cardinal} wall failed: {wr}")
+                result["success"] = False
+                return result
+
     except Exception as e:
         result["errors"].append(f"Wall creation error: {str(e)}")
         result["success"] = False
