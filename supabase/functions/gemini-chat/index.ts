@@ -1,9 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { GoogleAuth } from "npm:google-auth-library";
+
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 const LLM_MODEL = "gemini-3.1-pro-preview";
-const LOCATION = "global"; // Can also be us-central1 depending on API availability
+const LOCATION = "global";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -99,21 +99,100 @@ async function fetchMcpTools(clientSessionId: string): Promise<{ tools: any[], s
   };
 }
 
-// ══ HTTP HANDLER — MCP PROXY ══
-// The frontend runs the LLM (Puter.js + Claude, free).
-// This Edge Function is just a proxy for MCP tool operations.
-//
-// Actions:
-//   { action: "init" }         → initializes MCP session, returns tools + system prompt
-//   { action: "call_tool", name: "...", args: {...} }  → executes a tool, returns result
+function buildSystemPrompt(): string {
+  return `You are a helpful expert IFC architect agent. You have tools available to modify the model.
 
+TOOL SELECTION — Always pick the HIGHEST-LEVEL tool that fits:
+
+| User wants...          | Use this tool                              |
+|------------------------|--------------------------------------------|
+| Full building          | build_building (storeys + rooms + roof)    |
+| Multiple rooms         | build_floor_plan (rooms array)             |
+| One room               | build_room (walls + slab + openings)       |
+| Wall + openings        | build_wall_assembly (wall + doors/windows) |
+| Just a wall/slab/roof  | create_wall / create_slab / create_roof    |
+
+COORDINATE SYSTEM:
+- Origin = south-west corner of rooms
+- Width = X-axis (west → east), Length = Y-axis (south → north)
+- Wall names: "south", "east", "north", "west"
+- Door/window "offset" = distance from the START of the named wall
+
+CRITICAL RULES:
+1. NEVER calculate wall coordinates yourself — the orchestration tools handle ALL geometry.
+2. NEVER compute rotations in radians — use cardinal wall names ("south", "east", etc.)
+3. NEVER track GUIDs between calls for room/building creation — the backend manages them internally.
+4. You MUST wait for tool responses to get real GUIDs before referencing them in follow-up calls.
+5. NEVER use placeholder text like <wall_guid>. ALWAYS use real 22-character GUIDs returned by tools.
+
+For execute_ifc_code_tool (advanced use only):
+- ifc_file = get_ifc_file() (always call this)
+- body_ctx = get_or_create_body_context(ifc_file) (always call this)  
+- save_and_load_ifc() (ALWAYS call at the end)
+- Never create IfcProject, IfcSite, or IfcBuilding — they already exist.
+`;
+}
+
+// ══ VERTEX AI AUTH via WEB CRYPTO ══
+function base64UrlEncode(input: string | Uint8Array): string {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const b64 = pem.replace(/-----BEGIN PRIVATE KEY-----/, "").replace(/-----END PRIVATE KEY-----/, "").replace(/\s+/g, "");
+  const binary = atob(b64);
+  const buf = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
+  return buf.buffer;
+}
+
+let cachedToken: { token: string; expiresAt: number } | null = null;
+async function mintAccessToken(saJson: any): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedToken && cachedToken.expiresAt > now + 60) return cachedToken.token;
+
+  const tokenUri = saJson.token_uri || "https://oauth2.googleapis.com/token";
+  const header = { alg: "RS256", typ: "JWT" };
+  const claim = {
+    iss: saJson.client_email,
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+    aud: tokenUri,
+    exp: now + 3600,
+    iat: now,
+  };
+
+  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claim))}`;
+  const rawKey = saJson.private_key || "";
+  const privateKey = rawKey.split("\\n").join("\n");
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToArrayBuffer(privateKey),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
+  const jwt = `${unsigned}.${base64UrlEncode(new Uint8Array(sig))}`;
+
+  const resp = await fetch(tokenUri, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
+  });
+
+  if (!resp.ok) throw new Error(`Failed to mint GCP access token: ${await resp.text()}`);
+  const data = await resp.json();
+  cachedToken = { token: data.access_token, expiresAt: now + data.expires_in };
+  return data.access_token;
+}
+
+// ══ HTTP HANDLER ══
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405, headers: { ...CORS, "Content-Type": "application/json" }
-    });
-  }
+  if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
 
   try {
     const payload = await req.json();
@@ -121,150 +200,115 @@ Deno.serve(async (req: Request) => {
     const inboundSessionId = payload.session_id || "";
 
     if (action === "init") {
-      // Initialize MCP and return the tool list + system prompt
       const initSession = await mcpInit(inboundSessionId);
       const toolsResult = await fetchMcpTools(initSession);
-      
-      return new Response(JSON.stringify({
-        tools: toolsResult.tools,
-        system_prompt: buildSystemPrompt(),
-        session_id: toolsResult.session,
-      }), {
-        headers: { ...CORS, "Content-Type": "application/json" }
-      });
+      return new Response(JSON.stringify({ tools: toolsResult.tools, system_prompt: buildSystemPrompt(), session_id: toolsResult.session }), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
 
     if (action === "call_tool") {
       const { name, args } = payload;
-      if (!name) {
-        return new Response(JSON.stringify({ error: "Missing tool name" }), {
-          status: 400, headers: { ...CORS, "Content-Type": "application/json" }
-        });
-      }
-
-      // If no session passed, init one implicitly and then call
       let activeSession = inboundSessionId;
-      if (!activeSession) {
-        activeSession = await mcpInit("");
-      }
-
+      if (!activeSession) activeSession = await mcpInit("");
       const { resultText, session } = await mcpCallTool(name, args || {}, activeSession);
-
-      // Truncate large results to avoid bloating the chat history
       const truncated = resultText.length > 3000 ? resultText.slice(0, 3000) + "... [truncated]" : resultText;
-
-      return new Response(JSON.stringify({
-        result: truncated,
-        session_id: session,
-      }), {
-        headers: { ...CORS, "Content-Type": "application/json" }
-      });
+      return new Response(JSON.stringify({ result: truncated, session_id: session }), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
-
 
     if (action === "chat") {
       const { messages, tools } = payload;
-      
       const saJsonString = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "{}";
       const saJson = JSON.parse(saJsonString);
+      if (!saJson.project_id) throw new Error("Missing GCP_SERVICE_ACCOUNT_KEY");
       
-      if (!saJson.project_id) {
-        return new Response(JSON.stringify({ error: "Missing or invalid GCP_SERVICE_ACCOUNT_KEY" }), {
-          status: 500, headers: { ...CORS, "Content-Type": "application/json" }
-        });
+      const accessToken = await mintAccessToken(saJson);
+
+      let systemText = "";
+      const contents: any[] = [];
+      const toolCallMap = new Map<string, string>();
+
+      for (const msg of messages || []) {
+        if (msg.role === "system") {
+          systemText += msg.content + "\n";
+        } else if (msg.role === "user") {
+          contents.push({ role: "user", parts: [{ text: msg.content }] });
+        } else if (msg.role === "assistant") {
+          const parts: any[] = [];
+          if (msg.content) parts.push({ text: msg.content });
+          if (msg.tool_calls) {
+            for (const call of msg.tool_calls) {
+              toolCallMap.set(call.id, call.function.name);
+              const argsObj = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments || "{}") : call.function.arguments;
+              const p: any = { functionCall: { name: call.function.name, args: argsObj } };
+              if (call.x_thought_signature) p.thought_signature = call.x_thought_signature;
+              if (call.x_thoughtSignature) p.thoughtSignature = call.x_thoughtSignature;
+              parts.push(p);
+            }
+          }
+          contents.push({ role: "model", parts });
+        } else if (msg.role === "tool") {
+          const name = toolCallMap.get(msg.tool_call_id) || "unknown_tool";
+          let parsedResult;
+          try { parsedResult = JSON.parse(msg.content); } catch { parsedResult = { result: msg.content }; }
+          
+          const part = { functionResponse: { name, response: { result: parsedResult } } };
+          
+          // Group consecutive tool messages into a single 'function' role content
+          const lastContent = contents[contents.length - 1];
+          if (lastContent && lastContent.role === "function") {
+            lastContent.parts.push(part);
+          } else {
+            contents.push({ role: "function", parts: [part] });
+          }
+        }
       }
 
-      const auth = new GoogleAuth({
-        credentials: {
-          client_email: saJson.client_email,
-          private_key: saJson.private_key,
-        },
-        scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-      });
-      
-      const client = await auth.getClient();
-      const tokenObj = await client.getAccessToken();
-      const accessToken = tokenObj?.token || "";
-      
-      const PROJECT_ID = saJson.project_id;
-      // Vertex AI OpenAI-compatible endpoint
-      const LLM_URL = `https://${LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
+      const body: any = { contents };
+      if (systemText.trim()) body.systemInstruction = { parts: [{ text: systemText.trim() }] };
+      if (tools && tools.length > 0) {
+        body.tools = [{ functionDeclarations: tools.map((t: any) => t.function) }];
+      }
 
-      // Vertex AI supports native OpenAI-compatible tool calling
-      const res = await fetch(LLM_URL, {
+      const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
+      const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/publishers/google/models/${LLM_MODEL}:generateContent`;
+
+      const res = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({
-          model: LLM_MODEL,
-          messages: messages || [],
-          ...(tools && tools.length > 0 && { tools, tool_choice: "auto" }),
-        }),
-        signal: AbortSignal.timeout(120000)
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
+        body: JSON.stringify(body)
       });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        return new Response(JSON.stringify({ error: `LLM API error ${res.status}: ${errText.slice(0, 300)}` }), {
-          status: 500, headers: { ...CORS, "Content-Type": "application/json" }
-        });
+      if (!res.ok) throw new Error(`Vertex API Error: ${await res.text()}`);
+      const geminiData = await res.json();
+      
+      // Translate back to OpenAI format
+      const candidate = geminiData.candidates?.[0];
+      const outParts = candidate?.content?.parts || [];
+      let outContent = "";
+      const outTools: any[] = [];
+
+      for (const part of outParts) {
+        if (part.text) outContent += part.text;
+        if (part.functionCall) {
+          outTools.push({
+            id: "call_" + Math.random().toString(36).substring(2, 10),
+            type: "function",
+            function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) },
+            x_thought_signature: part.thought_signature,
+            x_thoughtSignature: part.thoughtSignature
+          });
+        }
       }
 
-      const llmData = await res.json();
-      return new Response(JSON.stringify(llmData), {
-        headers: { ...CORS, "Content-Type": "application/json" }
-      });
+      return new Response(JSON.stringify({
+        id: "chatcmpl-" + Math.random().toString(36).substring(2),
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        choices: [{ message: { role: "assistant", content: outContent || null, ...(outTools.length ? { tool_calls: outTools } : {}) } }]
+      }), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
 
-    return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {
-      status: 400, headers: { ...CORS, "Content-Type": "application/json" }
-    });
-
+    throw new Error(`Unknown action: ${action}`);
   } catch (err) {
-    return new Response(JSON.stringify({
-      error: String(err).slice(0, 800),
-      status: "error"
-    }), {
-      status: 200,
-      headers: { ...CORS, "Content-Type": "application/json" }
-    });
+    return new Response(JSON.stringify({ error: String(err), status: "error" }), { status: 200, headers: { ...CORS, "Content-Type": "application/json" } });
   }
 });
-
-// ══ SYSTEM PROMPT ══
-function buildSystemPrompt(): string {
-  return `You are InfraStudio — an expert AI BIM architect.
-
-COORDINATE SYSTEM: X=East, Y=North, Z=Up. Units: METERS. Rotation in RADIANS (90deg = 1.5708).
-
-CRITICAL: TWO-PHASE BUILD (MANDATORY)
-You MUST build in TWO phases. Do NOT batch everything in one call.
-
-PHASE 1 — Structure (call FIRST, wait for results):
-  create_slab + create_wall x4.
-  STOP. Wait for responses. Extract wall_guid from each create_wall response.
-
-PHASE 2 — Details (call AFTER you have real GUIDs):
-  create_door(wall_guid=REAL_GUID, create_opening=true, ...)
-  create_window(wall_guid=REAL_GUID, create_opening=true, ...)
-  create_surface_style x N
-  apply_style_to_object
-  export_ifc (ALWAYS last)
-
-wall_guid MUST be the REAL alphanumeric GUID from create_wall response. NEVER use placeholder text.
-
-ENCLOSED ROOM: 4 walls forming closed rectangle.
-For WxL room: South=[0,0,0] len=W rot=0, North=[0,L,0] len=W rot=0, West=[0,0,0] len=L rot=1.5708, East=[W,0,0] len=L rot=1.5708.
-All walls: height=3.0, thickness=0.2.
-
-DOOR/WINDOW: create_door and create_window accept wall_guid + create_opening=true. Auto cuts hole + fills. Door Z=0.0. Window Z=1.0.
-Rotation MUST match host wall. Do NOT call create_opening or fill_opening separately.
-
-PARAMETERS: NEVER null/None/empty. material="Concrete"/"Timber"/"Steel"/"Brick".
-COLORS: Concrete=[0.75,0.75,0.75] Brick=[0.72,0.35,0.20] Wood=[0.55,0.35,0.15] Glass=[0.60,0.80,0.90] transparency=0.7
-
-EDITING: get_scene_info -> use GUIDs -> do NOT call initialize_project -> export_ifc`;
-}
-

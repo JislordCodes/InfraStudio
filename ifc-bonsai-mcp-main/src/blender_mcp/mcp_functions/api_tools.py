@@ -3205,3 +3205,365 @@ def initialize_project(
         logger.error(f"Error initializing project: {e}")
         return json.dumps({"success": False, "error": f"Error initializing project: {e}"}, indent=2)
 
+
+@mcp.tool()
+def build_room(
+    ctx: Context,
+    room_name: str = "Room",
+    width: float = 4.0,
+    length: float = 5.0,
+    height: float = 3.0,
+    wall_thickness: float = 0.2,
+    origin: Optional[List[float]] = None,
+    floor_slab: bool = True,
+    floor_thickness: float = 0.2,
+    ceiling_slab: bool = False,
+    ceiling_thickness: float = 0.15,
+    doors: Optional[List[Dict[str, Any]]] = None,
+    windows: Optional[List[Dict[str, Any]]] = None,
+    verbose: bool = False,
+) -> str:
+    """
+    Create a complete rectangular room with walls, floor/ceiling slabs, doors, and windows.
+
+    THIS IS THE PREFERRED TOOL FOR ROOM CREATION. Use this instead of calling
+    create_wall, create_slab, create_door, and create_window individually.
+
+    The backend deterministically computes all coordinates, rotations, wall closures,
+    slab perimeters, opening placements, and BIM topology relationships. You only
+    need to specify the architectural intent.
+
+    Room Coordinate System:
+        - Origin is the south-west (SW) corner of the room
+        - Width runs along X-axis (west → east)
+        - Length runs along Y-axis (south → north)
+        - Height runs along Z-axis (floor → ceiling)
+
+    Wall Naming:
+        - "south": bottom wall (SW → SE, along +X)
+        - "east":  right wall  (SE → NE, along +Y)
+        - "north": top wall    (NE → NW, along -X)
+        - "west":  left wall   (NW → SW, along -Y)
+
+    Door/Window "offset" = distance from the START of the named wall.
+
+    Args:
+        ctx: MCP context.
+        room_name: Name prefix for all created elements.
+        width: Room width in meters (X-axis).
+        length: Room length in meters (Y-axis).
+        height: Wall height in meters.
+        wall_thickness: Wall thickness in meters (default: 0.2).
+        origin: [x, y, z] position of the SW corner (default: [0, 0, 0]).
+        floor_slab: Create floor slab (default: True).
+        floor_thickness: Floor slab thickness in meters.
+        ceiling_slab: Create ceiling slab (default: False).
+        ceiling_thickness: Ceiling slab thickness in meters.
+        doors: List of door specs. Each door is a dict with:
+            - "wall" (str): "south", "north", "east", or "west" (REQUIRED)
+            - "offset" (float): Distance from wall start in meters (REQUIRED)
+            - "width" (float): Door width in meters (default: 0.9)
+            - "height" (float): Door height in meters (default: 2.1)
+            - "operation_type" (str): Swing type (default: "SINGLE_SWING_LEFT")
+        windows: List of window specs. Each window is a dict with:
+            - "wall" (str): "south", "north", "east", or "west" (REQUIRED)
+            - "offset" (float): Distance from wall start in meters (REQUIRED)
+            - "width" (float): Window width in meters (default: 1.2)
+            - "height" (float): Window height in meters (default: 1.5)
+            - "sill_height" (float): Height from floor in meters (default: 0.9)
+
+    Returns:
+        JSON with complete scene graph including all GUIDs, dimensions, and positions.
+
+    Examples:
+        # Simple empty room
+        build_room(room_name="Office", width=4.0, length=5.0, height=3.0)
+
+        # Room with door and window
+        build_room(
+            room_name="Living Room",
+            width=6.0,
+            length=8.0,
+            height=3.0,
+            wall_thickness=0.2,
+            floor_slab=True,
+            doors=[
+                {"wall": "south", "offset": 2.0, "width": 0.9, "height": 2.1}
+            ],
+            windows=[
+                {"wall": "east", "offset": 3.0, "width": 1.2, "height": 1.5, "sill_height": 0.9},
+                {"wall": "north", "offset": 1.5, "width": 1.8, "height": 1.2, "sill_height": 1.0}
+            ]
+        )
+
+        # Two adjacent rooms sharing a wall
+        build_room(room_name="Room A", width=4, length=5, height=3, origin=[0, 0, 0])
+        build_room(room_name="Room B", width=4, length=5, height=3, origin=[4, 0, 0])
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "room_name": room_name,
+            "width": width,
+            "length": length,
+            "height": height,
+            "wall_thickness": wall_thickness,
+            "origin": origin or [0.0, 0.0, 0.0],
+            "floor_slab": floor_slab,
+            "floor_thickness": floor_thickness,
+            "ceiling_slab": ceiling_slab,
+            "ceiling_thickness": ceiling_thickness,
+            "doors": doors or [],
+            "windows": windows or [],
+            "verbose": verbose,
+        }
+        result = blender.send_command("create_room", params)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Error building room: {e}")
+        return json.dumps({"success": False, "error": f"Error building room: {e}"}, indent=2)
+
+
+@mcp.tool()
+def build_wall_assembly(
+    ctx: Context,
+    name: str = "Wall Assembly",
+    start_point: Optional[List[float]] = None,
+    end_point: Optional[List[float]] = None,
+    height: float = 3.0,
+    thickness: float = 0.2,
+    doors: Optional[List[Dict[str, Any]]] = None,
+    windows: Optional[List[Dict[str, Any]]] = None,
+    verbose: bool = False,
+) -> str:
+    """
+    Create a single wall with properly embedded doors and windows in one call.
+
+    Use this when you need a standalone wall WITH openings — not a full room.
+    Examples: partition walls, facade sections, feature walls, garden walls.
+
+    The backend deterministically computes opening positions, creates the wall,
+    cuts openings, and fills them with door/window elements. You never need to
+    calculate coordinates, rotations, or manage GUIDs.
+
+    Wall Direction:
+        The wall runs from start_point to end_point. The backend automatically
+        calculates length, angle, and rotation from these two points.
+
+    Opening "offset" = distance from the START of the wall (start_point end).
+
+    Args:
+        ctx: MCP context.
+        name: Name for the wall assembly.
+        start_point: [x, y, z] start of wall (default: [0, 0, 0]).
+        end_point: [x, y, z] end of wall (defines direction and length).
+        height: Wall height in meters.
+        thickness: Wall thickness in meters.
+        doors: List of door specs. Each door is a dict with:
+            - "offset" (float): Distance from wall start in meters (REQUIRED)
+            - "width" (float): Door width (default: 0.9)
+            - "height" (float): Door height (default: 2.1)
+            - "operation_type" (str): Swing type (default: "SINGLE_SWING_LEFT")
+        windows: List of window specs. Each window is a dict with:
+            - "offset" (float): Distance from wall start in meters (REQUIRED)
+            - "width" (float): Window width (default: 1.2)
+            - "height" (float): Window height (default: 1.5)
+            - "sill_height" (float): Height from floor (default: 0.9)
+
+    Returns:
+        JSON with wall GUID, door/window GUIDs, and positions.
+
+    Examples:
+        # Simple wall with a centered door
+        build_wall_assembly(
+            name="Partition",
+            start_point=[0, 5, 0],
+            end_point=[8, 5, 0],
+            doors=[{"offset": 3.5, "width": 0.9, "height": 2.1}]
+        )
+
+        # Facade wall with door and two windows
+        build_wall_assembly(
+            name="South Facade",
+            start_point=[0, 0, 0],
+            end_point=[12, 0, 0],
+            height=3.5,
+            thickness=0.3,
+            doors=[{"offset": 5.0, "width": 1.2, "height": 2.2}],
+            windows=[
+                {"offset": 1.0, "width": 1.5, "height": 1.5, "sill_height": 0.9},
+                {"offset": 8.5, "width": 1.5, "height": 1.5, "sill_height": 0.9}
+            ]
+        )
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "name": name,
+            "start_point": start_point or [0.0, 0.0, 0.0],
+            "end_point": end_point or [5.0, 0.0, 0.0],
+            "height": height,
+            "thickness": thickness,
+            "doors": doors or [],
+            "windows": windows or [],
+            "verbose": verbose,
+        }
+        result = blender.send_command("create_wall_assembly", params)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Error building wall assembly: {e}")
+        return json.dumps({"success": False, "error": f"Error building wall assembly: {e}"}, indent=2)
+
+
+@mcp.tool()
+def build_floor_plan(
+    ctx: Context,
+    plan_name: str = "Floor Plan",
+    rooms: Optional[List[Dict[str, Any]]] = None,
+    verbose: bool = False,
+) -> str:
+    """
+    Create a multi-room floor plan from a list of room specifications.
+
+    Use this when the user wants MULTIPLE rooms on the same level:
+    apartments, offices, houses, clinics, etc.
+
+    Each room is placed at its specified origin. The backend creates all walls,
+    slabs, doors, and windows for every room deterministically. You only need
+    to specify the layout.
+
+    Layout Tips:
+        - Place rooms side-by-side by offsetting their origin along X
+        - Place rooms front-to-back by offsetting along Y
+        - Rooms at [0,0,0] and [4,0,0] share the east/west wall line
+
+    Args:
+        ctx: MCP context.
+        plan_name: Name for the floor plan.
+        rooms: List of room specifications. Each room is a dict with:
+            - "name" (str): Room name (e.g., "Kitchen")
+            - "width" (float): Width in meters (X-axis)
+            - "length" (float): Length in meters (Y-axis)
+            - "height" (float): Wall height (default: 3.0)
+            - "wall_thickness" (float): Wall thickness (default: 0.2)
+            - "origin" (list): [x, y, z] of SW corner (REQUIRED for layout)
+            - "floor_slab" (bool): Create floor (default: True)
+            - "doors" (list): Door specs (same as build_room)
+            - "windows" (list): Window specs (same as build_room)
+
+    Returns:
+        JSON with all room results, GUIDs, areas, and layout summary.
+
+    Examples:
+        # Simple two-room apartment
+        build_floor_plan(
+            plan_name="Studio Apartment",
+            rooms=[
+                {
+                    "name": "Living Room",
+                    "width": 5, "length": 4, "origin": [0, 0, 0],
+                    "doors": [{"wall": "east", "offset": 1.5, "width": 0.9}],
+                    "windows": [{"wall": "south", "offset": 1.5, "width": 1.8}]
+                },
+                {
+                    "name": "Bedroom",
+                    "width": 4, "length": 4, "origin": [5, 0, 0],
+                    "doors": [{"wall": "west", "offset": 1.5, "width": 0.9}],
+                    "windows": [{"wall": "east", "offset": 1.0, "width": 1.2}]
+                }
+            ]
+        )
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "plan_name": plan_name,
+            "rooms": rooms or [],
+            "verbose": verbose,
+        }
+        result = blender.send_command("create_floor_plan", params)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Error building floor plan: {e}")
+        return json.dumps({"success": False, "error": f"Error building floor plan: {e}"}, indent=2)
+
+
+@mcp.tool()
+def build_building(
+    ctx: Context,
+    building_name: str = "Building",
+    storeys: Optional[List[Dict[str, Any]]] = None,
+    roof: Optional[Dict[str, Any]] = None,
+    verbose: bool = False,
+) -> str:
+    """
+    Create a complete multi-storey building with rooms and optional roof.
+
+    This is the HIGHEST-LEVEL building tool. Use it when the user wants
+    a full building: houses, offices, apartment blocks, schools, etc.
+
+    Each storey contains a list of rooms. The backend automatically:
+    - Stacks storeys at correct elevations
+    - Creates all walls, slabs, doors, windows per room
+    - Generates a roof covering the top storey footprint
+
+    Args:
+        ctx: MCP context.
+        building_name: Name for the building.
+        storeys: List of storey specifications. Each storey is a dict with:
+            - "name" (str): Storey name (e.g., "Ground Floor")
+            - "height" (float): Floor-to-floor height (default: 3.0)
+            - "elevation" (float): Floor elevation (auto-computed if omitted)
+            - "rooms" (list): Room specs (same as build_floor_plan)
+        roof: Optional roof specification dict with:
+            - "type" (str): FLAT, GABLE_ROOF, HIP_ROOF, SHED, etc.
+            - "angle" (float): Slope angle in degrees (default: 30)
+            - "thickness" (float): Roof thickness (default: 0.3)
+            - "overhang" (float): Overhang beyond walls (default: 0.5)
+
+    Returns:
+        JSON with all storey/room results, roof info, and building summary.
+
+    Examples:
+        # Simple two-storey house
+        build_building(
+            building_name="Family House",
+            storeys=[
+                {
+                    "name": "Ground Floor",
+                    "height": 3.0,
+                    "rooms": [
+                        {"name": "Living", "width": 6, "length": 5, "origin": [0,0,0],
+                         "doors": [{"wall": "south", "offset": 2, "width": 1.2}],
+                         "windows": [{"wall": "east", "offset": 1.5, "width": 1.8}]},
+                        {"name": "Kitchen", "width": 4, "length": 5, "origin": [6,0,0],
+                         "windows": [{"wall": "south", "offset": 1, "width": 1.2}]}
+                    ]
+                },
+                {
+                    "name": "First Floor",
+                    "height": 3.0,
+                    "rooms": [
+                        {"name": "Master Bedroom", "width": 5, "length": 5, "origin": [0,0,0],
+                         "windows": [{"wall": "east", "offset": 1.5, "width": 1.5}]},
+                        {"name": "Bedroom 2", "width": 5, "length": 5, "origin": [5,0,0],
+                         "windows": [{"wall": "east", "offset": 1.5, "width": 1.2}]}
+                    ]
+                }
+            ],
+            roof={"type": "GABLE_ROOF", "angle": 35}
+        )
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "building_name": building_name,
+            "storeys": storeys or [],
+            "roof": roof,
+            "verbose": verbose,
+        }
+        result = blender.send_command("create_building", params)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Error building: {e}")
+        return json.dumps({"success": False, "error": f"Error building: {e}"}, indent=2)
