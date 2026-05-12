@@ -1,0 +1,53 @@
+name: Build & Deploy to ECR + App Runner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ifc-bonsai-mcp-main/**'
+  workflow_dispatch:  # manual trigger
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: ifc-bonsai-mcp
+  IMAGE_TAG: latest
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        working-directory: ifc-bonsai-mcp-main
+        run: |
+          docker build -t ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }} .
+
+      - name: Push to ECR
+        run: |
+          docker push ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
+
+      - name: Deploy to App Runner
+        run: |
+          # Get the service ARN
+          SERVICE_ARN=$(aws apprunner list-services --query 'ServiceSummaryList[0].ServiceArn' --output text)
+          echo "Deploying to App Runner service: $SERVICE_ARN"
+          
+          # Trigger deployment
+          aws apprunner start-deployment --service-arn "$SERVICE_ARN"
+          echo "Deployment triggered!"
