@@ -370,7 +370,7 @@ def create_room(
                 name=f"{room_name}_Floor",
                 polyline=slab_polyline,
                 depth=floor_thickness,
-                location=[ox, oy, oz],
+                location=[origin[0], origin[1], origin[2]],
             )
             
             if floor_result.get("success"):
@@ -403,7 +403,7 @@ def create_room(
                 name=f"{room_name}_Ceiling",
                 polyline=ceiling_polyline,
                 depth=ceiling_thickness,
-                location=[ox, oy, oz + height],
+                location=[origin[0], origin[1], origin[2] + height],
             )
             
             if ceiling_result.get("success"):

@@ -140,36 +140,18 @@ def create_opening(
             relating_structure=container
         )
         
-        # Use add_opening_representation which creates a proper extruded void
-        # (NOT add_wall_representation which creates a solid wall body)
-        try:
-            opening_representation = ifcopenshell.api.run(
-                "geometry.add_opening_representation",
-                ifc_file,
-                context=body_context,
-                depth=depth,
-                x=width,
-                y=height,
-            )
-        except Exception:
-            # Fallback: build a box solid manually using a profile extrusion
-            import ifcopenshell.util.element
-            profile = ifc_file.createIfcRectangleProfileDef(
-                "AREA", None,
-                ifc_file.createIfcAxis2Placement2D(
-                    ifc_file.createIfcCartesianPoint([0.0, 0.0]), None
-                ),
-                float(width), float(height)
-            )
-            direction = ifc_file.createIfcDirection([0.0, 0.0, 1.0])
-            placement = ifc_file.createIfcAxis2Placement3D(
-                ifc_file.createIfcCartesianPoint([0.0, 0.0, 0.0]), None, None
-            )
-            solid = ifc_file.createIfcExtrudedAreaSolid(profile, placement, direction, float(depth))
-            opening_representation = ifc_file.createIfcShapeRepresentation(
-                body_context, "Body", "SweptSolid", [solid]
-            )
-
+        # The opening body is a wall-shaped extrusion (box) that defines the
+        # void volume. add_wall_representation creates exactly this shape.
+        # The depth should exceed wall thickness to ensure a clean boolean cut.
+        opening_representation = ifcopenshell.api.run(
+            "geometry.add_wall_representation",
+            ifc_file,
+            context=body_context,
+            length=width,
+            height=height,
+            thickness=depth
+        )
+        
         ifcopenshell.api.run(
             "geometry.assign_representation",
             ifc_file,
