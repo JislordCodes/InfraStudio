@@ -69,46 +69,65 @@ def _compute_wall_segments(
     width: float,
     length: float,
     origin: Tuple[float, float, float],
+    wall_thickness: float = 0.2,
 ) -> Dict[str, Dict[str, Any]]:
-    """Compute the four wall segments for a rectangular room.
-    
-    Returns a dict keyed by cardinal name with start_point, end_point,
-    wall_length, and rotation_degrees for each wall.
+    """Compute the four wall segment CENTRELINES for a rectangular room.
+
+    Uses wall centreline (axis) coordinates so adjacent walls share a clean
+    corner. Each axis runs from corner-midpoint to corner-midpoint, inset by
+    half the wall thickness from the outer face. The `create_wall` API places
+    the wall body symmetrically around the axis, so the bodies fill exactly
+    to the outer face of the adjacent wall — no gaps, no overlaps.
+
+    Corner layout (looking down, +Y = north):
+
+        NW-axis ─────────── NE-axis
+           |     interior       |
+        SW-axis ─────────── SE-axis
+
+    Axis corners are (ox + t2, oy + t2), (ox + W - t2, oy + t2), etc.
+    where t2 = wall_thickness / 2.
     """
     ox, oy, oz = origin
-    
-    # Corner points
-    sw = (ox, oy, oz)
-    se = (ox + width, oy, oz)
-    ne = (ox + width, oy + length, oz)
-    nw = (ox, oy + length, oz)
-    
+    t2 = wall_thickness / 2.0
+
+    # Centreline corner points
+    sw = (ox + t2,         oy + t2,          oz)
+    se = (ox + width - t2, oy + t2,          oz)
+    ne = (ox + width - t2, oy + length - t2, oz)
+    nw = (ox + t2,         oy + length - t2, oz)
+
+    # Axis (centreline) lengths
+    horiz = width  - wall_thickness   # south and north
+    vert  = length - wall_thickness   # east and west
+
     return {
         "south": {
             "start": sw,
             "end": se,
-            "wall_length": width,
+            "wall_length": horiz,
             "rotation_deg": 0.0,
         },
         "east": {
             "start": se,
             "end": ne,
-            "wall_length": length,
+            "wall_length": vert,
             "rotation_deg": 90.0,
         },
         "north": {
             "start": ne,
             "end": nw,
-            "wall_length": width,
+            "wall_length": horiz,
             "rotation_deg": 180.0,
         },
         "west": {
             "start": nw,
             "end": sw,
-            "wall_length": length,
+            "wall_length": vert,
             "rotation_deg": 270.0,
         },
     }
+
 
 
 def _validate_opening_fits(
@@ -240,7 +259,7 @@ def create_room(
         raise ValueError(f"Wall thickness ({wall_thickness}m) must be positive and less than half the smallest room dimension")
     
     # ── Compute wall geometry ────────────────────────────────────────────────
-    wall_segments = _compute_wall_segments(width, length, tuple(origin))
+    wall_segments = _compute_wall_segments(width, length, tuple(origin), wall_thickness)
     
     # ── Validate all openings before creating anything ───────────────────────
     valid_wall_names = {"south", "east", "north", "west"}
@@ -282,20 +301,20 @@ def create_room(
     
     # ── PHASE 1: Create walls ────────────────────────────────────────────────
     #
-    # Use create_polyline_walls with closed=True for a proper closed loop.
-    # This creates 4 connected wall segments automatically.
+    # Use centreline corners from wall_segments (already inset by t/2).
+    # create_polyline_walls with closed=True creates the 4 wall segments,
+    # each wall body centred on its axis — producing a tight-jointed box.
     #
-    ox, oy, oz = origin
     room_corners = [
-        [ox, oy, oz],                    # SW
-        [ox + width, oy, oz],            # SE
-        [ox + width, oy + length, oz],   # NE
-        [ox, oy + length, oz],           # NW
+        list(wall_segments["south"]["start"]),   # SW-axis  (t/2 inset)
+        list(wall_segments["east"]["start"]),    # SE-axis
+        list(wall_segments["north"]["start"]),   # NE-axis
+        list(wall_segments["west"]["start"]),    # NW-axis
     ]
-    
+
     try:
         from .wall import create_polyline_walls
-        
+
         walls_result = create_polyline_walls(
             points=[tuple(p) for p in room_corners],
             name_prefix=f"{room_name}_Wall",
@@ -303,6 +322,7 @@ def create_room(
             height=height,
             closed=True,
         )
+
         
         if walls_result.get("success"):
             # Map wall indices to cardinal names
