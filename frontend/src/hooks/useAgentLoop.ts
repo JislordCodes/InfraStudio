@@ -113,68 +113,51 @@ const ALWAYS_EXPOSED = new Set([
   "initialize_project",
 ]);
 
-// Only add these low-level tools when user is EXPLICITLY modifying
-// a SINGLE element on an already-built model (not creating from scratch)
-const TOOL_GROUPS: Record<string, string[]> = {
-  // Single-element edits on existing model
-  add_door:    ["create_door", "update_door", "get_door_operation_types"],
-  add_window:  ["create_window", "update_window", "get_window_partition_types"],
-  add_roof:    ["create_roof", "update_roof", "get_roof_types"],
-  add_stair:   ["create_stairs", "update_stairs", "get_stairs_types"],
-  add_wall:    ["create_wall", "create_two_point_wall", "update_wall"],
-  add_slab:    ["create_slab", "update_slab"],
-  // Style / material
-  style:       ["create_surface_style", "create_pbr_style", "apply_style_to_object", "list_styles", "update_style"],
-  // Advanced
-  code:        ["execute_ifc_code_tool", "execute_blender_code", "list_blender_commands"],
-  knowledge:   ["search_ifc_knowledge", "find_ifc_function", "get_ifc_function_details"],
-};
+// ── SEMANTIC TOOL RETRIEVAL (Intelligence Layer) ──
+// This Replaces the static Regex KEYWORD_MAP with an LLM-based Tool Retriever.
+// 1. We send the user prompt + tool names/descriptions to a fast pre-flight LLM call.
+// 2. The LLM acts as an intelligence layer to extract exactly the tools needed.
+// 3. We return those tools to the main Agent Loop.
 
-// ROUTING STRATEGY:
-// 1. Room/building/floor-plan → ONLY orchestration tools (build_room handles walls+slab+doors+windows internally)
-// 2. Wall + openings → build_wall_assembly is always exposed, handles "a wall with door/window"
-// 3. Specific standalone elements (roof, stair, slab) → add those tool groups
-// 4. Any mention of door/window WITHOUT a room/building context → add door/window tools
-// 5. Style/material requests → add style tools
-const KEYWORD_MAP: Array<[RegExp, string[]]> = [
-  // ── Standalone element creation (not part of a room/building) ──
-  // "create a roof", "add a roof", "flat roof"
-  [/\b(roof|rooftop|canopy|overhang)\b/i,                         ["add_roof"]],
-  // "create stairs", "add staircase", "spiral stair"
-  [/\b(stair|stairs|staircase|stairway|steps|riser|tread)\b/i,   ["add_stair"]],
-  // "create a slab", "concrete floor slab" (not via build_room)
-  [/\b(slab)\b/i,                                                  ["add_slab"]],
-
-  // ── Doors & windows mentioned WITHOUT room/building context ──
-  // If the user says "room with door" → build_room handles it (door is a param)
-  // If the user says "wall with door" → build_wall_assembly handles it (always exposed)
-  // If the user says just "door" or "window" (editing existing model) → expose the tools
-  [/\b(door|entrance|doorway|doorframe)\b/i,                      ["add_door"]],
-  [/\b(window|glazing|fenestration|skylight)\b/i,                 ["add_window"]],
-
-  // ── Style/material (always safe to add) ──
-  [/\b(style|material|color|colour|texture|render|pbr|finish)\b/i, ["style"]],
-
-  // ── Advanced / expert use ──
-  [/\b(code|script|python|execute|custom|raw\s+ifc)\b/i,          ["code"]],
-  [/\b(ifc\s+api|ifc\s+function|lookup|module|schema)\b/i,        ["knowledge"]],
-
-  // ── Exception: room/building/floor-plan explicitly use orchestration only ──
-  // These are intentionally NOT mapped to low-level tools:
-  // "room", "office", "bedroom" → build_room (handles walls+slab+doors+windows as params)
-  // "building", "storey", "floor plan" → build_building / build_floor_plan
-  // "wall with door" → build_wall_assembly (always exposed, handles openings as params)
-];
-
-function selectToolsForMessage(allTools: any[], userMessage: string): any[] {
+async function routeToolsWithLLM(allTools: any[], userMessage: string, activeSessionId: string): Promise<any[]> {
   const needed = new Set<string>(ALWAYS_EXPOSED);
+  
+  // Extract a lightweight list of available tools (name + short description)
+  const availableToolsList = allTools
+    .filter(t => !ALWAYS_EXPOSED.has(t.function?.name || t.name))
+    .map(t => `- ${t.function?.name || t.name}: ${(t.function?.description || t.description || "").slice(0, 100)}`)
+    .join("\n");
 
-  for (const [pattern, groups] of KEYWORD_MAP) {
-    if (pattern.test(userMessage)) {
-      for (const g of groups) {
-        for (const t of (TOOL_GROUPS[g] || [])) needed.add(t);
+  const routerPrompt = `You are a Tool Retrieval Intelligence Layer.
+Your job is to analyze the user's architectural request and extract the names of the specific tools needed from the database.
+
+User Request: "${userMessage}"
+
+Available Tools Database:
+${availableToolsList}
+
+RULES:
+1. ONLY return a comma-separated list of tool names from the database above.
+2. If the user is asking to build a full room or building, DO NOT extract low-level tools like create_wall or create_door (they are handled automatically).
+3. If the user is asking to add a SPECIFIC element to an EXISTING model (e.g., "add a roof", "insert a window"), extract the relevant tools.
+4. Reply with ONLY the comma-separated tool names. Nothing else. No markdown. If none, reply "NONE".`;
+
+  try {
+    // We reuse proxyRequest to ask the LLM for the tools (pre-flight)
+    const response = await proxyRequest("chat", { 
+      messages: [{ role: "user", content: routerPrompt }], 
+      tools: [] // No tools for the router, just text generation
+    }, activeSessionId);
+
+    const choice = response.choices?.[0]?.message?.content || "";
+    if (choice && choice.trim() !== "NONE") {
+      const extractedToolNames = choice.split(",").map((s: string) => s.trim());
+      for (const name of extractedToolNames) {
+        if (name) needed.add(name);
       }
     }
+  } catch (e) {
+    console.warn("Tool Router LLM failed, falling back to orchestration tools only:", e);
   }
 
   return allTools.filter(t => needed.has(t.function?.name || t.name));
@@ -254,11 +237,14 @@ export async function runQwenAgentLoop(
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
-    // Call LLM via Edge Function
-    // Route only relevant tools for this turn (saves ~85% of tool tokens)
+    // ── Pre-flight Semantic Tool Router ──
+    // Extracts only the tools needed for this specific message using the Intelligence Layer
     const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user')?.content || userMessage;
-    const routedTools = selectToolsForMessage(tools, lastUserMsg);
-    onStep(`🎯 Using ${routedTools.length}/${tools.length} tools for this request`);
+    
+    onStep(`🧠 Routing tools semantically...`);
+    const routedTools = await routeToolsWithLLM(tools, lastUserMsg, activeSessionId);
+    
+    onStep(`🎯 Intelligence Layer extracted ${routedTools.length}/${tools.length} relevant tools`);
 
     const response = await proxyRequest("chat", { messages, tools: routedTools }, activeSessionId);
 
