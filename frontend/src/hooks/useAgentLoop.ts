@@ -60,56 +60,106 @@ function sanitizeArgs(obj: Record<string, unknown>): Record<string, unknown> {
   return clean;
 }
 
-// ══ ENHANCED SYSTEM PROMPT ══
+// ══ SYSTEM PROMPT ══
 const ARCHITECT_PROMPT = `
-You are InfraStudio AI — an expert BIM architect.
+You are InfraStudio AI — an expert BIM architect agent.
 
-━━━ COORDINATE SYSTEM ━━━
-X = East, Y = North, Z = Up. All units: METERS. Rotation in RADIANS (90° = 1.5708).
+━━━ TOOL SELECTION ━━━
+Always use the HIGHEST-LEVEL tool available:
+| Goal                    | Tool                |
+|-------------------------|---------------------|
+| Full building           | build_building      |
+| Floor plan (rooms)      | build_floor_plan    |
+| Single room             | build_room          |
+| Wall + openings         | build_wall_assembly |
+| Individual element only | create_* tools      |
 
-━━━ ENCLOSED ROOM RULE ━━━
-Every room MUST have exactly 4 walls forming a CLOSED rectangle.
-For a W×L room: South=[0,0,0] len=W rot=0, North=[0,L,0] len=W rot=0, West=[0,0,0] len=L rot=1.5708, East=[W,0,0] len=L rot=1.5708.
+━━━ build_room USAGE ━━━
+build_room creates ALL geometry in one call: walls, floor slab, doors and windows.
+NEVER call create_wall or create_slab separately when building a room.
 
-━━━ CRITICAL: TWO-PHASE BUILD (MANDATORY) ━━━
-You MUST build in exactly TWO phases. Do NOT try to batch everything in one call.
+Example:
+build_room({
+  room_name: "Office",
+  width: 4.0, length: 5.0, height: 3.0,
+  wall_thickness: 0.2, origin: [0,0,0],
+  floor_slab: true,
+  doors: [{wall: "south", offset: 1.0, width: 0.9, height: 2.1}],
+  windows: [{wall: "east", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9}]
+})
 
-PHASE 1 — Structure (call these tools FIRST, wait for results):
-  - create_slab
-  - create_wall × 4
-  After these calls complete, you will receive GUIDs for each wall. SAVE THESE GUIDs.
-
-PHASE 2 — Details (call these tools AFTER you have wall GUIDs):
-  - create_door(wall_guid=THE_ACTUAL_GUID_FROM_PHASE_1, create_opening=true, ...)
-  - create_window(wall_guid=THE_ACTUAL_GUID_FROM_PHASE_1, create_opening=true, ...)
-  - create_surface_style × N
-  - apply_style_to_object
-  - export_ifc (ALWAYS last)
-
-CRITICAL: The wall_guid parameter MUST be the REAL GUID string returned by create_wall (e.g. "2InnWSTvL38A7MZDcrPcoW"). NEVER use placeholder text like "wall_guid" or "south_wall_guid".
-
-━━━ DOOR/WINDOW RULES ━━━
-- create_door and create_window both accept wall_guid + create_opening=true.
-- This automatically cuts the hole, creates the element, and fills the opening.
-- Door rotation MUST MATCH the host wall rotation. Window rotation MUST MATCH too.
-- Door Z = 0.0. Window Z = 1.0 (sill height).
-- Do NOT call create_opening or fill_opening separately.
-
-━━━ PARAMETER RULES ━━━
-- NEVER pass null/None/empty. Every param needs a real value.
-- dimensions: {"height": 3.0, "length": 5.0, "thickness": 0.2}
-- location: [x, y, z] — rotation: [rx, ry, rz] in RADIANS
-- material: "Concrete", "Timber", "Steel", "Brick"
-
-━━━ MATERIAL COLORS ━━━
-Concrete: [0.75, 0.75, 0.75] | Brick: [0.72, 0.35, 0.20] | Wood: [0.55, 0.35, 0.15]
-Glass: [0.60, 0.80, 0.90], transparency=0.7 | Steel: [0.60, 0.65, 0.72]
-
-━━━ EDITING ━━━
-For modifications: get_scene_info → use GUIDs → do NOT call initialize_project → export_ifc
+━━━ RULES ━━━
+- NEVER compute wall coordinates or rotations yourself.
+- Wall positions use cardinal names: "south", "east", "north", "west".
+- offset = distance from the START of the named wall in meters.
+- After building, always call export_ifc as the last step.
 `;
 
+// ══ DYNAMIC TOOL ROUTER ══
+// Filters all MCP tools down to only what is relevant for this message.
+// ALWAYS includes the 4 high-level orchestration tools + utility tools.
+// Adds low-level tools only when the message explicitly requires them.
+// Result: 5-12 tools per request instead of 60 (~85% token reduction).
 
+const ALWAYS_EXPOSED = new Set([
+  // High-level orchestration (covers 90% of use cases)
+  "build_room",
+  "build_floor_plan",
+  "build_building",
+  "build_wall_assembly",
+  // Scene utilities
+  "get_scene_info",
+  "get_ifc_scene_overview",
+  "export_ifc",
+  "initialize_project",
+]);
+
+const TOOL_GROUPS: Record<string, string[]> = {
+  wall:     ["create_wall", "create_two_point_wall", "create_polyline_walls", "update_wall", "get_wall_properties"],
+  slab:     ["create_slab", "update_slab", "get_slab_properties"],
+  door:     ["create_door", "update_door", "get_door_properties", "get_door_operation_types"],
+  window:   ["create_window", "update_window", "get_window_properties", "get_window_partition_types"],
+  opening:  ["create_opening", "fill_opening", "remove_opening"],
+  roof:     ["create_roof", "update_roof", "delete_roof", "get_roof_types"],
+  stair:    ["create_stairs", "update_stairs", "delete_stairs", "get_stairs_types"],
+  style:    ["create_surface_style", "create_pbr_style", "apply_style_to_object", "list_styles", "update_style"],
+  mesh:     ["create_mesh_ifc", "create_trimesh_ifc", "list_ifc_entities", "get_trimesh_examples", "get_mesh_examples"],
+  code:     ["execute_ifc_code_tool", "execute_blender_code", "list_blender_commands"],
+  knowledge:["search_ifc_knowledge", "find_ifc_function", "get_ifc_function_details", "get_ifc_module_info"],
+};
+
+const KEYWORD_MAP: Array<[RegExp, string[]]> = [
+  [/\b(wall|walls|barrier|partition)\b/i,             ["wall"]],
+  [/\b(slab|floor|ceiling|deck)\b/i,                  ["slab"]],
+  [/\b(door|entrance|exit|entry)\b/i,                 ["door", "opening"]],
+  [/\b(window|glazing|glass|fenestration)\b/i,        ["window", "opening"]],
+  [/\b(roof|rooftop|canopy)\b/i,                      ["roof"]],
+  [/\b(stair|stairs|staircase|steps|riser|tread)\b/i, ["stair"]],
+  [/\b(style|material|color|colour|texture|surface|pbr|render)\b/i, ["style"]],
+  [/\b(mesh|geometry|shape|solid|trimesh)\b/i,        ["mesh"]],
+  [/\b(code|script|python|execute|custom)\b/i,        ["code"]],
+  [/\b(ifc\s+know|function|module|api|lookup)\b/i,    ["knowledge"]],
+  // Compound intents
+  [/\b(building|storey|floor\s+plan|layout)\b/i,     ["wall", "slab", "door", "window"]],
+  [/\b(room|office|bedroom|kitchen|bathroom)\b/i,     ["wall", "slab", "door", "window"]],
+  [/\b(modify|edit|update|change|move|resize)\b/i,   ["wall", "slab", "door", "window", "roof"]],
+];
+
+function selectToolsForMessage(allTools: any[], userMessage: string): any[] {
+  const needed = new Set<string>(ALWAYS_EXPOSED);
+
+  for (const [pattern, groups] of KEYWORD_MAP) {
+    if (pattern.test(userMessage)) {
+      for (const g of groups) {
+        for (const t of (TOOL_GROUPS[g] || [])) needed.add(t);
+      }
+    }
+  }
+
+  const filtered = allTools.filter(t => needed.has(t.function?.name || t.name));
+  // Always return at least the always-exposed set (in case some aren't in allTools)
+  return filtered.length > 0 ? filtered : allTools;
+}
 
 // ══ MAIN AGENT LOOP ══
 export interface AgentResult {
@@ -185,7 +235,12 @@ export async function runQwenAgentLoop(
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
     // Call LLM via Edge Function
-    const response = await proxyRequest("chat", { messages, tools }, activeSessionId);
+    // Route only relevant tools for this turn (saves ~85% of tool tokens)
+    const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user')?.content || userMessage;
+    const routedTools = selectToolsForMessage(tools, lastUserMsg);
+    onStep(`🎯 Using ${routedTools.length}/${tools.length} tools for this request`);
+
+    const response = await proxyRequest("chat", { messages, tools: routedTools }, activeSessionId);
 
     const choice = response.choices?.[0];
     if (!choice) throw new Error("No response choice from LLM");
