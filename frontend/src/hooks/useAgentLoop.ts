@@ -96,53 +96,61 @@ build_room({
 `;
 
 // ══ DYNAMIC TOOL ROUTER ══
-// Filters all MCP tools down to only what is relevant for this message.
-// ALWAYS includes the 4 high-level orchestration tools + utility tools.
-// Adds low-level tools only when the message explicitly requires them.
-// Result: 5-12 tools per request instead of 60 (~85% token reduction).
+// The orchestration tools (build_room, build_building, etc.) handle EVERYTHING
+// for room/building creation. Low-level tools are ONLY added when the user
+// explicitly wants to modify a SINGLE element on an EXISTING model.
+//
+// Default: 8 tools. Max: ~12 tools. Never all 60.
 
 const ALWAYS_EXPOSED = new Set([
-  // High-level orchestration (covers 90% of use cases)
-  "build_room",
-  "build_floor_plan",
-  "build_building",
-  "build_wall_assembly",
-  // Scene utilities
+  "build_room",           // creates a full room: 4 walls + slab + doors + windows
+  "build_floor_plan",     // creates multiple rooms on one floor
+  "build_building",       // creates full multi-storey building
+  "build_wall_assembly",  // creates a wall with openings
   "get_scene_info",
   "get_ifc_scene_overview",
   "export_ifc",
   "initialize_project",
 ]);
 
+// Only add these low-level tools when user is EXPLICITLY modifying
+// a SINGLE element on an already-built model (not creating from scratch)
 const TOOL_GROUPS: Record<string, string[]> = {
-  wall:     ["create_wall", "create_two_point_wall", "create_polyline_walls", "update_wall", "get_wall_properties"],
-  slab:     ["create_slab", "update_slab", "get_slab_properties"],
-  door:     ["create_door", "update_door", "get_door_properties", "get_door_operation_types"],
-  window:   ["create_window", "update_window", "get_window_properties", "get_window_partition_types"],
-  opening:  ["create_opening", "fill_opening", "remove_opening"],
-  roof:     ["create_roof", "update_roof", "delete_roof", "get_roof_types"],
-  stair:    ["create_stairs", "update_stairs", "delete_stairs", "get_stairs_types"],
-  style:    ["create_surface_style", "create_pbr_style", "apply_style_to_object", "list_styles", "update_style"],
-  mesh:     ["create_mesh_ifc", "create_trimesh_ifc", "list_ifc_entities", "get_trimesh_examples", "get_mesh_examples"],
-  code:     ["execute_ifc_code_tool", "execute_blender_code", "list_blender_commands"],
-  knowledge:["search_ifc_knowledge", "find_ifc_function", "get_ifc_function_details", "get_ifc_module_info"],
+  // Single-element edits on existing model
+  add_door:    ["create_door", "update_door", "get_door_operation_types"],
+  add_window:  ["create_window", "update_window", "get_window_partition_types"],
+  add_roof:    ["create_roof", "update_roof", "get_roof_types"],
+  add_stair:   ["create_stairs", "update_stairs", "get_stairs_types"],
+  add_wall:    ["create_wall", "create_two_point_wall", "update_wall"],
+  add_slab:    ["create_slab", "update_slab"],
+  // Style / material
+  style:       ["create_surface_style", "create_pbr_style", "apply_style_to_object", "list_styles", "update_style"],
+  // Advanced
+  code:        ["execute_ifc_code_tool", "execute_blender_code", "list_blender_commands"],
+  knowledge:   ["search_ifc_knowledge", "find_ifc_function", "get_ifc_function_details"],
 };
 
+// Only match EXPLICIT single-element additions to EXISTING models.
+// Room/building/floor-plan phrases are handled by the orchestration tools - NO extra tools needed.
 const KEYWORD_MAP: Array<[RegExp, string[]]> = [
-  [/\b(wall|walls|barrier|partition)\b/i,             ["wall"]],
-  [/\b(slab|floor|ceiling|deck)\b/i,                  ["slab"]],
-  [/\b(door|entrance|exit|entry)\b/i,                 ["door", "opening"]],
-  [/\b(window|glazing|glass|fenestration)\b/i,        ["window", "opening"]],
-  [/\b(roof|rooftop|canopy)\b/i,                      ["roof"]],
-  [/\b(stair|stairs|staircase|steps|riser|tread)\b/i, ["stair"]],
-  [/\b(style|material|color|colour|texture|surface|pbr|render)\b/i, ["style"]],
-  [/\b(mesh|geometry|shape|solid|trimesh)\b/i,        ["mesh"]],
-  [/\b(code|script|python|execute|custom)\b/i,        ["code"]],
-  [/\b(ifc\s+know|function|module|api|lookup)\b/i,    ["knowledge"]],
-  // Compound intents
-  [/\b(building|storey|floor\s+plan|layout)\b/i,     ["wall", "slab", "door", "window"]],
-  [/\b(room|office|bedroom|kitchen|bathroom)\b/i,     ["wall", "slab", "door", "window"]],
-  [/\b(modify|edit|update|change|move|resize)\b/i,   ["wall", "slab", "door", "window", "roof"]],
+  // Explicit single additions: "add a door", "put a window on", "insert a door"
+  [/\b(add|insert|put|place)\s+(a\s+)?door\b/i,      ["add_door"]],
+  [/\b(add|insert|put|place)\s+(a\s+)?window\b/i,    ["add_window"]],
+  [/\b(add|insert|put|place)\s+(a\s+)?roof\b/i,      ["add_roof"]],
+  [/\b(add|insert|put|place)\s+(a\s+)?stair/i,       ["add_stair"]],
+  [/\b(add|insert|put|place)\s+(a\s+)?wall\b/i,      ["add_wall"]],
+  [/\b(add|insert|put|place)\s+(a\s+)?slab\b/i,      ["add_slab"]],
+  // Update/modify single elements on existing model
+  [/\b(update|move|resize|modify|change)\s+(the\s+)?door/i,   ["add_door"]],
+  [/\b(update|move|resize|modify|change)\s+(the\s+)?window/i, ["add_window"]],
+  [/\b(update|move|resize|modify|change)\s+(the\s+)?roof/i,   ["add_roof"]],
+  [/\b(update|move|resize|modify|change)\s+(the\s+)?stair/i,  ["add_stair"]],
+  [/\b(update|move|resize|modify|change)\s+(the\s+)?wall/i,   ["add_wall"]],
+  // Style/material (always reasonable to add)
+  [/\b(style|material|color|colour|texture|render|pbr)\b/i,   ["style"]],
+  // Advanced use
+  [/\b(code|script|python|execute|custom|raw)\b/i,            ["code"]],
+  [/\b(ifc\s+api|ifc\s+function|lookup|module)\b/i,           ["knowledge"]],
 ];
 
 function selectToolsForMessage(allTools: any[], userMessage: string): any[] {
@@ -156,9 +164,7 @@ function selectToolsForMessage(allTools: any[], userMessage: string): any[] {
     }
   }
 
-  const filtered = allTools.filter(t => needed.has(t.function?.name || t.name));
-  // Always return at least the always-exposed set (in case some aren't in allTools)
-  return filtered.length > 0 ? filtered : allTools;
+  return allTools.filter(t => needed.has(t.function?.name || t.name));
 }
 
 // ══ MAIN AGENT LOOP ══
@@ -185,7 +191,8 @@ export async function runQwenAgentLoop(
   const systemPrompt = (initData.system_prompt || "") + ARCHITECT_PROMPT;
   const activeSessionId = initData.session_id || clientSessionId;
 
-  onStep(`✅ Loaded ${tools.length} tools`);
+  const orchestrationTools = tools.filter((t: any) => ALWAYS_EXPOSED.has(t.function?.name || t.name));
+  onStep(`✅ Ready — ${orchestrationTools.length} orchestration tools loaded`);
 
   // 2. Reset the backend IFC project for new sessions to prevent stale data
   if (previousMessages.length === 0) {
