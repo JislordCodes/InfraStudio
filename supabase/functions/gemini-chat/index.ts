@@ -91,7 +91,9 @@ async function fetchMcpTools(clientSessionId: string): Promise<{ tools: any[], s
       type: "function",
       function: {
         name: t.name,
-        description: (t.description || "").slice(0, 1024),
+        // Trim description hard to 256 chars - saves significant tokens
+        description: (t.description || "").slice(0, 256),
+        // Only include non-empty parameters
         parameters: t.inputSchema || { type: "object", properties: {} }
       }
     })),
@@ -271,14 +273,40 @@ Deno.serve(async (req: Request) => {
       const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
       const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/publishers/google/models/${LLM_MODEL}:generateContent`;
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
-        body: JSON.stringify(body)
-      });
+      // Retry with exponential backoff on 429 (rate limit)
+      let geminiData: any;
+      const retryDelays = [5000, 15000, 30000];
+      let lastError = "";
+      let succeeded = false;
 
-      if (!res.ok) throw new Error(`Vertex API Error: ${await res.text()}`);
-      const geminiData = await res.json();
+      for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
+          body: JSON.stringify(body)
+        });
+
+        if (res.ok) {
+          geminiData = await res.json();
+          succeeded = true;
+          break;
+        }
+
+        const errText = await res.text();
+        lastError = errText;
+
+        if (res.status === 429 && attempt < retryDelays.length) {
+          const wait = retryDelays[attempt];
+          console.log(`429 rate limit hit, retrying in ${wait/1000}s (attempt ${attempt + 1}/${retryDelays.length})...`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
+
+        throw new Error(`Vertex API Error: ${errText}`);
+      }
+
+      if (!succeeded) throw new Error(`Vertex API Error (after retries): ${lastError}`);
+
       
       // Translate back to OpenAI format
       const candidate = geminiData.candidates?.[0];
