@@ -130,27 +130,40 @@ const TOOL_GROUPS: Record<string, string[]> = {
   knowledge:   ["search_ifc_knowledge", "find_ifc_function", "get_ifc_function_details"],
 };
 
-// Only match EXPLICIT single-element additions to EXISTING models.
-// Room/building/floor-plan phrases are handled by the orchestration tools - NO extra tools needed.
+// ROUTING STRATEGY:
+// 1. Room/building/floor-plan → ONLY orchestration tools (build_room handles walls+slab+doors+windows internally)
+// 2. Wall + openings → build_wall_assembly is always exposed, handles "a wall with door/window"
+// 3. Specific standalone elements (roof, stair, slab) → add those tool groups
+// 4. Any mention of door/window WITHOUT a room/building context → add door/window tools
+// 5. Style/material requests → add style tools
 const KEYWORD_MAP: Array<[RegExp, string[]]> = [
-  // Explicit single additions: "add a door", "put a window on", "insert a door"
-  [/\b(add|insert|put|place)\s+(a\s+)?door\b/i,      ["add_door"]],
-  [/\b(add|insert|put|place)\s+(a\s+)?window\b/i,    ["add_window"]],
-  [/\b(add|insert|put|place)\s+(a\s+)?roof\b/i,      ["add_roof"]],
-  [/\b(add|insert|put|place)\s+(a\s+)?stair/i,       ["add_stair"]],
-  [/\b(add|insert|put|place)\s+(a\s+)?wall\b/i,      ["add_wall"]],
-  [/\b(add|insert|put|place)\s+(a\s+)?slab\b/i,      ["add_slab"]],
-  // Update/modify single elements on existing model
-  [/\b(update|move|resize|modify|change)\s+(the\s+)?door/i,   ["add_door"]],
-  [/\b(update|move|resize|modify|change)\s+(the\s+)?window/i, ["add_window"]],
-  [/\b(update|move|resize|modify|change)\s+(the\s+)?roof/i,   ["add_roof"]],
-  [/\b(update|move|resize|modify|change)\s+(the\s+)?stair/i,  ["add_stair"]],
-  [/\b(update|move|resize|modify|change)\s+(the\s+)?wall/i,   ["add_wall"]],
-  // Style/material (always reasonable to add)
-  [/\b(style|material|color|colour|texture|render|pbr)\b/i,   ["style"]],
-  // Advanced use
-  [/\b(code|script|python|execute|custom|raw)\b/i,            ["code"]],
-  [/\b(ifc\s+api|ifc\s+function|lookup|module)\b/i,           ["knowledge"]],
+  // ── Standalone element creation (not part of a room/building) ──
+  // "create a roof", "add a roof", "flat roof"
+  [/\b(roof|rooftop|canopy|overhang)\b/i,                         ["add_roof"]],
+  // "create stairs", "add staircase", "spiral stair"
+  [/\b(stair|stairs|staircase|stairway|steps|riser|tread)\b/i,   ["add_stair"]],
+  // "create a slab", "concrete floor slab" (not via build_room)
+  [/\b(slab)\b/i,                                                  ["add_slab"]],
+
+  // ── Doors & windows mentioned WITHOUT room/building context ──
+  // If the user says "room with door" → build_room handles it (door is a param)
+  // If the user says "wall with door" → build_wall_assembly handles it (always exposed)
+  // If the user says just "door" or "window" (editing existing model) → expose the tools
+  [/\b(door|entrance|doorway|doorframe)\b/i,                      ["add_door"]],
+  [/\b(window|glazing|fenestration|skylight)\b/i,                 ["add_window"]],
+
+  // ── Style/material (always safe to add) ──
+  [/\b(style|material|color|colour|texture|render|pbr|finish)\b/i, ["style"]],
+
+  // ── Advanced / expert use ──
+  [/\b(code|script|python|execute|custom|raw\s+ifc)\b/i,          ["code"]],
+  [/\b(ifc\s+api|ifc\s+function|lookup|module|schema)\b/i,        ["knowledge"]],
+
+  // ── Exception: room/building/floor-plan explicitly use orchestration only ──
+  // These are intentionally NOT mapped to low-level tools:
+  // "room", "office", "bedroom" → build_room (handles walls+slab+doors+windows as params)
+  // "building", "storey", "floor plan" → build_building / build_floor_plan
+  // "wall with door" → build_wall_assembly (always exposed, handles openings as params)
 ];
 
 function selectToolsForMessage(allTools: any[], userMessage: string): any[] {
