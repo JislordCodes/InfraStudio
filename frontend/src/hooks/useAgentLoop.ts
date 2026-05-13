@@ -113,16 +113,14 @@ const ALWAYS_EXPOSED = new Set([
   "initialize_project",
 ]);
 
-// ── SEMANTIC TOOL RETRIEVAL (Intelligence Layer) ──
-// This Replaces the static Regex KEYWORD_MAP with an LLM-based Tool Retriever.
-// 1. We send the user prompt + tool names/descriptions to a fast pre-flight LLM call.
-// 2. The LLM acts as an intelligence layer to extract exactly the tools needed.
-// 3. We return those tools to the main Agent Loop.
+// ── SEMANTIC TOOL RETRIEVAL (QWEN INTELLIGENCE LAYER) ──
+// 1. We send the user prompt + tool list explicitly to Alibaba's Qwen (qwen3.6-max-preview).
+// 2. Qwen acts as the Intelligence Layer to extract exactly the tools needed.
+// 3. We return those tools to the main Agent Loop (which uses Gemini).
 
-async function routeToolsWithLLM(allTools: any[], userMessage: string, activeSessionId: string): Promise<any[]> {
+async function routeToolsWithQwen(allTools: any[], userMessage: string): Promise<any[]> {
   const needed = new Set<string>(ALWAYS_EXPOSED);
   
-  // Extract a lightweight list of available tools (name + short description)
   const availableToolsList = allTools
     .filter(t => !ALWAYS_EXPOSED.has(t.function?.name || t.name))
     .map(t => `- ${t.function?.name || t.name}: ${(t.function?.description || t.description || "").slice(0, 100)}`)
@@ -142,14 +140,34 @@ RULES:
 3. If the user is asking to add a SPECIFIC element to an EXISTING model (e.g., "add a roof", "insert a window"), extract the relevant tools.
 4. Reply with ONLY the comma-separated tool names. Nothing else. No markdown. If none, reply "NONE".`;
 
-  try {
-    // We reuse proxyRequest to ask the LLM for the tools (pre-flight)
-    const response = await proxyRequest("chat", { 
-      messages: [{ role: "user", content: routerPrompt }], 
-      tools: [] // No tools for the router, just text generation
-    }, activeSessionId);
+  const QWEN_API_KEY = import.meta.env.VITE_QWEN_API_KEY;
+  if (!QWEN_API_KEY) {
+    console.warn("⚠️ VITE_QWEN_API_KEY is missing! The Intelligence Layer requires an Alibaba API key. Falling back to all tools.");
+    return allTools;
+  }
 
-    const choice = response.choices?.[0]?.message?.content || "";
+  try {
+    // Calling Alibaba DashScope OpenAI-compatible API
+    const res = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${QWEN_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "qwen3.6-max-preview", // Explicitly using Qwen as the Layer 1 Router
+        messages: [{ role: "user", content: routerPrompt }],
+        temperature: 0.1
+      })
+    });
+
+    if (!res.ok) {
+      throw new Error(`Qwen API Error: ${await res.text()}`);
+    }
+
+    const data = await res.json();
+    const choice = data.choices?.[0]?.message?.content || "";
+    
     if (choice && choice.trim() !== "NONE") {
       const extractedToolNames = choice.split(",").map((s: string) => s.trim());
       for (const name of extractedToolNames) {
@@ -157,7 +175,8 @@ RULES:
       }
     }
   } catch (e) {
-    console.warn("Tool Router LLM failed, falling back to orchestration tools only:", e);
+    console.error("Qwen Tool Router failed:", e);
+    return allTools; // Fallback to all tools if Qwen fails
   }
 
   return allTools.filter(t => needed.has(t.function?.name || t.name));
@@ -238,13 +257,13 @@ export async function runQwenAgentLoop(
     onStep(`🤖 Agent thinking (turn ${turn + 1}/${MAX_TURNS})...`);
 
     // ── Pre-flight Semantic Tool Router ──
-    // Extracts only the tools needed for this specific message using the Intelligence Layer
+    // Extracts only the tools needed for this specific message using Alibaba Qwen
     const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user')?.content || userMessage;
     
-    onStep(`🧠 Routing tools semantically...`);
-    const routedTools = await routeToolsWithLLM(tools, lastUserMsg, activeSessionId);
+    onStep(`🧠 Qwen Intelligence Layer analyzing intent...`);
+    const routedTools = await routeToolsWithQwen(tools, lastUserMsg);
     
-    onStep(`🎯 Intelligence Layer extracted ${routedTools.length}/${tools.length} relevant tools`);
+    onStep(`🎯 Qwen extracted ${routedTools.length}/${tools.length} relevant tools for Gemini`);
 
     const response = await proxyRequest("chat", { messages, tools: routedTools }, activeSessionId);
 
