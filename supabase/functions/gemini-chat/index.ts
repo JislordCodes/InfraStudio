@@ -191,6 +191,69 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
+// ── SEMANTIC TOOL RETRIEVAL (QWEN INTELLIGENCE LAYER) ──
+const ALWAYS_EXPOSED = new Set([
+  "build_room", "build_floor_plan", "build_building", "build_wall_assembly",
+  "get_scene_info", "get_ifc_scene_overview", "export_ifc", "initialize_project"
+]);
+
+async function routeToolsWithQwen(allTools: any[], userMessage: string): Promise<any[]> {
+  const needed = new Set<string>(ALWAYS_EXPOSED);
+  
+  const availableToolsList = allTools
+    .filter(t => !ALWAYS_EXPOSED.has(t.function?.name || t.name))
+    .map(t => `- ${t.function?.name || t.name}: ${(t.function?.description || t.description || "").slice(0, 100)}`)
+    .join("\n");
+
+  const routerPrompt = `You are a Tool Retrieval Intelligence Layer.
+Your job is to analyze the user's architectural request and extract the names of the specific tools needed from the database.
+
+User Request: "${userMessage}"
+
+Available Tools Database:
+${availableToolsList}
+
+RULES:
+1. ONLY return a comma-separated list of tool names from the database above.
+2. If the user is asking to build a full room or building, DO NOT extract low-level tools like create_wall or create_door (they are handled automatically).
+3. If the user is asking to add a SPECIFIC element to an EXISTING model (e.g., "add a roof", "insert a window"), extract the relevant tools.
+4. Reply with ONLY the comma-separated tool names. Nothing else. No markdown. If none, reply "NONE".`;
+
+  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  if (!qwenKey) {
+    console.warn("QWEN_API_KEY missing. Falling back to all tools.");
+    return allTools;
+  }
+
+  try {
+    const res = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "qwen-max", // DashScope's alias for the largest Qwen model
+        messages: [{ role: "user", content: routerPrompt }],
+        temperature: 0.1
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const choice = data.choices?.[0]?.message?.content || "";
+      if (choice && choice.trim() !== "NONE") {
+        const extractedToolNames = choice.split(",").map((s: string) => s.trim());
+        for (const name of extractedToolNames) {
+          if (name) needed.add(name);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Qwen Tool Router failed:", e);
+    return allTools;
+  }
+
+  return allTools.filter(t => needed.has(t.function?.name || t.name));
+}
+
 // ══ HTTP HANDLER ══
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -266,8 +329,17 @@ Deno.serve(async (req: Request) => {
 
       const body: any = { contents };
       if (systemText.trim()) body.systemInstruction = { parts: [{ text: systemText.trim() }] };
+      
+      // -- Layer 1: Intelligence Router (Qwen) --
+      let routedTools = tools || [];
       if (tools && tools.length > 0) {
-        body.tools = [{ functionDeclarations: tools.map((t: any) => t.function) }];
+        const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user")?.content || "";
+        if (lastUserMsg) {
+          console.log("Routing tools semantically with Qwen...");
+          routedTools = await routeToolsWithQwen(tools, lastUserMsg);
+          console.log(`Qwen extracted ${routedTools.length}/${tools.length} relevant tools`);
+        }
+        body.tools = [{ functionDeclarations: routedTools.map((t: any) => t.function) }];
       }
 
       const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
