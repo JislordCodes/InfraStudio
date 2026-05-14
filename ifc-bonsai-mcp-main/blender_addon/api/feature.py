@@ -181,12 +181,13 @@ def create_opening(
             )
             
         # CRITICAL FIX: The host wall's body is centered on Y=0 (e.g. from Y=-0.1 to Y=+0.1).
-        # The opening extrusion starts at Y=0 and goes to Y=depth (e.g. 0 to 0.3).
-        # We MUST shift the opening backwards by -(depth/2) so it is perfectly centered
-        # over the wall (e.g. -0.15 to +0.15). This guarantees it cleanly slices both faces!
+        # The opening extrusion starts at Y=0 and goes to Y=depth, and X=0 to X=width.
+        # We MUST shift the opening backwards by -(depth/2) and -(width/2) so it is perfectly centered
+        # over the wall and aligned with the door/window origin.
         shift_y = -(depth / 2.0)
+        shift_x = -(width / 2.0)
         local_shift = np.array([
-            [1, 0, 0, 0],
+            [1, 0, 0, shift_x],
             [0, 1, 0, shift_y],
             [0, 0, 1, 0],
             [0, 0, 0, 1]
@@ -290,16 +291,20 @@ def fill_opening(
                         # or we can look up the opening dimensions.
                         # Luckily, we can just fetch the opening's representation thickness or use a default.
                         opening_depth = 0.3
+                        opening_width = 0.9
                         if hasattr(opening, "Representation") and opening.Representation:
                             for rep in opening.Representation.Representations:
                                 if rep.RepresentationIdentifier == "Body":
                                     for item in rep.Items:
-                                        if hasattr(item, "SweptArea") and hasattr(item.SweptArea, "YDim"):
-                                            opening_depth = item.SweptArea.YDim
+                                        if hasattr(item, "SweptArea"):
+                                            if hasattr(item.SweptArea, "YDim"):
+                                                opening_depth = item.SweptArea.YDim
+                                            if hasattr(item.SweptArea, "XDim"):
+                                                opening_width = item.SweptArea.XDim
                                         elif hasattr(item, "Depth"):
                                             opening_depth = item.Depth
 
-                        rel.Location.Coordinates = (0.0, (opening_depth / 2.0), 0.0)
+                        rel.Location.Coordinates = ((opening_width / 2.0), (opening_depth / 2.0), 0.0)
                     
                     # Reset rotation to identity (relative to parent opening)
                     # This prevents the "double rotation" bug where doors stick out 90 degrees
