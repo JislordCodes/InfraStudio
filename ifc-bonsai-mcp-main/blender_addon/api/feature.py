@@ -180,6 +180,18 @@ def create_opening(
                 rotation_z=rotation_z
             )
             
+        # CRITICAL FIX: Shift the opening geometry backwards by 0.05m along its local Y-axis.
+        # Because add_wall_representation extrudes from 0 to thickness, it perfectly aligns
+        # with the wall face at Y=0, causing boolean subtract Z-fighting (thin layer of wall remains).
+        # Shifting it backwards guarantees it cuts cleanly through the face.
+        local_shift = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, -0.05],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ], dtype=float)
+        mat = mat @ local_shift
+            
         ifcopenshell.api.run(
             "geometry.edit_object_placement",
             ifc_file,
@@ -265,11 +277,14 @@ def fill_opening(
             try:
                 # Place relative to the OPENING (not the wall)
                 element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement
-                # Zero out local coordinates AND rotation — element is perfectly aligned with opening
+                
                 if hasattr(element.ObjectPlacement, "RelativePlacement"):
                     rel = element.ObjectPlacement.RelativePlacement
                     if hasattr(rel, "Location"):
-                        rel.Location.Coordinates = (0.0, 0.0, 0.0)
+                        # Because we shifted the opening backwards by 0.05m to guarantee a clean cut,
+                        # we must shift the filling element FORWARDS by 0.05m relative to the opening
+                        # so that it remains perfectly aligned with the original intended position in the wall.
+                        rel.Location.Coordinates = (0.0, 0.05, 0.0)
                     
                     # Reset rotation to identity (relative to parent opening)
                     # This prevents the "double rotation" bug where doors stick out 90 degrees

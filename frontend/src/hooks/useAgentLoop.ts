@@ -88,11 +88,26 @@ build_room({
   windows: [{wall: "east", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9}]
 })
 
+━━━ STYLES & MATERIALS ━━━
+If the user asks for materials (e.g. "concrete wall", "wooden door"):
+1. FIRST call the orchestration tool (e.g., build_wall_assembly or build_room).
+2. The result will contain a JSON list of GUIDs for the created walls, doors, and windows.
+3. NEXT, call create_surface_style for each material (e.g., name="Concrete", diffuse_color=[0.6, 0.6, 0.6, 1.0]).
+4. FINALLY, call apply_style_to_object using the object GUID and the style GUID.
+
+━━━ EDITING EXISTING MODELS ━━━
+If the user asks to ADD or EDIT something in a model that ALREADY EXISTS:
+1. You will receive a system message with the current model state and GUIDs.
+2. DO NOT use build_room or build_wall_assembly to recreate the entire scene.
+3. INSTEAD, look at the provided JSON state, find the GUID of the target element (e.g. the specific wall you want to add a door to).
+4. Use the specific, low-level tool (e.g. create_door, create_window) and pass the existing element's GUID as an argument.
+5. CRITICAL: When using create_door or create_window, you MUST set "create_opening": true in the arguments. If you do not, it will not cut a hole in the wall geometry and the door/window will be hidden inside the wall.
+
 ━━━ RULES ━━━
 - NEVER compute wall coordinates or rotations yourself.
 - Wall positions use cardinal names: "south", "east", "north", "west".
 - offset = distance from the START of the named wall in meters.
-- After building, always call export_ifc as the last step.
+- After building or editing, always call export_ifc as the last step.
 `;
 
 // ══ DYNAMIC TOOL ROUTER ══
@@ -100,7 +115,7 @@ build_room({
 // for room/building creation. Low-level tools are ONLY added when the user
 // explicitly wants to modify a SINGLE element on an EXISTING model.
 //
-// Default: 8 tools. Max: ~12 tools. Never all 60.
+// Default: 10 tools. Max: ~14 tools. Never all 60.
 
 const ALWAYS_EXPOSED = new Set([
   "build_room",           // creates a full room: 4 walls + slab + doors + windows
@@ -111,22 +126,13 @@ const ALWAYS_EXPOSED = new Set([
   "get_ifc_scene_overview",
   "export_ifc",
   "initialize_project",
+  "create_surface_style", // ALWAYS allow styling
+  "apply_style_to_object" // ALWAYS allow styling
 ]);
 
 // The Tool Routing Intelligence Layer has been moved to the Supabase Edge Function
 // for better security (hiding API keys) and performance. The frontend now passes all
 // tools to the edge function, which dynamically filters them before sending to Gemini.
-
-const ALWAYS_EXPOSED = new Set([
-  "build_room",
-  "build_floor_plan",
-  "build_building",
-  "build_wall_assembly",
-  "get_scene_info",
-  "get_ifc_scene_overview",
-  "export_ifc",
-  "initialize_project",
-]);
 
 // ══ MAIN AGENT LOOP ══
 export interface AgentResult {

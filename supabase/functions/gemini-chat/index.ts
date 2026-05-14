@@ -194,7 +194,8 @@ async function mintAccessToken(saJson: any): Promise<string> {
 // ── SEMANTIC TOOL RETRIEVAL (QWEN INTELLIGENCE LAYER) ──
 const ALWAYS_EXPOSED = new Set([
   "build_room", "build_floor_plan", "build_building", "build_wall_assembly",
-  "get_scene_info", "get_ifc_scene_overview", "export_ifc", "initialize_project"
+  "get_scene_info", "get_ifc_scene_overview", "export_ifc", "initialize_project",
+  "create_surface_style", "apply_style_to_object" // Style tools are always needed
 ]);
 
 async function routeToolsWithQwen(allTools: any[], userMessage: string): Promise<any[]> {
@@ -287,49 +288,6 @@ Deno.serve(async (req: Request) => {
       
       const accessToken = await mintAccessToken(saJson);
 
-      let systemText = "";
-      const contents: any[] = [];
-      const toolCallMap = new Map<string, string>();
-
-      for (const msg of messages || []) {
-        if (msg.role === "system") {
-          systemText += msg.content + "\n";
-        } else if (msg.role === "user") {
-          contents.push({ role: "user", parts: [{ text: msg.content }] });
-        } else if (msg.role === "assistant") {
-          const parts: any[] = [];
-          if (msg.content) parts.push({ text: msg.content });
-          if (msg.tool_calls) {
-            for (const call of msg.tool_calls) {
-              toolCallMap.set(call.id, call.function.name);
-              const argsObj = typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments || "{}") : call.function.arguments;
-              const p: any = { functionCall: { name: call.function.name, args: argsObj } };
-              if (call.x_thought_signature) p.thought_signature = call.x_thought_signature;
-              if (call.x_thoughtSignature) p.thoughtSignature = call.x_thoughtSignature;
-              parts.push(p);
-            }
-          }
-          contents.push({ role: "model", parts });
-        } else if (msg.role === "tool") {
-          const name = toolCallMap.get(msg.tool_call_id) || "unknown_tool";
-          let parsedResult;
-          try { parsedResult = JSON.parse(msg.content); } catch { parsedResult = { result: msg.content }; }
-          
-          const part = { functionResponse: { name, response: { result: parsedResult } } };
-          
-          // Group consecutive tool messages into a single 'function' role content
-          const lastContent = contents[contents.length - 1];
-          if (lastContent && lastContent.role === "function") {
-            lastContent.parts.push(part);
-          } else {
-            contents.push({ role: "function", parts: [part] });
-          }
-        }
-      }
-
-      const body: any = { contents };
-      if (systemText.trim()) body.systemInstruction = { parts: [{ text: systemText.trim() }] };
-      
       // -- Layer 1: Intelligence Router (Qwen) --
       let routedTools = tools || [];
       if (tools && tools.length > 0) {
@@ -339,14 +297,23 @@ Deno.serve(async (req: Request) => {
           routedTools = await routeToolsWithQwen(tools, lastUserMsg);
           console.log(`Qwen extracted ${routedTools.length}/${tools.length} relevant tools`);
         }
-        body.tools = [{ functionDeclarations: routedTools.map((t: any) => t.function) }];
       }
 
       const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
-      const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/publishers/google/models/${LLM_MODEL}:generateContent`;
+      const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
+
+      const openaiBody: any = {
+        model: "zai-org/glm-5-maas",
+        messages: messages,
+        temperature: 0.1
+      };
+      
+      if (routedTools.length > 0) {
+        openaiBody.tools = routedTools;
+      }
 
       // Retry with exponential backoff on 429 (rate limit)
-      let geminiData: any;
+      let responseData: any;
       const retryDelays = [5000, 15000, 30000];
       let lastError = "";
       let succeeded = false;
@@ -355,11 +322,11 @@ Deno.serve(async (req: Request) => {
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
-          body: JSON.stringify(body)
+          body: JSON.stringify(openaiBody)
         });
 
         if (res.ok) {
-          geminiData = await res.json();
+          responseData = await res.json();
           succeeded = true;
           break;
         }
@@ -374,37 +341,16 @@ Deno.serve(async (req: Request) => {
           continue;
         }
 
-        throw new Error(`Vertex API Error: ${errText}`);
+        throw new Error(`Vertex OpenAPI Error: ${res.status} ${errText}`);
       }
 
-      if (!succeeded) throw new Error(`Vertex API Error (after retries): ${lastError}`);
+      if (!succeeded) throw new Error(`Vertex OpenAPI Error (after retries): ${lastError}`);
 
-      
-      // Translate back to OpenAI format
-      const candidate = geminiData.candidates?.[0];
-      const outParts = candidate?.content?.parts || [];
-      let outContent = "";
-      const outTools: any[] = [];
+      let activeSession = inboundSessionId;
+      if (!activeSession) activeSession = await mcpInit("");
 
-      for (const part of outParts) {
-        if (part.text) outContent += part.text;
-        if (part.functionCall) {
-          outTools.push({
-            id: "call_" + Math.random().toString(36).substring(2, 10),
-            type: "function",
-            function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) },
-            x_thought_signature: part.thought_signature,
-            x_thoughtSignature: part.thoughtSignature
-          });
-        }
-      }
-
-      return new Response(JSON.stringify({
-        id: "chatcmpl-" + Math.random().toString(36).substring(2),
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        choices: [{ message: { role: "assistant", content: outContent || null, ...(outTools.length ? { tool_calls: outTools } : {}) } }]
-      }), { headers: { ...CORS, "Content-Type": "application/json" } });
+      responseData.session_id = activeSession;
+      return new Response(JSON.stringify(responseData), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
 
     throw new Error(`Unknown action: ${action}`);
