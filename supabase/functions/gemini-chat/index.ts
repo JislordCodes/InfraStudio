@@ -276,7 +276,7 @@ Deno.serve(async (req: Request) => {
       let activeSession = inboundSessionId;
       if (!activeSession) activeSession = await mcpInit("");
       const { resultText, session } = await mcpCallTool(name, args || {}, activeSession);
-      const truncated = resultText.length > 3000 ? resultText.slice(0, 3000) + "... [truncated]" : resultText;
+      const truncated = resultText.length > 10000 ? resultText.slice(0, 10000) + "... [truncated]" : resultText;
       return new Response(JSON.stringify({ result: truncated, session_id: session }), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
 

@@ -161,7 +161,7 @@ def create_window(
         window_location = location if location else [0.0, 0.0, 1.0]
         window_rotation = rotation if rotation else [0.0, 0.0, 0.0]
         
-        opening_depth = wall_thickness + 0.1
+        opening_depth = 1.0 # 1 meter deep to guarantee boolean cut through any wall thickness
         
         from .feature import create_opening_llm, fill_opening_llm
         opening_result = create_opening_llm(
