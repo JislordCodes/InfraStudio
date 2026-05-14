@@ -181,13 +181,15 @@ def create_opening(
             )
             
         # CRITICAL FIX: The host wall's body is centered on Y=0 (e.g. from Y=-0.1 to Y=+0.1).
-        # The opening extrusion starts at Y=0 and goes to Y=depth, and X=0 to X=width.
-        # We MUST shift the opening backwards by -(depth/2) and -(width/2) so it is perfectly centered
-        # over the wall and aligned with the door/window origin.
+        # The opening extrusion starts at Y=0 and goes to Y=depth.
+        # We MUST shift the opening backwards by -(depth/2) so it is perfectly centered
+        # through the wall (e.g. -0.5 to +0.5 for 1m depth). This guarantees it cleanly
+        # slices BOTH the interior and exterior faces of the wall.
+        # NOTE: No X shift needed — the door/window world position is already the left edge
+        # of the opening (IFC wall representation starts at X=0 = left edge of wall).
         shift_y = -(depth / 2.0)
-        shift_x = -(width / 2.0)
         local_shift = np.array([
-            [1, 0, 0, shift_x],
+            [1, 0, 0, 0],
             [0, 1, 0, shift_y],
             [0, 0, 1, 0],
             [0, 0, 0, 1]
@@ -272,49 +274,12 @@ def fill_opening(
             element=element
         )
         
-        # IFC standard: filling element must be placed RELATIVE TO the opening,
-        # not relative to the wall. The element sits at the opening's origin (0,0,0).
-        # This tells web-ifc/IFC viewers that the door/window belongs inside the void.
-        if hasattr(element, "ObjectPlacement") and hasattr(opening, "ObjectPlacement"):
-            try:
-                # Place relative to the OPENING (not the wall)
-                element.ObjectPlacement.PlacementRelTo = opening.ObjectPlacement
-                
-                if hasattr(element.ObjectPlacement, "RelativePlacement"):
-                    rel = element.ObjectPlacement.RelativePlacement
-                    if hasattr(rel, "Location"):
-                        # Because we shifted the opening backwards by -(depth/2) to center the void,
-                        # we must shift the filling element FORWARDS by +(depth/2) relative to the opening
-                        # so that it remains perfectly aligned with the wall's center axis (Y=0).
-                        
-                        # Wait, we don't have 'depth' here easily. Let's extract it from the opening's geometry if possible,
-                        # or we can look up the opening dimensions.
-                        # Luckily, we can just fetch the opening's representation thickness or use a default.
-                        opening_depth = 0.3
-                        opening_width = 0.9
-                        if hasattr(opening, "Representation") and opening.Representation:
-                            for rep in opening.Representation.Representations:
-                                if rep.RepresentationIdentifier == "Body":
-                                    for item in rep.Items:
-                                        if hasattr(item, "SweptArea"):
-                                            if hasattr(item.SweptArea, "YDim"):
-                                                opening_depth = item.SweptArea.YDim
-                                            if hasattr(item.SweptArea, "XDim"):
-                                                opening_width = item.SweptArea.XDim
-                                        elif hasattr(item, "Depth"):
-                                            opening_depth = item.Depth
-
-                        rel.Location.Coordinates = ((opening_width / 2.0), (opening_depth / 2.0), 0.0)
-                    
-                    # Reset rotation to identity (relative to parent opening)
-                    # This prevents the "double rotation" bug where doors stick out 90 degrees
-                    if hasattr(rel, "Axis"):
-                        rel.Axis = None # Defaults to (0,0,1)
-                    if hasattr(rel, "RefDirection"):
-                        rel.RefDirection = None # Defaults to (1,0,0)
-                        
-            except Exception as e:
-                if verbose: print(f"Could not fix placement hierarchy for filling: {e}")
+        # NOTE: Do NOT re-parent the element's ObjectPlacement to the opening.
+        # The door/window is already placed correctly in world space by create_door/create_window.
+        # The IfcRelFillsVoid relationship above is purely semantic (tells the IFC schema
+        # which element fills which opening). Touching PlacementRelTo here causes the door
+        # to jump to a wrong position because it creates a double-transformation.
+        # IFC viewers like web-ifc correctly handle filling elements placed in world space.
         
         save_and_load_ifc()
         
