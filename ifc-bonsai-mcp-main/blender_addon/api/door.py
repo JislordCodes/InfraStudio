@@ -179,7 +179,12 @@ def create_door(
         door_height = float(dimensions.get("overall_height", dimensions.get("height", 2.0)))
         door_location = location if location else [0.0, 0.0, 0.0]
         door_rotation = rotation if rotation else [0.0, 0.0, 0.0]
-        opening_depth = wall_thickness + 0.1
+        # Make the opening depth significantly larger than the wall to guarantee a clean boolean cut
+        opening_depth = wall_thickness + 0.2
+        
+        # Auto-adjust the door frame depth to match the wall thickness so it doesn't look buried inside the wall hole
+        if "lining_depth" not in frame_properties:
+            frame_properties["lining_depth"] = wall_thickness
         
         from .feature import create_opening_llm
         opening_result = create_opening_llm(

@@ -161,7 +161,14 @@ def create_window(
         window_location = location if location else [0.0, 0.0, 1.0]
         window_rotation = rotation if rotation else [0.0, 0.0, 0.0]
         
-        opening_depth = wall_thickness + 0.1
+        # Make the opening depth significantly larger than the wall to guarantee a clean boolean cut
+        opening_depth = wall_thickness + 0.2
+        
+        # Auto-adjust the window frame depth to match the wall thickness so it doesn't look buried inside the wall hole
+        if frame_properties is None:
+            frame_properties = {}
+        if "lining_depth" not in frame_properties:
+            frame_properties["lining_depth"] = wall_thickness
         
         from .feature import create_opening_llm, fill_opening_llm
         opening_result = create_opening_llm(
