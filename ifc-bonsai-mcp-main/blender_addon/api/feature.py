@@ -180,6 +180,19 @@ def create_opening(
                 rotation_z=rotation_z
             )
             
+        # CRITICAL FIX: The host wall's body is centered on Y=0 (e.g. from Y=-0.1 to Y=+0.1).
+        # The opening extrusion starts at Y=0 and goes to Y=depth (e.g. 0 to 0.3).
+        # We MUST shift the opening backwards by -(depth/2) so it is perfectly centered
+        # over the wall (e.g. -0.15 to +0.15). This guarantees it cleanly slices both faces!
+        shift_y = -(depth / 2.0)
+        local_shift = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, shift_y],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ], dtype=float)
+        mat = mat @ local_shift
+            
         ifcopenshell.api.run(
             "geometry.edit_object_placement",
             ifc_file,
@@ -269,7 +282,24 @@ def fill_opening(
                 if hasattr(element.ObjectPlacement, "RelativePlacement"):
                     rel = element.ObjectPlacement.RelativePlacement
                     if hasattr(rel, "Location"):
-                        rel.Location.Coordinates = (0.0, 0.0, 0.0)
+                        # Because we shifted the opening backwards by -(depth/2) to center the void,
+                        # we must shift the filling element FORWARDS by +(depth/2) relative to the opening
+                        # so that it remains perfectly aligned with the wall's center axis (Y=0).
+                        
+                        # Wait, we don't have 'depth' here easily. Let's extract it from the opening's geometry if possible,
+                        # or we can look up the opening dimensions.
+                        # Luckily, we can just fetch the opening's representation thickness or use a default.
+                        opening_depth = 0.3
+                        if hasattr(opening, "Representation") and opening.Representation:
+                            for rep in opening.Representation.Representations:
+                                if rep.RepresentationIdentifier == "Body":
+                                    for item in rep.Items:
+                                        if hasattr(item, "SweptArea") and hasattr(item.SweptArea, "YDim"):
+                                            opening_depth = item.SweptArea.YDim
+                                        elif hasattr(item, "Depth"):
+                                            opening_depth = item.Depth
+
+                        rel.Location.Coordinates = (0.0, (opening_depth / 2.0), 0.0)
                     
                     # Reset rotation to identity (relative to parent opening)
                     # This prevents the "double rotation" bug where doors stick out 90 degrees
