@@ -76,12 +76,26 @@ def _extrude_profile(profile_2d, min_extrude, max_extrude, axis='X'):
             
     faces = []
     
-    faces.append(list(range(n - 1, -1, -1)))
-    faces.append(list(range(n, 2 * n)))
+    if axis == 'X':
+        # Clockwise profile in Y-Z has normal -X
+        # min_extrude (back) should point -X
+        faces.append(list(range(n)))
+        # max_extrude (front) should point +X
+        faces.append(list(range(2 * n - 1, n - 1, -1)))
         
-    for i in range(n):
-        next_i = (i + 1) % n
-        faces.append([i, next_i, next_i + n, i + n])
+        for i in range(n):
+            next_i = (i + 1) % n
+            faces.append([i, i + n, next_i + n, next_i])
+    else:
+        # Clockwise profile in X-Z has normal +Y
+        # min_extrude (back) should point -Y
+        faces.append(list(range(n - 1, -1, -1)))
+        # max_extrude (front) should point +Y
+        faces.append(list(range(n, 2 * n)))
+        
+        for i in range(n):
+            next_i = (i + 1) % n
+            faces.append([i, next_i, next_i + n, i + n])
         
     return vertices, faces
 
@@ -177,7 +191,7 @@ def generate_roof_geometry(
             (min_u, base_z)
         ]
         
-    elif roof_type_upper in ["GABLE_ROOF", "GABLE"]:
+    elif roof_type_upper in ["GABLE_ROOF", "GABLE", "PITCHED", "PITCHED_ROOF"]:
         ridge_height = run * math.tan(math.radians(angle))
         profile.extend([
             (min_u, base_z + vert_thickness),
@@ -188,7 +202,7 @@ def generate_roof_geometry(
             (min_u, base_z)
         ])
         
-    elif roof_type_upper in ["BUTTERFLY_ROOF", "BUTTERFLY"]:
+    elif roof_type_upper in ["BUTTERFLY_ROOF", "BUTTERFLY", "V_SHAPED"]:
         ridge_height = run * math.tan(math.radians(angle))
         profile.extend([
             (min_u, base_z + ridge_height + vert_thickness),
@@ -199,7 +213,7 @@ def generate_roof_geometry(
             (min_u, base_z + ridge_height)
         ])
         
-    elif roof_type_upper in ["SHED_ROOF", "SHED"]:
+    elif roof_type_upper in ["SHED_ROOF", "SHED", "SKILLION", "LEAN_TO"]:
         total_rise = span * math.tan(math.radians(angle))
         profile.extend([
             (min_u, base_z + vert_thickness),
@@ -208,7 +222,7 @@ def generate_roof_geometry(
             (min_u, base_z)
         ])
         
-    elif roof_type_upper in ["ARCH_ROOF", "ARCH", "BARREL_ROOF", "BARREL"]:
+    elif roof_type_upper in ["ARCH_ROOF", "ARCH", "BARREL_ROOF", "BARREL", "ARCHED", "ARCHED_ROOF"]:
         ridge_height = run * math.tan(math.radians(angle))
         segments = 16
         for i in range(segments + 1):
