@@ -57,6 +57,34 @@ class RoofProperties:
     overhang: float = 0.0  # meters
 
 
+def _extrude_profile(profile_2d, min_extrude, max_extrude, axis='X'):
+    """Extrudes a 2D profile into 3D vertices and faces."""
+    n = len(profile_2d)
+    vertices = []
+    
+    for u, v in profile_2d:
+        if axis == 'X':
+            vertices.append((float(min_extrude), float(u), float(v)))
+        else:
+            vertices.append((float(u), float(min_extrude), float(v)))
+            
+    for u, v in profile_2d:
+        if axis == 'X':
+            vertices.append((float(max_extrude), float(u), float(v)))
+        else:
+            vertices.append((float(u), float(max_extrude), float(v)))
+            
+    faces = []
+    
+    faces.append(list(range(n - 1, -1, -1)))
+    faces.append(list(range(n, 2 * n)))
+        
+    for i in range(n):
+        next_i = (i + 1) % n
+        faces.append([i, next_i, next_i + n, i + n])
+        
+    return vertices, faces
+
 def generate_roof_geometry(
     polyline: List[List[float]], 
     roof_type: str, 
@@ -64,20 +92,11 @@ def generate_roof_geometry(
     thickness: float
 ) -> Tuple[List[Tuple[float, float, float]], List[List[int]]]:
     """Generate roof vertices and faces based on type and parameters.
-    
-    Args:
-        polyline: List of [x,y,z] coordinates defining roof outline
-        roof_type: Type of roof (FLAT, GABLE_ROOF, HIP_ROOF, SHED_ROOF)
-        angle: Roof slope angle in degrees
-        thickness: Roof thickness in meters
+    Returns a hollow shell roof with actual thickness.
     """
-    
     if len(polyline) < 3:
         raise ValueError("Polyline must have at least 3 points")
-    
-    vertices = []
-    faces = []
-    
+        
     base_points = [(float(p[0]), float(p[1]), float(p[2])) for p in polyline]
     n_points = len(base_points)
     
@@ -92,117 +111,127 @@ def generate_roof_geometry(
     center_x = (min_x + max_x) / 2
     center_y = (min_y + max_y) / 2
     
-    if roof_type.upper() in ["FLAT", "FLAT_ROOF"]:
-        vertices.extend(base_points)
-        
-        top_points = [(p[0], p[1], p[2] + thickness) for p in base_points]
-        vertices.extend(top_points)
-        
-        faces.append(list(range(n_points-1, -1, -1)))
-        faces.append(list(range(n_points, 2*n_points)))
-        
-        for i in range(n_points):
-            next_i = (i + 1) % n_points
-            faces.append([i, next_i, next_i + n_points, i + n_points])
+    axis = 'X' if width > length else 'Y'
+    min_extrude = min_x if axis == 'X' else min_y
+    max_extrude = max_x if axis == 'X' else max_y
+    span = length if axis == 'X' else width
+    run = span / 2
     
-    elif roof_type.upper() in ["GABLE_ROOF", "GABLE"]:
-        vertices.extend(base_points)
-        
-        if width > length:
-            ridge_height = length * 0.5 * math.tan(math.radians(angle))
-            ridge_start = (min_x, center_y, base_z + thickness + ridge_height)
-            ridge_end = (max_x, center_y, base_z + thickness + ridge_height)
-        else:
-            ridge_height = width * 0.5 * math.tan(math.radians(angle))
-            ridge_start = (center_x, min_y, base_z + thickness + ridge_height)
-            ridge_end = (center_x, max_y, base_z + thickness + ridge_height)
-        
-        vertices.extend([ridge_start, ridge_end])
-        ridge_start_idx = n_points
-        ridge_end_idx = n_points + 1
-        
-        faces.append(list(range(n_points-1, -1, -1)))
-        
-        if n_points == 4:
-            if width > length:
-                faces.append([0, 1, ridge_end_idx, ridge_start_idx])
-                faces.append([2, 3, ridge_start_idx, ridge_end_idx])
-                faces.append([3, 0, ridge_start_idx])
-                faces.append([1, 2, ridge_end_idx])
-            else:
-                faces.append([1, 2, ridge_end_idx, ridge_start_idx])
-                faces.append([3, 0, ridge_start_idx, ridge_end_idx])
-                faces.append([0, 1, ridge_start_idx])
-                faces.append([2, 3, ridge_end_idx])
-        else:
-            for i in range(n_points):
-                next_i = (i + 1) % n_points
-                p1 = base_points[i]
-                p2 = base_points[next_i]
-                edge_center = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
-                
-                dist_to_start = ((edge_center[0] - ridge_start[0])**2 + (edge_center[1] - ridge_start[1])**2)**0.5
-                dist_to_end = ((edge_center[0] - ridge_end[0])**2 + (edge_center[1] - ridge_end[1])**2)**0.5
-                
-                if dist_to_start < dist_to_end:
-                    faces.append([i, next_i, ridge_start_idx])
-                else:
-                    faces.append([i, next_i, ridge_end_idx])
+    # Calculate vertical thickness so perpendicular thickness matches
+    vert_thickness = thickness / math.cos(math.radians(angle)) if angle < 89 else thickness
+    roof_type_upper = roof_type.upper()
     
-    elif roof_type.upper() in ["HIP_ROOF", "HIP"]:
-        vertices.extend(base_points)
+    if roof_type_upper in ["HIP_ROOF", "HIP"]:
+        vertices = []
+        faces = []
         
+        # We build an inner pyramid and an outer pyramid
         min_radius = min(width, length) * 0.5
         hip_height = min_radius * math.tan(math.radians(angle))
         
-        hip_point = (center_x, center_y, base_z + thickness + hip_height)
-        vertices.append(hip_point)
-        hip_idx = n_points
+        # Outer pyramid (top shell)
+        outer_base_z = base_z + vert_thickness
+        peak_out = (center_x, center_y, base_z + hip_height + vert_thickness)
         
-        faces.append(list(range(n_points-1, -1, -1)))
-        
-        for i in range(n_points):
-            next_i = (i + 1) % n_points
-            faces.append([i, next_i, hip_idx])
-    
-    elif roof_type.upper() in ["SHED_ROOF", "SHED"]:
-        vertices.extend(base_points)
-        
-        if width > length:
-            rise = width * math.tan(math.radians(angle))
-            top_points = []
-            for p in base_points:
-                factor = (p[0] - min_x) / width if width > 0 else 0
-                height = base_z + thickness + rise * factor
-                top_points.append((p[0], p[1], height))
-        else:
-            rise = length * math.tan(math.radians(angle))
-            top_points = []
-            for p in base_points:
-                factor = (p[1] - min_y) / length if length > 0 else 0
-                height = base_z + thickness + rise * factor
-                top_points.append((p[0], p[1], height))
-        
-        vertices.extend(top_points)
-        
-        faces.append(list(range(n_points-1, -1, -1)))
-        faces.append(list(range(n_points, 2*n_points)))
+        for p in base_points:
+            vertices.append((p[0], p[1], outer_base_z))
+        vertices.append(peak_out)
+        peak_out_idx = n_points
         
         for i in range(n_points):
             next_i = (i + 1) % n_points
-            faces.append([i, next_i, next_i + n_points, i + n_points])
+            faces.append([i, next_i, peak_out_idx])
+            
+        # Inner pyramid (bottom shell)
+        offset = n_points + 1
+        peak_in = (center_x, center_y, base_z + hip_height)
+        
+        for p in base_points:
+            vertices.append((p[0], p[1], base_z))
+        vertices.append(peak_in)
+        peak_in_idx = offset + n_points
+        
+        for i in range(n_points):
+            next_i = (i + 1) % n_points
+            # Reverse winding for bottom faces so normals point DOWN/IN
+            faces.append([offset + next_i, offset + i, peak_in_idx])
+            
+        # Connect outer base and inner base (eaves edge)
+        for i in range(n_points):
+            next_i = (i + 1) % n_points
+            faces.append([i, offset + i, offset + next_i, next_i])
+            
+        return vertices, faces
+
+    # For extruded roofs
+    profile = []
+    min_u = min_y if axis == 'X' else min_x
+    max_u = max_y if axis == 'X' else max_x
+    center_u = center_y if axis == 'X' else center_x
     
+    if roof_type_upper in ["FLAT", "FLAT_ROOF"]:
+        profile = [
+            (min_u, base_z + thickness),
+            (max_u, base_z + thickness),
+            (max_u, base_z),
+            (min_u, base_z)
+        ]
+        
+    elif roof_type_upper in ["GABLE_ROOF", "GABLE"]:
+        ridge_height = run * math.tan(math.radians(angle))
+        profile.extend([
+            (min_u, base_z + vert_thickness),
+            (center_u, base_z + ridge_height + vert_thickness),
+            (max_u, base_z + vert_thickness),
+            (max_u, base_z),
+            (center_u, base_z + ridge_height),
+            (min_u, base_z)
+        ])
+        
+    elif roof_type_upper in ["BUTTERFLY_ROOF", "BUTTERFLY"]:
+        ridge_height = run * math.tan(math.radians(angle))
+        profile.extend([
+            (min_u, base_z + ridge_height + vert_thickness),
+            (center_u, base_z + vert_thickness),
+            (max_u, base_z + ridge_height + vert_thickness),
+            (max_u, base_z + ridge_height),
+            (center_u, base_z),
+            (min_u, base_z + ridge_height)
+        ])
+        
+    elif roof_type_upper in ["SHED_ROOF", "SHED"]:
+        total_rise = span * math.tan(math.radians(angle))
+        profile.extend([
+            (min_u, base_z + vert_thickness),
+            (max_u, base_z + total_rise + vert_thickness),
+            (max_u, base_z + total_rise),
+            (min_u, base_z)
+        ])
+        
+    elif roof_type_upper in ["ARCH_ROOF", "ARCH", "BARREL_ROOF", "BARREL"]:
+        ridge_height = run * math.tan(math.radians(angle))
+        segments = 16
+        for i in range(segments + 1):
+            t = i / segments
+            u = min_u + t * span
+            z_arc = base_z + ridge_height * math.sin(math.pi * t)
+            profile.append((u, z_arc + thickness))
+        for i in range(segments, -1, -1):
+            t = i / segments
+            u = min_u + t * span
+            z_arc = base_z + ridge_height * math.sin(math.pi * t)
+            profile.append((u, z_arc))
+            
     else:
-        return generate_roof_geometry(polyline, "FLAT", angle, thickness)
-    
-    corrected_faces = []
-    for face in faces:
-        if len(face) >= 3:
-            corrected_faces.append(ensure_counter_clockwise(face, vertices))
-        else:
-            corrected_faces.append(face)
-    
-    return vertices, corrected_faces
+        # Fallback to flat
+        profile = [
+            (min_u, base_z + thickness),
+            (max_u, base_z + thickness),
+            (max_u, base_z),
+            (min_u, base_z)
+        ]
+        
+    return _extrude_profile(profile, min_extrude, max_extrude, axis)
 
 
 @register_command('get_roof_types', description="Get all supported roof types")
