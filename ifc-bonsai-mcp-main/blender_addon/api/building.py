@@ -585,34 +585,42 @@ def create_building(
         + (f", {roof_type} roof" if result["roof"] else "")
     )
     
-    # ── Automatically Assign Random Styles ──────────────────────────────────
+    # ── Automatically Assign Realistic Materials ─────────────────────────────
     try:
         import random
-        from .style import create_surface_style, apply_style_to_object
+        from .style import create_pbr_style, create_surface_style, apply_style_to_object
         from .ifc_utils import get_ifc_file
         
         ifc_file = get_ifc_file()
         solid_styles = []
         glass_styles = []
         
-        # Generate vibrant random solid colors for walls/doors/slabs
-        for i in range(15):
-            color = [random.uniform(0.1, 0.9), random.uniform(0.1, 0.9), random.uniform(0.1, 0.9)]
-            name = f"SolidStyle_{random.randint(10000, 99999)}"
-            res = create_surface_style(name=name, color=color, transparency=0.0)
+        # Define realistic material palettes
+        palettes = [
+            # White/Off-white Plaster
+            ([0.9, 0.9, 0.9], 0.0, 0.9),
+            ([0.85, 0.82, 0.8], 0.0, 0.95),
+            # Concrete
+            ([0.6, 0.6, 0.6], 0.1, 0.8),
+            ([0.5, 0.5, 0.55], 0.1, 0.85),
+            # Brick / Terracotta
+            ([0.6, 0.3, 0.2], 0.0, 0.9),
+            # Wood
+            ([0.5, 0.35, 0.2], 0.05, 0.7),
+            ([0.4, 0.25, 0.15], 0.05, 0.75)
+        ]
+        
+        for i, (color, metallic, roughness) in enumerate(palettes):
+            name = f"RealisticMat_{i}_{random.randint(1000, 9999)}"
+            res = create_pbr_style(name=name, diffuse_color=color, metallic=metallic, roughness=roughness)
             if res.get("success"):
                 solid_styles.append(name)
         
-        # Generate random transparent glass colors for windows (see-through)
-        for i in range(5):
-            # Glass colors: typically bluish/greenish but can be anything, with high transparency
-            color = [random.uniform(0.4, 1.0), random.uniform(0.4, 1.0), random.uniform(0.6, 1.0)]
-            name = f"GlassStyle_{random.randint(10000, 99999)}"
-            # Transparency between 0.5 (semi-transparent) and 0.85 (highly transparent)
-            transparency = random.uniform(0.5, 0.85)
-            res_glass = create_surface_style(name=name, color=color, transparency=transparency)
-            if res_glass.get("success"):
-                glass_styles.append(name)
+        # Realistic transparent glass
+        glass_name = f"RealisticGlass_{random.randint(1000, 9999)}"
+        res_glass = create_pbr_style(name=glass_name, diffuse_color=[0.8, 0.85, 0.9], transparency=0.7, metallic=0.2, roughness=0.1)
+        if res_glass.get("success"):
+            glass_styles.append(glass_name)
             
         if solid_styles or glass_styles:
             for element in ifc_file.by_type("IfcProduct"):
@@ -620,7 +628,7 @@ def create_building(
                     continue
                 if hasattr(element, "Representation") and element.Representation:
                     if element.is_a("IfcWindow") and glass_styles:
-                        style_name = random.choice(glass_styles)
+                        style_name = glass_styles[0]
                     elif solid_styles:
                         style_name = random.choice(solid_styles)
                     else:

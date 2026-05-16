@@ -279,6 +279,12 @@ class ArchitecturalAgent extends BaseAgent {
   llmProvider = "glm" as const;
   systemPrompt = `You are the Architectural Reasoning Agent.
 Transform the structured brief into a spatially coherent layout or a set of modification instructions.
+RULES FOR REALISTIC ARCHITECTURE:
+1. Windows MUST ONLY be placed on EXTERNAL walls (walls facing the outside). NEVER place windows on interior partition walls between rooms.
+2. Doors and windows must NEVER overlap with each other or with intersecting walls.
+3. Use realistic architectural layouts. Leave space for circulation.
+4. Apply real-world materials (concrete, brick, wood, glass) in your structural_notes if you are making edits, unless the user requests a specific style.
+
 If "is_edit" is false, output the full spatial "storey_plans".
 If "is_edit" is true, leave "storey_plans" empty and output clear, step-by-step "structural_notes" detailing exactly what needs to be added, removed, or changed in the existing building.
 Must NOT: Call BIM tools.
@@ -367,14 +373,18 @@ RULES: Return ONLY a comma-separated list of tool names. If none, reply "NONE".`
     const routedTools = this.context.availableTools.filter(t => needed.has(t.function.name));
     this.logger.log(this.name, `Qwen extracted ${routedTools.length} relevant tools. Executing via GLM-5...`);
 
-    let glmPrompt = "You are the BIM Executor. Use your tools to build or modify the requested architecture. You MUST call export_ifc as the very last step. CRITICAL FOR TRIMESH: assign final geometry to variable exactly named 'result' without print statements.";
+    let glmPrompt = `You are the BIM Executor. Use your tools to build or modify the requested architecture. 
+CRITICAL RULES:
+1. You MUST call export_ifc as the very last step.
+2. If assigning styles, you must first create the style (e.g. create_surface_style) and use the returned name in apply_style_to_object.
+3. If editing, use the EXACT GlobalId (GUID) from the Current IFC Scene State provided. Do not guess GUIDs.`;
     
     let planData = JSON.stringify(plan);
     if (plan.is_edit) {
       this.logger.log(this.name, "Fetching current scene state to provide edit context...");
       const sceneRes = await mcpCallTool("get_scene_info", { include_bbox: false }, this.context.mcpSessionId);
       planData = `Instructions: ${JSON.stringify(plan)}\n\nCurrent IFC Scene State:\n${sceneRes.resultText}`;
-      glmPrompt += " You are EDITING the existing scene. Use the provided Current IFC Scene State to find the GlobalId of objects you need to modify or delete.";
+      glmPrompt += "\n4. You are EDITING an existing scene. Find the GlobalId of the target objects in the Scene State and pass them to your tool calls.";
     }
 
     const glmMsg = await callGLM(glmPrompt, planData, routedTools);
