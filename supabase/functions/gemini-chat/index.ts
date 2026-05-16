@@ -32,7 +32,9 @@ async function mcpPost(body: unknown, clientSessionId: string): Promise<{ data: 
   };
   if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
   const res = await fetch(MCP_URL, {
-    method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000)
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
   });
   const returnedSession = res.headers.get("mcp-session-id") || clientSessionId;
   const text = await res.text();
