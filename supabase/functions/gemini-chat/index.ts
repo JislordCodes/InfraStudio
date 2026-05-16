@@ -63,7 +63,24 @@ async function mcpCallTool(name: string, args: Record<string, unknown>, clientSe
     params: { name, arguments: args }
   }, clientSessionId);
   const payload = res.data as Record<string, unknown>;
-  const resultText = extractText((payload?.result as Record<string, unknown>)?.content) || JSON.stringify(payload?.result ?? payload?.error ?? "done");
+  
+  if (payload.error) {
+    throw new Error(`Tool ${name} failed: ${JSON.stringify(payload.error)}`);
+  }
+  
+  const resultText = extractText((payload?.result as Record<string, unknown>)?.content) || JSON.stringify(payload?.result ?? "done");
+  
+  try {
+    const parsed = JSON.parse(resultText);
+    if (parsed && typeof parsed === "object" && parsed.success === false) {
+      throw new Error(`Tool ${name} reported failure: ${parsed.error || JSON.stringify(parsed)}`);
+    }
+  } catch (e) {
+    // If it's an actual JSON parsing error, ignore it (not all results are JSON).
+    // If it's our thrown Error, rethrow it.
+    if (e instanceof Error && e.message.startsWith("Tool ")) throw e;
+  }
+  
   return { resultText, session: res.session };
 }
 
@@ -390,20 +407,40 @@ CRITICAL RULES:
       glmPrompt += "\n4. You are EDITING an existing scene. Find the GlobalId of the target objects in the Scene State and pass them to your tool calls.";
     }
 
-    const glmMsg = await callGLM(glmPrompt, planData, routedTools);
-    
     let ifc_url = "";
-    if (glmMsg.tool_calls) {
-      for (const call of glmMsg.tool_calls) {
-         const args = JSON.parse(call.function.arguments || "{}");
-         this.logger.log(this.name, `🔧 ${call.function.name}(...)`);
-         const toolRes = await mcpCallTool(call.function.name, args, this.context.mcpSessionId);
-         if (call.function.name === "export_ifc") {
-           try { const p = JSON.parse(toolRes.resultText); ifc_url = p.file_url || p.ifc_url; } catch{}
+    let executionError = "";
+    
+    // Internal auto-correction loop for GLM-5 tool execution (max 3 tries)
+    for (let tryNum = 1; tryNum <= 3; tryNum++) {
+       let currentPlanData = planData;
+       if (executionError) {
+           this.logger.log(this.name, `Retrying tool execution (Attempt ${tryNum}/3)...`);
+           currentPlanData += `\n\nPREVIOUS EXECUTION FAILED WITH ERROR:\n${executionError}\nPlease fix your tool arguments and try again.`;
+           executionError = ""; // Reset for this attempt
+       }
+       
+       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools);
+       
+       if (glmMsg.tool_calls) {
+         try {
+           for (const call of glmMsg.tool_calls) {
+              const args = JSON.parse(call.function.arguments || "{}");
+              this.logger.log(this.name, `🔧 ${call.function.name}(...)`);
+              const toolRes = await mcpCallTool(call.function.name, args, this.context.mcpSessionId);
+              if (call.function.name === "export_ifc") {
+                try { const p = JSON.parse(toolRes.resultText); ifc_url = p.file_url || p.ifc_url; } catch{}
+              }
+           }
+           // If we got here, all tools succeeded
+           break;
+         } catch (err: any) {
+           executionError = err.message || String(err);
+           this.logger.log(this.name, `Tool Execution Failed: ${executionError}`);
+           if (tryNum === 3) throw err; // Throw on final attempt
          }
-      }
-    } else {
-       throw new Error("GLM-5 did not execute any tools.");
+       } else {
+          throw new Error("GLM-5 did not execute any tools.");
+       }
     }
     
     if (!ifc_url) {
