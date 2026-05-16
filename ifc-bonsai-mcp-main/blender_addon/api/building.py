@@ -592,27 +592,39 @@ def create_building(
         from .ifc_utils import get_ifc_file
         
         ifc_file = get_ifc_file()
-        styles_created = []
-        for i in range(10):
-            # Generate vibrant random colors
-            color = [random.uniform(0.2, 0.9), random.uniform(0.2, 0.9), random.uniform(0.2, 0.9)]
-            name = f"RandomStyle_{random.randint(1000, 9999)}"
+        solid_styles = []
+        glass_styles = []
+        
+        # Generate vibrant random solid colors for walls/doors/slabs
+        for i in range(15):
+            color = [random.uniform(0.1, 0.9), random.uniform(0.1, 0.9), random.uniform(0.1, 0.9)]
+            name = f"SolidStyle_{random.randint(10000, 99999)}"
             res = create_surface_style(name=name, color=color, transparency=0.0)
             if res.get("success"):
-                styles_created.append(name)
+                solid_styles.append(name)
         
-        # Add a glass style for windows
-        glass_name = f"RandomGlass_{random.randint(1000, 9999)}"
-        res_glass = create_surface_style(name=glass_name, color=[0.7, 0.8, 0.9], transparency=0.6)
-        if res_glass.get("success"):
-            styles_created.append(glass_name)
+        # Generate random transparent glass colors for windows (see-through)
+        for i in range(5):
+            # Glass colors: typically bluish/greenish but can be anything, with high transparency
+            color = [random.uniform(0.4, 1.0), random.uniform(0.4, 1.0), random.uniform(0.6, 1.0)]
+            name = f"GlassStyle_{random.randint(10000, 99999)}"
+            # Transparency between 0.5 (semi-transparent) and 0.85 (highly transparent)
+            transparency = random.uniform(0.5, 0.85)
+            res_glass = create_surface_style(name=name, color=color, transparency=transparency)
+            if res_glass.get("success"):
+                glass_styles.append(name)
             
-        if styles_created:
+        if solid_styles or glass_styles:
             for element in ifc_file.by_type("IfcProduct"):
                 if element.is_a("IfcSpace") or element.is_a("IfcOpeningElement") or element.is_a("IfcSite") or element.is_a("IfcBuilding") or element.is_a("IfcBuildingStorey"):
                     continue
                 if hasattr(element, "Representation") and element.Representation:
-                    style_name = glass_name if element.is_a("IfcWindow") else random.choice(styles_created)
+                    if element.is_a("IfcWindow") and glass_styles:
+                        style_name = random.choice(glass_styles)
+                    elif solid_styles:
+                        style_name = random.choice(solid_styles)
+                    else:
+                        continue
                     apply_style_to_object(element.GlobalId, style_name)
     except Exception as style_e:
         result["errors"].append(f"Auto-styling error: {str(style_e)}")
