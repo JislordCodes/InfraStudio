@@ -256,7 +256,16 @@ abstract class BaseAgent {
   }
 
   protected cleanJsonResponse(rawStr: string): any {
-    const clean = rawStr.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+    const match = rawStr.match(/```(?:json)?\n([\s\S]*?)\n```/);
+    let clean = match ? match[1] : rawStr;
+    clean = clean.trim();
+    
+    const firstBrace = clean.indexOf('{');
+    const lastBrace = clean.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      clean = clean.substring(firstBrace, lastBrace + 1);
+    }
+    
     return JSON.parse(clean);
   }
 }
@@ -341,7 +350,9 @@ Expected JSON Output:
   }
 
   validateOutput(output: any): boolean {
-    return output && typeof output.is_edit === "boolean";
+    if (!output || typeof output.is_edit !== "boolean") return false;
+    if (!output.is_edit && !Array.isArray(output.storey_plans)) return false;
+    return true;
   }
 }
 
