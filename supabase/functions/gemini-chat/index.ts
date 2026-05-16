@@ -325,7 +325,7 @@ Expected JSON Output:
 
 class ArchitecturalAgent extends BaseAgent {
   name = "Architectural Reasoning Agent";
-  llmProvider = "glm" as const;
+  llmProvider = "qwen" as const;
   systemPrompt = `You are the Architectural Reasoning Agent.
 Transform the structured brief into a spatially coherent layout or a set of modification instructions.
 RULES FOR REALISTIC ARCHITECTURE:
@@ -369,8 +369,8 @@ Expected JSON Output:
     if (this.context.reviewHistory.length > 0) {
       promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(this.context.reviewHistory)}`;
     }
-    const msg = await callGLM(this.systemPrompt, promptStr);
-    return this.cleanJsonResponse(msg.content);
+    const msg = await callQwen(this.systemPrompt, promptStr, true);
+    return this.cleanJsonResponse(msg);
   }
 
   validateOutput(output: any): boolean {
