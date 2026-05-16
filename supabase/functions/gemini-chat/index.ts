@@ -391,8 +391,9 @@ class QualityReviewAgent extends BaseAgent {
   name = "Quality Review Agent";
   llmProvider = "qwen" as const;
   systemPrompt = `You are the Quality Review Agent.
-Inspect the generated IFC model metadata.
-Ensure rooms have required geometry (doors, windows, 4 walls).
+Inspect the generated IFC model overview and element counts.
+Ensure the building contains expected structural elements (IfcWall, IfcSlab, IfcDoor, IfcWindow).
+If the counts are missing or absurdly low (e.g. 0 walls), return FAIL.
 Expected JSON Output:
 {
   "status": "PASS" | "FAIL",
@@ -455,7 +456,7 @@ async function runMultiAgentOrchestrator(req: Request): Promise<Response> {
           context.currentIfcUrl = context.bimExecutionState.ifc_url;
 
           // Stage 4: Quality Review
-          const sceneInfo = await mcpCallTool("get_scene_info", { include_bbox: true }, context.mcpSessionId);
+          const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, context.mcpSessionId);
           const review = await reviewer.runWithRetry(sceneInfo.resultText, 2);
 
           if (review.status === "PASS") {
