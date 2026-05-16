@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X } from 'lucide-react';
-import { runQwenAgentLoop } from '../hooks/useAgentLoop';
+import { runMultiAgentLoop } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 
 interface AIChatProps {
@@ -138,7 +138,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
         }
       }
 
-      const result = await runQwenAgentLoop(
+      const result = await runMultiAgentLoop(
         userContent,
         history,
         clientMcpId,

@@ -2,7 +2,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
-const LLM_MODEL = "gemini-3.1-pro-preview";
 const LOCATION = "global";
 
 const CORS = {
@@ -11,8 +10,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// ══ MCP CLIENT ══
-
+// ══ MCP UTILITIES ══
 function extractText(content: unknown): string | undefined {
   if (!content) return undefined;
   if (Array.isArray(content)) {
@@ -33,28 +31,18 @@ async function mcpPost(body: unknown, clientSessionId: string): Promise<{ data: 
     "Accept": "application/json, text/event-stream"
   };
   if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
-  
   const res = await fetch(MCP_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120000)
+    method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120000)
   });
-  
   const returnedSession = res.headers.get("mcp-session-id") || clientSessionId;
   const text = await res.text();
-  
   if (text.trim().startsWith("data:")) {
     const l = text.split("\n").find(l => l.startsWith("data:"));
     const data = l ? JSON.parse(l.slice(5).trim()) : {};
     return { data, session: returnedSession };
   }
-  
-  try { 
-    return { data: JSON.parse(text), session: returnedSession }; 
-  } catch { 
-    return { data: { raw: text }, session: returnedSession }; 
-  }
+  try { return { data: JSON.parse(text), session: returnedSession }; } 
+  catch { return { data: { raw: text }, session: returnedSession }; }
 }
 
 async function mcpInit(clientSessionId: string): Promise<string> {
@@ -62,10 +50,8 @@ async function mcpInit(clientSessionId: string): Promise<string> {
     jsonrpc: "2.0", id: 1, method: "initialize",
     params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
   }, clientSessionId);
-  
   const newSession = res1.session;
   await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, newSession).catch(() => {});
-  
   return newSession;
 }
 
@@ -74,10 +60,8 @@ async function mcpCallTool(name: string, args: Record<string, unknown>, clientSe
     jsonrpc: "2.0", id: Date.now(), method: "tools/call",
     params: { name, arguments: args }
   }, clientSessionId);
-  
   const payload = res.data as Record<string, unknown>;
   const resultText = extractText((payload?.result as Record<string, unknown>)?.content) || JSON.stringify(payload?.result ?? payload?.error ?? "done");
-  
   return { resultText, session: res.session };
 }
 
@@ -85,15 +69,12 @@ async function fetchMcpTools(clientSessionId: string): Promise<{ tools: any[], s
   const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, clientSessionId);
   const data = res.data as Record<string, unknown>;
   const tools = ((data?.result as any)?.tools || []) as any[];
-  
   return {
     tools: tools.map(t => ({
       type: "function",
       function: {
         name: t.name,
-        // Trim description hard to 256 chars - saves significant tokens
         description: (t.description || "").slice(0, 256),
-        // Only include non-empty parameters
         parameters: t.inputSchema || { type: "object", properties: {} }
       }
     })),
@@ -101,48 +82,13 @@ async function fetchMcpTools(clientSessionId: string): Promise<{ tools: any[], s
   };
 }
 
-function buildSystemPrompt(): string {
-  return `You are a helpful expert IFC architect agent. You have tools available to modify the model.
-
-TOOL SELECTION — Always pick the HIGHEST-LEVEL tool that fits:
-
-| User wants...          | Use this tool                              |
-|------------------------|--------------------------------------------|
-| Full building          | build_building (storeys + rooms + roof)    |
-| Multiple rooms         | build_floor_plan (rooms array)             |
-| One room               | build_room (walls + slab + openings)       |
-| Wall + openings        | build_wall_assembly (wall + doors/windows) |
-| Just a wall/slab/roof  | create_wall / create_slab / create_roof    |
-
-COORDINATE SYSTEM:
-- Origin = south-west corner of rooms
-- Width = X-axis (west → east), Length = Y-axis (south → north)
-- Wall names: "south", "east", "north", "west"
-- Door/window "offset" = distance from the START of the named wall
-
-CRITICAL RULES:
-1. NEVER calculate wall coordinates yourself — the orchestration tools handle ALL geometry.
-2. NEVER compute rotations in radians — use cardinal wall names ("south", "east", etc.)
-3. NEVER track GUIDs between calls for room/building creation — the backend manages them internally.
-4. You MUST wait for tool responses to get real GUIDs before referencing them in follow-up calls.
-5. NEVER use placeholder text like <wall_guid>. ALWAYS use real 22-character GUIDs returned by tools.
-
-For execute_ifc_code_tool (advanced use only):
-- ifc_file = get_ifc_file() (always call this)
-- body_ctx = get_or_create_body_context(ifc_file) (always call this)  
-- save_and_load_ifc() (ALWAYS call at the end)
-- Never create IfcProject, IfcSite, or IfcBuilding — they already exist.
-`;
-}
-
-// ══ VERTEX AI AUTH via WEB CRYPTO ══
+// ══ GCP AUTH ══
 function base64UrlEncode(input: string | Uint8Array): string {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
   let binary = "";
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-
 function pemToArrayBuffer(pem: string): ArrayBuffer {
   const b64 = pem.replace(/-----BEGIN PRIVATE KEY-----/, "").replace(/-----END PRIVATE KEY-----/, "").replace(/\s+/g, "");
   const binary = atob(b64);
@@ -150,109 +96,384 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
   for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
   return buf.buffer;
 }
-
 let cachedToken: { token: string; expiresAt: number } | null = null;
 async function mintAccessToken(saJson: any): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   if (cachedToken && cachedToken.expiresAt > now + 60) return cachedToken.token;
-
   const tokenUri = saJson.token_uri || "https://oauth2.googleapis.com/token";
   const header = { alg: "RS256", typ: "JWT" };
-  const claim = {
-    iss: saJson.client_email,
-    scope: "https://www.googleapis.com/auth/cloud-platform",
-    aud: tokenUri,
-    exp: now + 3600,
-    iat: now,
-  };
-
+  const claim = { iss: saJson.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: tokenUri, exp: now + 3600, iat: now };
   const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claim))}`;
   const rawKey = saJson.private_key || "";
   const privateKey = rawKey.split("\\n").join("\n");
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    pemToArrayBuffer(privateKey),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  const key = await crypto.subtle.importKey("pkcs8", pemToArrayBuffer(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
   const jwt = `${unsigned}.${base64UrlEncode(new Uint8Array(sig))}`;
-
   const resp = await fetch(tokenUri, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
   });
-
   if (!resp.ok) throw new Error(`Failed to mint GCP access token: ${await resp.text()}`);
   const data = await resp.json();
   cachedToken = { token: data.access_token, expiresAt: now + data.expires_in };
   return data.access_token;
 }
 
-// ── SEMANTIC TOOL RETRIEVAL (QWEN INTELLIGENCE LAYER) ──
-const ALWAYS_EXPOSED = new Set([
-  "build_room", "build_floor_plan", "build_building", "build_wall_assembly",
-  "get_scene_info", "get_ifc_scene_overview", "export_ifc", "initialize_project",
-  "create_surface_style", "apply_style_to_object" // Style tools are always needed
-]);
-
-async function routeToolsWithQwen(allTools: any[], userMessage: string): Promise<any[]> {
-  const needed = new Set<string>(ALWAYS_EXPOSED);
-  
-  const availableToolsList = allTools
-    .filter(t => !ALWAYS_EXPOSED.has(t.function?.name || t.name))
-    .map(t => `- ${t.function?.name || t.name}: ${(t.function?.description || t.description || "").slice(0, 100)}`)
-    .join("\n");
-
-  const routerPrompt = `You are a Tool Retrieval Intelligence Layer.
-Your job is to analyze the user's architectural request and extract the names of the specific tools needed from the database.
-
-User Request: "${userMessage}"
-
-Available Tools Database:
-${availableToolsList}
-
-RULES:
-1. ONLY return a comma-separated list of tool names from the database above.
-2. If the user is asking to build a full room or building, DO NOT extract low-level tools like create_wall or create_door (they are handled automatically).
-3. If the user is asking to add a SPECIFIC element to an EXISTING model (e.g., "add a roof", "insert a window"), extract the relevant tools.
-4. Reply with ONLY the comma-separated tool names. Nothing else. No markdown. If none, reply "NONE".`;
-
+// ══ LLM CLIENTS ══
+async function callQwen(systemPrompt: string, userMessage: string, jsonMode: boolean = false): Promise<string> {
   const qwenKey = Deno.env.get("QWEN_API_KEY");
-  if (!qwenKey) {
-    console.warn("QWEN_API_KEY missing. Falling back to all tools.");
-    return allTools;
+  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const res = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "qwen-max",
+      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+      temperature: 0.1,
+      response_format: jsonMode ? { type: "json_object" } : undefined
+    })
+  });
+  if (!res.ok) throw new Error(`Qwen Error: ${await res.text()}`);
+  const data = await res.json();
+  return data.choices[0].message.content || "";
+}
+
+async function callGLM(systemPrompt: string, userMessage: string, tools?: any[]): Promise<any> {
+  const saJsonString = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "{}";
+  const saJson = JSON.parse(saJsonString);
+  const accessToken = await mintAccessToken(saJson);
+  const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
+  const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
+  const body: any = {
+    model: "zai-org/glm-5-maas",
+    messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+    temperature: 0.1
+  };
+  if (tools && tools.length > 0) body.tools = tools;
+  const res = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`GLM Error: ${await res.text()}`);
+  const data = await res.json();
+  return data.choices[0].message;
+}
+
+// ══ OBSERVABILITY & SSE ══
+class EventLogger {
+  constructor(private controller: ReadableStreamDefaultController) {}
+  log(agent: string, message: string, data?: any) {
+    console.log(`[${agent}] ${message}`);
+    const payload = JSON.stringify({ type: "step", agent, message, data });
+    this.controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
   }
+  complete(ifc_url: string, session_id: string, reply: string) {
+    const payload1 = JSON.stringify({ type: "assistant_message", message: { role: "assistant", content: reply } });
+    this.controller.enqueue(new TextEncoder().encode(`data: ${payload1}\n\n`));
+    const payload2 = JSON.stringify({ type: "complete", ifc_url, session_id });
+    this.controller.enqueue(new TextEncoder().encode(`data: ${payload2}\n\n`));
+    this.controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`));
+    this.controller.close();
+  }
+  error(err: any) {
+    const payload = JSON.stringify({ type: "error", error: String(err) });
+    this.controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
+    this.controller.close();
+  }
+}
 
-  try {
-    const res = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "qwen-max", // DashScope's alias for the largest Qwen model
-        messages: [{ role: "user", content: routerPrompt }],
-        temperature: 0.1
-      })
-    });
+// ══ MULTI-AGENT ARCHITECTURE ══
 
-    if (res.ok) {
-      const data = await res.json();
-      const choice = data.choices?.[0]?.message?.content || "";
-      if (choice && choice.trim() !== "NONE") {
-        const extractedToolNames = choice.split(",").map((s: string) => s.trim());
-        for (const name of extractedToolNames) {
-          if (name) needed.add(name);
+// 1. Memory Context
+class WorkflowContext {
+  public userPrompt: string = "";
+  public interpreterBrief: any = null;
+  public architecturalPlan: any = null;
+  public bimExecutionState: any = null;
+  public reviewHistory: any[] = [];
+  public mcpSessionId: string = "";
+  public availableTools: any[] = [];
+  public currentIfcUrl: string = "";
+}
+
+// 2. Base Agent Class
+abstract class BaseAgent {
+  abstract name: string;
+  abstract systemPrompt: string;
+  abstract llmProvider: "qwen" | "glm";
+
+  constructor(protected logger: EventLogger, protected context: WorkflowContext) {}
+
+  abstract run(input: any): Promise<any>;
+  abstract validateOutput(output: any): boolean;
+
+  // 3. Retry Logic
+  async runWithRetry(input: any, maxRetries = 2): Promise<any> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const output = await this.run(input);
+        if (this.validateOutput(output)) {
+          return output;
         }
+        this.logger.log(this.name, `Validation failed on attempt ${attempt}. Retrying...`);
+      } catch (err) {
+        this.logger.log(this.name, `Error on attempt ${attempt}: ${err}`);
+        if (attempt === maxRetries) throw err;
       }
     }
-  } catch (e) {
-    console.error("Qwen Tool Router failed:", e);
-    return allTools;
+    throw new Error(`${this.name} failed after ${maxRetries} attempts.`);
   }
 
-  return allTools.filter(t => needed.has(t.function?.name || t.name));
+  protected cleanJsonResponse(rawStr: string): any {
+    const clean = rawStr.replace(/^```json\n?/, "").replace(/\n?```$/, "");
+    return JSON.parse(clean);
+  }
+}
+
+// ── Agent Implementations ──
+
+class InterpreterAgent extends BaseAgent {
+  name = "Interpreter Agent";
+  llmProvider = "qwen" as const;
+  systemPrompt = `You are the Interpreter Agent.
+Convert vague natural-language user intent into a structured architectural brief.
+Responsibilities: Extract constraints, normalize dimensions, detect ambiguities, infer reasonable assumptions.
+Must NOT: Generate geometry, create IFC entities.
+Expected JSON Output:
+{
+  "project_type": "string",
+  "storeys": [{"name": "string", "elevation": "number", "height": "number"}],
+  "room_requirements": [{"name": "string", "suggested_area": "number"}],
+  "constraints": ["string"],
+  "assumptions": ["string"]
+}`;
+
+  async run(prompt: string) {
+    this.logger.log(this.name, "Extracting requirements and constraints...");
+    const res = await callQwen(this.systemPrompt, prompt, true);
+    return this.cleanJsonResponse(res);
+  }
+
+  validateOutput(output: any): boolean {
+    return output && Array.isArray(output.storeys) && Array.isArray(output.room_requirements);
+  }
+}
+
+class ArchitecturalAgent extends BaseAgent {
+  name = "Architectural Reasoning Agent";
+  llmProvider = "glm" as const;
+  systemPrompt = `You are the Architectural Reasoning Agent.
+Transform the structured brief into a spatially coherent layout.
+Responsibilities: Spatial reasoning, coordinate generation (origin=[x,y,z]), adjacency planning.
+Rooms must have 4 walls. Doors/windows require specific walls ("south", "east", "north", "west") and an offset in meters.
+Must NOT: Call BIM tools.
+Expected JSON Output:
+{
+  "storey_plans": [
+    {
+      "name": "string",
+      "height": "number",
+      "rooms": [
+        {
+          "name": "string",
+          "width": "number",
+          "length": "number",
+          "origin": ["number", "number", "number"],
+          "doors": [{"wall": "string", "offset": "number", "width": "number"}],
+          "windows": [{"wall": "string", "offset": "number", "width": "number"}]
+        }
+      ]
+    }
+  ],
+  "structural_notes": ["string"]
+}`;
+
+  async run(brief: any) {
+    this.logger.log(this.name, "Performing spatial reasoning and layout generation...");
+    // Inject previous review failures if we are in a correction loop
+    let promptStr = JSON.stringify(brief);
+    if (this.context.reviewHistory.length > 0) {
+      promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(this.context.reviewHistory)}`;
+    }
+    const msg = await callGLM(this.systemPrompt, promptStr);
+    return this.cleanJsonResponse(msg.content);
+  }
+
+  validateOutput(output: any): boolean {
+    return output && Array.isArray(output.storey_plans);
+  }
+}
+
+class BimMcpAgent extends BaseAgent {
+  name = "BIM MCP Agent";
+  llmProvider = "glm" as const;
+  systemPrompt = "You are the BIM Executor.";
+
+  async run(plan: any) {
+    this.logger.log(this.name, "Converting spatial plans into IFC-native models...");
+    
+    // If it's a standard building, execute deterministic orchestrator tools
+    if (plan.storey_plans && plan.storey_plans.length > 0) {
+      this.logger.log(this.name, "Invoking build_building orchestration macro...");
+      const buildRes = await mcpCallTool("build_building", {
+        building_name: "InfraStudio AI Building",
+        storeys: plan.storey_plans
+      }, this.context.mcpSessionId);
+      
+      this.logger.log(this.name, "Exporting IFC model...");
+      const exportRes = await mcpCallTool("export_ifc", {}, this.context.mcpSessionId);
+      const exportData = JSON.parse(exportRes.resultText);
+      return { status: "success", ifc_url: exportData.file_url || exportData.ifc_url, raw_result: buildRes };
+    }
+    
+    // Otherwise, use Qwen to filter tools and GLM-5 to execute them dynamically
+    this.logger.log(this.name, "Plan is custom geometry. Routing tools via Qwen...");
+    const ALWAYS_EXPOSED = new Set([
+      "export_ifc", "get_scene_info", "create_surface_style", "apply_style_to_object", "create_trimesh_ifc"
+    ]);
+    const availableToolsList = this.context.availableTools
+      .filter(t => !ALWAYS_EXPOSED.has(t.function.name))
+      .map(t => `- ${t.function.name}: ${t.function.description}`)
+      .join("\n");
+      
+    const qwenPrompt = `You are a Tool Retrieval Intelligence Layer.
+Extract the names of the specific tools needed for this architectural plan.
+Plan: "${JSON.stringify(plan)}"
+Available Tools:
+${availableToolsList}
+RULES: Return ONLY a comma-separated list of tool names. If none, reply "NONE".`;
+
+    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false);
+    const needed = new Set<string>(ALWAYS_EXPOSED);
+    if (extractedRaw && extractedRaw.trim() !== "NONE") {
+      extractedRaw.split(",").map(s => s.trim()).forEach(name => { if (name) needed.add(name); });
+    }
+    const routedTools = this.context.availableTools.filter(t => needed.has(t.function.name));
+    this.logger.log(this.name, `Qwen extracted ${routedTools.length} relevant tools. Executing via GLM-5...`);
+
+    const glmPrompt = "You are the BIM Executor. Use your tools to build the requested architecture. You MUST call export_ifc as the very last step. CRITICAL FOR TRIMESH: assign final geometry to variable exactly named 'result' without print statements.";
+    const glmMsg = await callGLM(glmPrompt, JSON.stringify(plan), routedTools);
+    
+    let ifc_url = "";
+    if (glmMsg.tool_calls) {
+      for (const call of glmMsg.tool_calls) {
+         const args = JSON.parse(call.function.arguments || "{}");
+         this.logger.log(this.name, `🔧 ${call.function.name}(...)`);
+         const toolRes = await mcpCallTool(call.function.name, args, this.context.mcpSessionId);
+         if (call.function.name === "export_ifc") {
+           try { const p = JSON.parse(toolRes.resultText); ifc_url = p.file_url || p.ifc_url; } catch{}
+         }
+      }
+    } else {
+       throw new Error("GLM-5 did not execute any tools.");
+    }
+    
+    if (!ifc_url) {
+      const exportRes = await mcpCallTool("export_ifc", {}, this.context.mcpSessionId);
+      const exportData = JSON.parse(exportRes.resultText);
+      ifc_url = exportData.file_url || exportData.ifc_url;
+    }
+
+    return { status: "success", ifc_url, raw_result: "Dynamic execution complete" };
+  }
+
+  validateOutput(output: any): boolean {
+    return !!output.ifc_url;
+  }
+}
+
+class QualityReviewAgent extends BaseAgent {
+  name = "Quality Review Agent";
+  llmProvider = "qwen" as const;
+  systemPrompt = `You are the Quality Review Agent.
+Inspect the generated IFC model metadata.
+Ensure rooms have required geometry (doors, windows, 4 walls).
+Expected JSON Output:
+{
+  "status": "PASS" | "FAIL",
+  "issues": ["string"],
+  "fix_recommendations": ["string"],
+  "retry_required": boolean
+}`;
+
+  async run(sceneData: any) {
+    this.logger.log(this.name, "Validating geometry and IFC semantics...");
+    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true);
+    return this.cleanJsonResponse(res);
+  }
+
+  validateOutput(output: any): boolean {
+    return output && (output.status === "PASS" || output.status === "FAIL");
+  }
+}
+
+// 4. Orchestration Pipeline
+async function runMultiAgentOrchestrator(req: Request): Promise<Response> {
+  const payload = await req.json();
+  
+  const stream = new ReadableStream({
+    async start(controller) {
+      const logger = new EventLogger(controller);
+      const context = new WorkflowContext();
+      
+      try {
+        context.userPrompt = payload.messages?.[payload.messages.length - 1]?.content || "";
+        context.mcpSessionId = payload.session_id || await mcpInit("");
+        const tResult = await fetchMcpTools(context.mcpSessionId);
+        context.availableTools = tResult.tools;
+
+        // Initialize Agents
+        const interpreter = new InterpreterAgent(logger, context);
+        const architect = new ArchitecturalAgent(logger, context);
+        const bimExecutor = new BimMcpAgent(logger, context);
+        const reviewer = new QualityReviewAgent(logger, context);
+
+        // Stage 1: Interpretation
+        context.interpreterBrief = await interpreter.runWithRetry(context.userPrompt, 2);
+
+        // 5. Correction Loop
+        const MAX_LOOPS = 2;
+        let loopCount = 0;
+        let finalReviewPassed = false;
+
+        while (loopCount < MAX_LOOPS && !finalReviewPassed) {
+          loopCount++;
+          if (loopCount > 1) {
+            logger.log("Orchestrator", `Initiating Correction Loop (Attempt ${loopCount}/${MAX_LOOPS})...`);
+          }
+
+          // Stage 2: Architectural Reasoning
+          context.architecturalPlan = await architect.runWithRetry(context.interpreterBrief, 2);
+
+          // Stage 3: BIM Execution
+          context.bimExecutionState = await bimExecutor.runWithRetry(context.architecturalPlan, 1);
+          context.currentIfcUrl = context.bimExecutionState.ifc_url;
+
+          // Stage 4: Quality Review
+          const sceneInfo = await mcpCallTool("get_scene_info", { include_bbox: true }, context.mcpSessionId);
+          const review = await reviewer.runWithRetry(sceneInfo.resultText, 2);
+
+          if (review.status === "PASS") {
+            logger.log(reviewer.name, "Model passed quality review. No corrections needed.");
+            finalReviewPassed = true;
+          } else {
+            logger.log(reviewer.name, `Validation FAIL. Issues: ${review.issues.join(", ")}`);
+            context.reviewHistory.push(review);
+            if (!review.retry_required) break; // Hard fail, no retry
+          }
+        }
+
+        const summary = `Multi-Agent Generation Complete.\n\n**Interpreter:** Processed brief.\n**Architect:** Planned ${context.architecturalPlan?.storey_plans?.length || 0} floors.\n**Reviewer:** ${finalReviewPassed ? "PASSED" : "FAILED (Max retries reached)"}.`;
+        
+        logger.complete(context.currentIfcUrl, context.mcpSessionId, summary);
+
+      } catch (err) {
+        logger.error(err);
+      }
+    }
+  });
+
+  return new Response(stream, { headers: { ...CORS, "Content-Type": "text/event-stream" } });
 }
 
 // ══ HTTP HANDLER ══
@@ -260,101 +481,25 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { ...CORS, "Content-Type": "application/json" } });
 
+  const clonedReq = req.clone();
   try {
-    const payload = await req.json();
-    const action = payload.action || "init";
-    const inboundSessionId = payload.session_id || "";
-
-    if (action === "init") {
-      const initSession = await mcpInit(inboundSessionId);
+    const payload = await clonedReq.json();
+    if (payload.action === "chat_multi_agent") return runMultiAgentOrchestrator(req);
+    
+    // Legacy routing
+    if (payload.action === "init") {
+      const initSession = await mcpInit(payload.session_id || "");
       const toolsResult = await fetchMcpTools(initSession);
-      return new Response(JSON.stringify({ tools: toolsResult.tools, system_prompt: buildSystemPrompt(), session_id: toolsResult.session }), { headers: { ...CORS, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ tools: toolsResult.tools, session_id: toolsResult.session }), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
-
-    if (action === "call_tool") {
-      const { name, args } = payload;
-      let activeSession = inboundSessionId;
-      if (!activeSession) activeSession = await mcpInit("");
-      const { resultText, session } = await mcpCallTool(name, args || {}, activeSession);
-      const truncated = resultText.length > 10000 ? resultText.slice(0, 10000) + "... [truncated]" : resultText;
-      return new Response(JSON.stringify({ result: truncated, session_id: session }), { headers: { ...CORS, "Content-Type": "application/json" } });
+    if (payload.action === "call_tool") {
+      let sId = payload.session_id;
+      if (!sId) sId = await mcpInit("");
+      const res = await mcpCallTool(payload.name, payload.args || {}, sId);
+      return new Response(JSON.stringify({ result: res.resultText, session_id: sId }), { headers: { ...CORS, "Content-Type": "application/json" } });
     }
-
-    if (action === "chat") {
-      const { messages, tools } = payload;
-      const saJsonString = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "{}";
-      const saJson = JSON.parse(saJsonString);
-      if (!saJson.project_id) throw new Error("Missing GCP_SERVICE_ACCOUNT_KEY");
-      
-      const accessToken = await mintAccessToken(saJson);
-
-      // -- Layer 1: Intelligence Router (Qwen) --
-      let routedTools = tools || [];
-      if (tools && tools.length > 0) {
-        const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user")?.content || "";
-        if (lastUserMsg) {
-          console.log("Routing tools semantically with Qwen...");
-          routedTools = await routeToolsWithQwen(tools, lastUserMsg);
-          console.log(`Qwen extracted ${routedTools.length}/${tools.length} relevant tools`);
-        }
-      }
-
-      const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
-      const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
-
-      const openaiBody: any = {
-        model: "zai-org/glm-5-maas",
-        messages: messages,
-        temperature: 0.1
-      };
-      
-      if (routedTools.length > 0) {
-        openaiBody.tools = routedTools;
-      }
-
-      // Retry with exponential backoff on 429 (rate limit)
-      let responseData: any;
-      const retryDelays = [5000, 15000, 30000];
-      let lastError = "";
-      let succeeded = false;
-
-      for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
-          body: JSON.stringify(openaiBody)
-        });
-
-        if (res.ok) {
-          responseData = await res.json();
-          succeeded = true;
-          break;
-        }
-
-        const errText = await res.text();
-        lastError = errText;
-
-        if (res.status === 429 && attempt < retryDelays.length) {
-          const wait = retryDelays[attempt];
-          console.log(`429 rate limit hit, retrying in ${wait/1000}s (attempt ${attempt + 1}/${retryDelays.length})...`);
-          await new Promise(r => setTimeout(r, wait));
-          continue;
-        }
-
-        throw new Error(`Vertex OpenAPI Error: ${res.status} ${errText}`);
-      }
-
-      if (!succeeded) throw new Error(`Vertex OpenAPI Error (after retries): ${lastError}`);
-
-      let activeSession = inboundSessionId;
-      if (!activeSession) activeSession = await mcpInit("");
-
-      responseData.session_id = activeSession;
-      return new Response(JSON.stringify(responseData), { headers: { ...CORS, "Content-Type": "application/json" } });
-    }
-
-    throw new Error(`Unknown action: ${action}`);
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err), status: "error" }), { status: 200, headers: { ...CORS, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
   }
+  return new Response(JSON.stringify({ error: "Invalid action" }), { status: 400, headers: CORS });
 });

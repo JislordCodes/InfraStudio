@@ -108,6 +108,17 @@ If the user asks to ADD or EDIT something in a model that ALREADY EXISTS:
 - Wall positions use cardinal names: "south", "east", "north", "west".
 - offset = distance from the START of the named wall in meters.
 - After building or editing, always call export_ifc as the last step.
+
+━━━ CUSTOM GEOMETRY (TRIMESH) ━━━
+If the user asks for complex or custom geometry (bridges, furniture, organic shapes):
+1. Use the create_trimesh_ifc tool.
+2. In the "trimesh_code" argument, write Python code to generate the mesh using the 'trimesh' library.
+3. CRITICAL RULES for the Python code:
+   - You MUST assign the final mesh to a variable named exactly 'result' (e.g. \`result = deck.union(pillar)\`).
+   - NEVER use print() statements (they break JSON parsing).
+   - Use trimesh.primitives (Box, Cylinder, Sphere) and combine them using .union(), .difference(), .intersection().
+   - Translate objects BEFORE combining them using .apply_translation([x, y, z]).
+   - For a bridge, create a long Box for the deck, and Cylinder/Box primitives for pillars, translate them down, and .union() them to the deck.
 `;
 
 // ══ DYNAMIC TOOL ROUTER ══
@@ -127,7 +138,8 @@ const ALWAYS_EXPOSED = new Set([
   "export_ifc",
   "initialize_project",
   "create_surface_style", // ALWAYS allow styling
-  "apply_style_to_object" // ALWAYS allow styling
+  "apply_style_to_object", // ALWAYS allow styling
+  "create_trimesh_ifc"    // ALWAYS allow custom geometry generation
 ]);
 
 // The Tool Routing Intelligence Layer has been moved to the Supabase Edge Function
