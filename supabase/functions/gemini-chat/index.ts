@@ -122,16 +122,24 @@ async function mintAccessToken(saJson: any): Promise<string> {
 }
 
 // ══ LLM CLIENTS ══
-async function callQwen(systemPrompt: string, userMessage: string, jsonMode: boolean = false): Promise<string> {
+async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false): Promise<string> {
   const qwenKey = Deno.env.get("QWEN_API_KEY");
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  
+  let msgs: any[] = [{ role: "system", content: systemPrompt }];
+  if (Array.isArray(userMessage)) {
+    // Strip empty contents or tool calls just in case
+    msgs = msgs.concat(userMessage.map(m => ({ role: m.role, content: m.content || "" })));
+  } else {
+    msgs.push({ role: "user", content: userMessage });
+  }
   
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "qwen-max",
-      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+      messages: msgs,
       temperature: 0.1,
       response_format: jsonMode ? { type: "json_object" } : undefined
     })
@@ -191,6 +199,7 @@ class EventLogger {
 
 // 1. Memory Context
 class WorkflowContext {
+  public messages: any[] = [];
   public userPrompt: string = "";
   public interpreterBrief: any = null;
   public architecturalPlan: any = null;
@@ -241,26 +250,27 @@ class InterpreterAgent extends BaseAgent {
   name = "Interpreter Agent";
   llmProvider = "qwen" as const;
   systemPrompt = `You are the Interpreter Agent.
-Convert vague natural-language user intent into a structured architectural brief.
-Responsibilities: Extract constraints, normalize dimensions, detect ambiguities, infer reasonable assumptions.
+Convert natural-language user intent into a structured architectural brief. 
+Analyze the conversation history to determine if the user is asking to create a completely NEW building, or if they are asking to EDIT, CHANGE, or ADD to the existing building.
+If it is an edit or modification, set "is_edit" to true and describe the changes in "edit_instructions".
 Must NOT: Generate geometry, create IFC entities.
 Expected JSON Output:
 {
+  "is_edit": boolean,
   "project_type": "string",
   "storeys": [{"name": "string", "elevation": "number", "height": "number"}],
   "room_requirements": [{"name": "string", "suggested_area": "number"}],
-  "constraints": ["string"],
-  "assumptions": ["string"]
+  "edit_instructions": ["string"]
 }`;
 
-  async run(prompt: string) {
-    this.logger.log(this.name, "Extracting requirements and constraints...");
-    const res = await callQwen(this.systemPrompt, prompt, true);
+  async run(messages: any[]) {
+    this.logger.log(this.name, "Extracting requirements and analyzing conversation history...");
+    const res = await callQwen(this.systemPrompt, messages, true);
     return this.cleanJsonResponse(res);
   }
 
   validateOutput(output: any): boolean {
-    return output && Array.isArray(output.storeys) && Array.isArray(output.room_requirements);
+    return output && typeof output.is_edit === "boolean";
   }
 }
 
@@ -268,12 +278,13 @@ class ArchitecturalAgent extends BaseAgent {
   name = "Architectural Reasoning Agent";
   llmProvider = "glm" as const;
   systemPrompt = `You are the Architectural Reasoning Agent.
-Transform the structured brief into a spatially coherent layout.
-Responsibilities: Spatial reasoning, coordinate generation (origin=[x,y,z]), adjacency planning.
-Rooms must have 4 walls. Doors/windows require specific walls ("south", "east", "north", "west") and an offset in meters.
+Transform the structured brief into a spatially coherent layout or a set of modification instructions.
+If "is_edit" is false, output the full spatial "storey_plans".
+If "is_edit" is true, leave "storey_plans" empty and output clear, step-by-step "structural_notes" detailing exactly what needs to be added, removed, or changed in the existing building.
 Must NOT: Call BIM tools.
 Expected JSON Output:
 {
+  "is_edit": boolean,
   "storey_plans": [
     {
       "name": "string",
@@ -294,7 +305,7 @@ Expected JSON Output:
 }`;
 
   async run(brief: any) {
-    this.logger.log(this.name, "Performing spatial reasoning and layout generation...");
+    this.logger.log(this.name, brief.is_edit ? "Formulating modification strategy..." : "Performing spatial reasoning and layout generation...");
     // Inject previous review failures if we are in a correction loop
     let promptStr = JSON.stringify(brief);
     if (this.context.reviewHistory.length > 0) {
@@ -305,7 +316,7 @@ Expected JSON Output:
   }
 
   validateOutput(output: any): boolean {
-    return output && Array.isArray(output.storey_plans);
+    return output && typeof output.is_edit === "boolean";
   }
 }
 
@@ -315,10 +326,10 @@ class BimMcpAgent extends BaseAgent {
   systemPrompt = "You are the BIM Executor.";
 
   async run(plan: any) {
-    this.logger.log(this.name, "Converting spatial plans into IFC-native models...");
+    this.logger.log(this.name, plan.is_edit ? "Executing modifications on existing model..." : "Converting spatial plans into IFC-native models...");
     
-    // If it's a standard building, execute deterministic orchestrator tools
-    if (plan.storey_plans && plan.storey_plans.length > 0) {
+    // If it's a completely new standard building, execute deterministic orchestrator tools
+    if (!plan.is_edit && plan.storey_plans && plan.storey_plans.length > 0) {
       this.logger.log(this.name, "Invoking build_building orchestration macro...");
       const buildRes = await mcpCallTool("build_building", {
         building_name: "InfraStudio AI Building",
@@ -331,8 +342,8 @@ class BimMcpAgent extends BaseAgent {
       return { status: "success", ifc_url: exportData.file_url || exportData.ifc_url, raw_result: buildRes };
     }
     
-    // Otherwise, use Qwen to filter tools and GLM-5 to execute them dynamically
-    this.logger.log(this.name, "Plan is custom geometry. Routing tools via Qwen...");
+    // Otherwise, use Qwen to filter tools and GLM-5 to execute them dynamically for edits or custom models
+    this.logger.log(this.name, "Plan requires dynamic modifications. Routing tools via Qwen...");
     const ALWAYS_EXPOSED = new Set([
       "export_ifc", "get_scene_info", "create_surface_style", "apply_style_to_object", "create_trimesh_ifc"
     ]);
@@ -356,8 +367,17 @@ RULES: Return ONLY a comma-separated list of tool names. If none, reply "NONE".`
     const routedTools = this.context.availableTools.filter(t => needed.has(t.function.name));
     this.logger.log(this.name, `Qwen extracted ${routedTools.length} relevant tools. Executing via GLM-5...`);
 
-    const glmPrompt = "You are the BIM Executor. Use your tools to build the requested architecture. You MUST call export_ifc as the very last step. CRITICAL FOR TRIMESH: assign final geometry to variable exactly named 'result' without print statements.";
-    const glmMsg = await callGLM(glmPrompt, JSON.stringify(plan), routedTools);
+    let glmPrompt = "You are the BIM Executor. Use your tools to build or modify the requested architecture. You MUST call export_ifc as the very last step. CRITICAL FOR TRIMESH: assign final geometry to variable exactly named 'result' without print statements.";
+    
+    let planData = JSON.stringify(plan);
+    if (plan.is_edit) {
+      this.logger.log(this.name, "Fetching current scene state to provide edit context...");
+      const sceneRes = await mcpCallTool("get_scene_info", { include_bbox: false }, this.context.mcpSessionId);
+      planData = `Instructions: ${JSON.stringify(plan)}\n\nCurrent IFC Scene State:\n${sceneRes.resultText}`;
+      glmPrompt += " You are EDITING the existing scene. Use the provided Current IFC Scene State to find the GlobalId of objects you need to modify or delete.";
+    }
+
+    const glmMsg = await callGLM(glmPrompt, planData, routedTools);
     
     let ifc_url = "";
     if (glmMsg.tool_calls) {
@@ -423,7 +443,8 @@ async function runMultiAgentOrchestrator(req: Request): Promise<Response> {
       const context = new WorkflowContext();
       
       try {
-        context.userPrompt = payload.messages?.[payload.messages.length - 1]?.content || "";
+        context.messages = payload.messages || [];
+        context.userPrompt = context.messages.length > 0 ? context.messages[context.messages.length - 1].content : "";
         context.mcpSessionId = payload.session_id || await mcpInit("");
         const tResult = await fetchMcpTools(context.mcpSessionId);
         context.availableTools = tResult.tools;
@@ -434,8 +455,8 @@ async function runMultiAgentOrchestrator(req: Request): Promise<Response> {
         const bimExecutor = new BimMcpAgent(logger, context);
         const reviewer = new QualityReviewAgent(logger, context);
 
-        // Stage 1: Interpretation
-        context.interpreterBrief = await interpreter.runWithRetry(context.userPrompt, 2);
+        // Stage 1: Interpretation (Provide entire conversation history)
+        context.interpreterBrief = await interpreter.runWithRetry(context.messages, 2);
 
         // 5. Correction Loop
         const MAX_LOOPS = 2;
