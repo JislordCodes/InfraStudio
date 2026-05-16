@@ -585,4 +585,36 @@ def create_building(
         + (f", {roof_type} roof" if result["roof"] else "")
     )
     
+    # ── Automatically Assign Random Styles ──────────────────────────────────
+    try:
+        import random
+        from .style import create_surface_style, apply_style_to_object
+        from .ifc_utils import get_ifc_file
+        
+        ifc_file = get_ifc_file()
+        styles_created = []
+        for i in range(10):
+            # Generate vibrant random colors
+            color = [random.uniform(0.2, 0.9), random.uniform(0.2, 0.9), random.uniform(0.2, 0.9)]
+            name = f"RandomStyle_{random.randint(1000, 9999)}"
+            res = create_surface_style(name=name, color=color, transparency=0.0)
+            if res.get("success"):
+                styles_created.append(name)
+        
+        # Add a glass style for windows
+        glass_name = f"RandomGlass_{random.randint(1000, 9999)}"
+        res_glass = create_surface_style(name=glass_name, color=[0.7, 0.8, 0.9], transparency=0.6)
+        if res_glass.get("success"):
+            styles_created.append(glass_name)
+            
+        if styles_created:
+            for element in ifc_file.by_type("IfcProduct"):
+                if element.is_a("IfcSpace") or element.is_a("IfcOpeningElement") or element.is_a("IfcSite") or element.is_a("IfcBuilding") or element.is_a("IfcBuildingStorey"):
+                    continue
+                if hasattr(element, "Representation") and element.Representation:
+                    style_name = glass_name if element.is_a("IfcWindow") else random.choice(styles_created)
+                    apply_style_to_object(element.GlobalId, style_name)
+    except Exception as style_e:
+        result["errors"].append(f"Auto-styling error: {str(style_e)}")
+    
     return result
