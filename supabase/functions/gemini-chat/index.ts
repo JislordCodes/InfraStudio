@@ -123,6 +123,7 @@ async function mintAccessToken(saJson: any): Promise<string> {
 async function callQwen(systemPrompt: string, userMessage: string, jsonMode: boolean = false): Promise<string> {
   const qwenKey = Deno.env.get("QWEN_API_KEY");
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  
   const res = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
@@ -133,7 +134,9 @@ async function callQwen(systemPrompt: string, userMessage: string, jsonMode: boo
       response_format: jsonMode ? { type: "json_object" } : undefined
     })
   });
+  
   if (!res.ok) throw new Error(`Qwen Error: ${await res.text()}`);
+  
   const data = await res.json();
   return data.choices[0].message.content || "";
 }
