@@ -596,43 +596,70 @@ def create_building(
         glass_styles = []
         
         # Define realistic material palettes
-        palettes = [
-            # White/Off-white Plaster
-            ([0.9, 0.9, 0.9], 0.0, 0.9),
-            ([0.85, 0.82, 0.8], 0.0, 0.95),
-            # Concrete
-            ([0.6, 0.6, 0.6], 0.1, 0.8),
-            ([0.5, 0.5, 0.55], 0.1, 0.85),
-            # Brick / Terracotta
-            ([0.6, 0.3, 0.2], 0.0, 0.9),
-            # Wood
-            ([0.5, 0.35, 0.2], 0.05, 0.7),
-            ([0.4, 0.25, 0.15], 0.05, 0.75)
+        wall_palettes = [
+            ([0.9, 0.9, 0.9], 0.0, 0.9),   # White Plaster
+            ([0.85, 0.82, 0.8], 0.0, 0.95), # Off-white Stucco
+            ([0.6, 0.3, 0.2], 0.0, 0.9)    # Brick / Terracotta
         ]
         
-        for i, (color, metallic, roughness) in enumerate(palettes):
-            name = f"RealisticMat_{i}_{random.randint(1000, 9999)}"
-            res = create_pbr_style(name=name, diffuse_color=color, metallic=metallic, roughness=roughness)
-            if res.get("success"):
-                solid_styles.append(name)
+        wood_palettes = [
+            ([0.5, 0.35, 0.2], 0.05, 0.7),  # Dark Wood
+            ([0.4, 0.25, 0.15], 0.05, 0.75), # Walnut
+            ([0.6, 0.45, 0.3], 0.05, 0.6)   # Light Wood
+        ]
+        
+        concrete_palettes = [
+            ([0.6, 0.6, 0.6], 0.1, 0.8),    # Light Concrete
+            ([0.5, 0.5, 0.55], 0.1, 0.85)   # Dark Concrete
+        ]
+        
+        wall_styles = []
+        for i, (color, metallic, roughness) in enumerate(wall_palettes):
+            name = f"WallMat_{i}_{random.randint(1000, 9999)}"
+            if create_pbr_style(name=name, diffuse_color=color, metallic=metallic, roughness=roughness).get("success"):
+                wall_styles.append(name)
+                
+        door_styles = []
+        for i, (color, metallic, roughness) in enumerate(wood_palettes):
+            name = f"WoodMat_{i}_{random.randint(1000, 9999)}"
+            if create_pbr_style(name=name, diffuse_color=color, metallic=metallic, roughness=roughness).get("success"):
+                door_styles.append(name)
+                
+        slab_styles = []
+        for i, (color, metallic, roughness) in enumerate(concrete_palettes):
+            name = f"ConcreteMat_{i}_{random.randint(1000, 9999)}"
+            if create_pbr_style(name=name, diffuse_color=color, metallic=metallic, roughness=roughness).get("success"):
+                slab_styles.append(name)
         
         # Realistic transparent glass
         glass_name = f"RealisticGlass_{random.randint(1000, 9999)}"
-        res_glass = create_pbr_style(name=glass_name, diffuse_color=[0.8, 0.85, 0.9], transparency=0.7, metallic=0.2, roughness=0.1)
-        if res_glass.get("success"):
+        glass_styles = []
+        if create_pbr_style(name=glass_name, diffuse_color=[0.8, 0.85, 0.9], transparency=0.7, metallic=0.2, roughness=0.1).get("success"):
             glass_styles.append(glass_name)
             
-        if solid_styles or glass_styles:
-            for element in ifc_file.by_type("IfcProduct"):
-                if element.is_a("IfcSpace") or element.is_a("IfcOpeningElement") or element.is_a("IfcSite") or element.is_a("IfcBuilding") or element.is_a("IfcBuildingStorey"):
-                    continue
-                if hasattr(element, "Representation") and element.Representation:
-                    if element.is_a("IfcWindow") and glass_styles:
-                        style_name = glass_styles[0]
-                    elif solid_styles:
-                        style_name = random.choice(solid_styles)
-                    else:
-                        continue
+        # Select one theme per building to keep it coherent
+        chosen_wall = random.choice(wall_styles) if wall_styles else None
+        chosen_door = random.choice(door_styles) if door_styles else None
+        chosen_slab = random.choice(slab_styles) if slab_styles else None
+        chosen_glass = glass_styles[0] if glass_styles else None
+            
+        for element in ifc_file.by_type("IfcProduct"):
+            if element.is_a("IfcSpace") or element.is_a("IfcOpeningElement") or element.is_a("IfcSite") or element.is_a("IfcBuilding") or element.is_a("IfcBuildingStorey"):
+                continue
+            if hasattr(element, "Representation") and element.Representation:
+                style_name = None
+                if element.is_a("IfcWindow") and chosen_glass:
+                    style_name = chosen_glass
+                elif element.is_a("IfcDoor") and chosen_door:
+                    style_name = chosen_door
+                elif element.is_a("IfcSlab") and chosen_slab:
+                    style_name = chosen_slab
+                elif element.is_a("IfcWall") and chosen_wall:
+                    style_name = chosen_wall
+                elif chosen_wall:
+                    style_name = chosen_wall
+                
+                if style_name:
                     apply_style_to_object(element.GlobalId, style_name)
     except Exception as style_e:
         result["errors"].append(f"Auto-styling error: {str(style_e)}")

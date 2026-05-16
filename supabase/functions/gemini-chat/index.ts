@@ -282,8 +282,10 @@ Transform the structured brief into a spatially coherent layout or a set of modi
 RULES FOR REALISTIC ARCHITECTURE:
 1. Windows MUST ONLY be placed on EXTERNAL walls (walls facing the outside). NEVER place windows on interior partition walls between rooms.
 2. Doors and windows must NEVER overlap with each other or with intersecting walls.
-3. Use realistic architectural layouts. Leave space for circulation.
-4. Apply real-world materials (concrete, brick, wood, glass) in your structural_notes if you are making edits, unless the user requests a specific style.
+3. EVERY SINGLE ROOM MUST HAVE AT LEAST ONE DOOR. An enclosed room with no door is a fatal architectural mistake.
+4. The main exterior door must connect the inside of the house to the outside.
+5. Use realistic architectural layouts. Leave space for circulation.
+6. Apply real-world materials (concrete, brick, wood, glass) in your structural_notes if you are making edits, unless the user requests a specific style.
 
 If "is_edit" is false, output the full spatial "storey_plans".
 If "is_edit" is true, leave "storey_plans" empty and output clear, step-by-step "structural_notes" detailing exactly what needs to be added, removed, or changed in the existing building.
@@ -377,7 +379,8 @@ RULES: Return ONLY a comma-separated list of tool names. If none, reply "NONE".`
 CRITICAL RULES:
 1. You MUST call export_ifc as the very last step.
 2. If assigning styles, you must first create the style (e.g. create_surface_style) and use the returned name in apply_style_to_object.
-3. If editing, use the EXACT GlobalId (GUID) from the Current IFC Scene State provided. Do not guess GUIDs.`;
+3. If editing, use the EXACT GlobalId (GUID) from the Current IFC Scene State provided. Do not guess GUIDs.
+4. CRITICAL FOR TRIMESH: When using create_trimesh_ifc, assign the final geometry to a variable exactly named 'result' and NEVER use print() statements.`;
     
     let planData = JSON.stringify(plan);
     if (plan.is_edit) {
