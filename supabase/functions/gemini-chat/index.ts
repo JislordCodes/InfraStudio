@@ -191,24 +191,47 @@ async function callGLM(systemPrompt: string, userMessage: string, tools?: any[])
 
 // ══ OBSERVABILITY & SSE ══
 class EventLogger {
-  constructor(private controller: ReadableStreamDefaultController) {}
+  private keepAliveInterval: number | null = null;
+
+  constructor(private controller: ReadableStreamDefaultController) {
+    this.keepAliveInterval = setInterval(() => {
+      try {
+        // SSE comment to keep the connection alive
+        this.controller.enqueue(new TextEncoder().encode(`: heartbeat\n\n`));
+      } catch (e) {
+        this.stopKeepAlive();
+      }
+    }, 5000);
+  }
+
+  private stopKeepAlive() {
+    if (this.keepAliveInterval !== null) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+  }
+
   log(agent: string, message: string, data?: any) {
     console.log(`[${agent}] ${message}`);
     const payload = JSON.stringify({ type: "step", agent, message, data });
-    this.controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
+    try { this.controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`)); } catch {}
   }
+
   complete(ifc_url: string, session_id: string, reply: string) {
+    this.stopKeepAlive();
     const payload1 = JSON.stringify({ type: "assistant_message", message: { role: "assistant", content: reply } });
-    this.controller.enqueue(new TextEncoder().encode(`data: ${payload1}\n\n`));
+    try { this.controller.enqueue(new TextEncoder().encode(`data: ${payload1}\n\n`)); } catch {}
     const payload2 = JSON.stringify({ type: "complete", ifc_url, session_id });
-    this.controller.enqueue(new TextEncoder().encode(`data: ${payload2}\n\n`));
-    this.controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`));
-    this.controller.close();
+    try { this.controller.enqueue(new TextEncoder().encode(`data: ${payload2}\n\n`)); } catch {}
+    try { this.controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`)); } catch {}
+    try { this.controller.close(); } catch {}
   }
+
   error(err: any) {
+    this.stopKeepAlive();
     const payload = JSON.stringify({ type: "error", error: String(err) });
-    this.controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
-    this.controller.close();
+    try { this.controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`)); } catch {}
+    try { this.controller.close(); } catch {}
   }
 }
 
