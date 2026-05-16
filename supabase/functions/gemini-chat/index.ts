@@ -375,7 +375,18 @@ Expected JSON Output:
 
   validateOutput(output: any): boolean {
     if (!output || typeof output.is_edit !== "boolean") return false;
-    if (!output.is_edit && !Array.isArray(output.storey_plans)) return false;
+    if (!output.is_edit) {
+      if (!Array.isArray(output.storey_plans)) return false;
+      for (const storey of output.storey_plans) {
+        if (!storey || typeof storey !== "object" || Array.isArray(storey)) return false;
+        if (storey.rooms && !Array.isArray(storey.rooms)) return false;
+        if (storey.rooms) {
+          for (const room of storey.rooms) {
+            if (!room || typeof room !== "object" || Array.isArray(room)) return false;
+          }
+        }
+      }
+    }
     return true;
   }
 }

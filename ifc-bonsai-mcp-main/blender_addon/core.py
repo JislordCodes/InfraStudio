@@ -150,7 +150,7 @@ class BlenderMCPServer:
         
         bpy.app.timers.register(command_executor)
         
-        timeout = 30.0
+        timeout = 120.0
         start_time = time.time()
         while not result_container['done']:
             time.sleep(0.01)
