@@ -335,6 +335,7 @@ RULES FOR REALISTIC ARCHITECTURE:
 4. The main exterior door must connect the inside of the house to the outside.
 5. Use realistic architectural layouts. Leave space for circulation.
 6. Apply real-world materials (concrete, brick, wood, glass) in your structural_notes if you are making edits, unless the user requests a specific style.
+7. CRITICAL TIMEOUT PREVENTION: Keep the layout simple and concise. Limit to a maximum of 4 essential rooms per storey. Excessive detail will cause the generation to timeout.
 
 If "is_edit" is false, output the full spatial "storey_plans".
 If "is_edit" is true, leave "storey_plans" empty and output clear, step-by-step "structural_notes" detailing exactly what needs to be added, removed, or changed in the existing building.
@@ -431,7 +432,8 @@ CRITICAL RULES:
 1. You MUST call export_ifc as the very last step.
 2. If assigning styles, you must first create the style (e.g. create_surface_style) and use the returned name in apply_style_to_object.
 3. If editing, use the EXACT GlobalId (GUID) from the Current IFC Scene State provided. Do not guess GUIDs.
-4. CRITICAL FOR TRIMESH: When using create_trimesh_ifc, assign the final geometry to a variable exactly named 'result' and NEVER use print() statements.`;
+4. CRITICAL FOR TRIMESH: When using create_trimesh_ifc, assign the final geometry to a variable exactly named 'result' and NEVER use print() statements.
+5. TIMEOUT PREVENTION: Output ONLY the requested tool calls. Do not write extensive explanations or conversational text.`;
     
     let planData = JSON.stringify(plan);
     if (plan.is_edit) {
