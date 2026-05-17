@@ -269,7 +269,7 @@ abstract class BaseAgent {
         if (this.validateOutput(output)) {
           return output;
         }
-        this.logger.log(this.name, `Validation failed on attempt ${attempt}. Retrying...`);
+        this.logger.log(this.name, `Validation failed on attempt ${attempt}. Output was: ${JSON.stringify(output).substring(0, 500)}... Retrying...`);
       } catch (err) {
         this.logger.log(this.name, `Error on attempt ${attempt}: ${err}`);
         if (attempt === maxRetries) throw err;
@@ -325,7 +325,7 @@ Expected JSON Output:
 
 class ArchitecturalAgent extends BaseAgent {
   name = "Architectural Reasoning Agent";
-  llmProvider = "qwen" as const;
+  llmProvider = "glm" as const;
   systemPrompt = `You are the Architectural Reasoning Agent.
 Transform the structured brief into a spatially coherent layout or a set of modification instructions.
 RULES FOR REALISTIC ARCHITECTURE:
@@ -336,6 +336,10 @@ RULES FOR REALISTIC ARCHITECTURE:
 5. Use realistic architectural layouts. Leave space for circulation.
 6. Apply real-world materials (concrete, brick, wood, glass) in your structural_notes if you are making edits, unless the user requests a specific style.
 7. CRITICAL TIMEOUT PREVENTION: Keep the layout simple and concise. Limit to a maximum of 4 essential rooms per storey. Excessive detail will cause the generation to timeout.
+
+CRITICAL JSON INSTRUCTION:
+YOU MUST OUTPUT ONLY VALID RAW JSON. DO NOT OUTPUT ANY CONVERSATIONAL TEXT, PREAMBLES, OR EXPLANATIONS. DO NOT USE MARKDOWN CODE BLOCKS (\`\`\`json). START IMMEDIATELY WITH { AND END WITH }.
+If you output anything other than raw JSON, the system will crash.
 
 If "is_edit" is false, output the full spatial "storey_plans".
 If "is_edit" is true, leave "storey_plans" empty and output clear, step-by-step "structural_notes" detailing exactly what needs to be added, removed, or changed in the existing building.
@@ -369,8 +373,8 @@ Expected JSON Output:
     if (this.context.reviewHistory.length > 0) {
       promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(this.context.reviewHistory)}`;
     }
-    const msg = await callQwen(this.systemPrompt, promptStr, true);
-    return this.cleanJsonResponse(msg);
+    const msg = await callGLM(this.systemPrompt, promptStr);
+    return this.cleanJsonResponse(msg.content);
   }
 
   validateOutput(output: any): boolean {
