@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 // ══ CONFIG ══
-const EDGE_PROXY_URL = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1/gemini-chat";
+const EDGE_PROXY_BASE = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
 
 export interface MultiAgentResult {
@@ -20,92 +20,110 @@ export async function runMultiAgentLoop(
   onToolResult?: (msg: any) => void
 ): Promise<MultiAgentResult> {
   
-  onStep("🚀 Starting Multi-Agent Orchestration...");
-
-  const messages = [...previousMessages, { role: "user", content: userMessage }];
   const steps: string[] = [];
   let ifc_url: string | undefined;
   let finalReply = "Done.";
   let sessionId = clientSessionId;
 
-  // We use the fetch API to read the SSE stream
-  return new Promise((resolve, reject) => {
-    fetch(EDGE_PROXY_URL, {
+  const pushStep = (msg: string) => {
+    onStep(msg);
+    steps.push(msg);
+  };
+
+  pushStep("🚀 Starting Multi-Agent Orchestration...");
+
+  const messages = [...previousMessages, { role: "user", content: userMessage }];
+
+  const callEdge = async (funcName: string, body: any) => {
+    const url = `${EDGE_PROXY_BASE}/${funcName}`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'apikey': SUPABASE_ANON_KEY,
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Accept': 'text/event-stream'
       },
-      body: JSON.stringify({
-        action: 'chat_multi_agent',
-        messages: messages,
-        session_id: clientSessionId
-      })
-    }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`Edge Proxy Error: ${response.status} - ${await response.text()}`);
-      }
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`Error from ${funcName}: ${await res.text()}`);
+    return res.json();
+  };
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No readable stream");
+  try {
+    // 1. Interpreter
+    pushStep("Interpreter Agent: Processing request...");
+    const brief = await callEdge('agent-interpreter', { messages });
+    
+    // 2. Architect
+    pushStep("Architectural Agent: Planning layout...");
+    const plan = await callEdge('agent-architect', brief);
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const dataStr = line.slice(6);
-              if (dataStr === "[DONE]") {
-                break;
-              }
-              const payload = JSON.parse(dataStr);
-
-              if (payload.type === 'step') {
-                onStep(payload.message);
-                steps.push(payload.message);
-              }
-              else if (payload.type === 'assistant_message') {
-                if (onAssistantMessage) onAssistantMessage(payload.message);
-                if (payload.message.content) {
-                  finalReply = payload.message.content;
-                }
-              }
-              else if (payload.type === 'tool_result') {
-                if (onToolResult) onToolResult(payload.message);
-              }
-              else if (payload.type === 'complete') {
-                ifc_url = payload.ifc_url;
-                sessionId = payload.session_id;
-              }
-              else if (payload.type === 'error') {
-                reject(new Error(payload.error));
-                return;
-              }
-            } catch (e) {
-              console.warn("Failed to parse SSE line", line);
-            }
-          }
+    // 3. BIM Executor (Chunking Logic)
+    if (!plan.is_edit && plan.storey_plans) {
+      pushStep(`BIM Agent: Received structural plan with ${plan.storey_plans.length} storeys. Beginning chunked execution...`);
+      
+      pushStep("BIM Agent: Initializing new project...");
+      let bimRes = await callEdge('agent-bim', { action: 'initialize', mcpSessionId: sessionId });
+      sessionId = bimRes.mcpSessionId;
+      
+      for (const storey of plan.storey_plans) {
+        pushStep(`BIM Agent: Creating storey: ${storey.name}...`);
+        bimRes = await callEdge('agent-bim', { action: 'create_storey', name: storey.name, elevation: storey.elevation || 0, mcpSessionId: sessionId });
+        sessionId = bimRes.mcpSessionId;
+        
+        if (!storey.rooms) continue;
+        for (let i = 0; i < storey.rooms.length; i++) {
+          const room = storey.rooms[i];
+          pushStep(`BIM Agent: Building ${storey.name} - ${room.name} (${i + 1}/${storey.rooms.length})...`);
+          bimRes = await callEdge('agent-bim', {
+            action: 'build_room',
+            mcpSessionId: sessionId,
+            storeyHeight: storey.height,
+            room: room
+          });
+          sessionId = bimRes.mcpSessionId;
         }
       }
-
-      resolve({
-        reply: finalReply,
-        ifc_url,
-        steps,
-        mcp_session_id: sessionId
-      });
       
-    }).catch(reject);
-  });
+      pushStep("BIM Agent: All rooms built. Exporting IFC...");
+      const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
+      ifc_url = exportRes.ifc_url;
+
+    } else {
+      pushStep("BIM Agent: Executing dynamic modifications...");
+      const bimRes = await callEdge('agent-bim', {
+        action: 'dynamic_edit',
+        plan: plan,
+        mcpSessionId: sessionId
+      });
+      ifc_url = bimRes.ifc_url;
+      sessionId = bimRes.mcpSessionId;
+    }
+
+    // 4. Quality Reviewer
+    pushStep("Reviewer Agent: Validating model quality...");
+    const review = await callEdge('agent-reviewer', { mcpSessionId: sessionId });
+    
+    if (review.status === "PASS") {
+      pushStep("✅ Model passed quality review.");
+    } else {
+      pushStep(`❌ Quality Review Issues: ${review.issues?.join(', ')}`);
+    }
+
+    finalReply = "Multi-Agent Generation Complete. I've broken the rendering down into manageable chunks to prevent timeouts, and the final model is ready.";
+    if (onAssistantMessage) {
+      onAssistantMessage({ role: "assistant", content: finalReply });
+    }
+
+    return {
+      reply: finalReply,
+      ifc_url,
+      steps,
+      mcp_session_id: sessionId
+    };
+
+  } catch (err: any) {
+    pushStep(`💥 Orchestration Error: ${err.message}`);
+    throw err;
+  }
 }
