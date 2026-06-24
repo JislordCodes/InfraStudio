@@ -1,4 +1,3 @@
-import { useState } from 'react';
 
 // ══ CONFIG ══
 const EDGE_PROXY_BASE = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1";
@@ -17,7 +16,7 @@ export async function runMultiAgentLoop(
   clientSessionId: string,
   onStep: (step: string) => void,
   onAssistantMessage?: (msg: any) => void,
-  onToolResult?: (msg: any) => void
+  _onToolResult?: (msg: any) => void
 ): Promise<MultiAgentResult> {
   
   const steps: string[] = [];
