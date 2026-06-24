@@ -1,4 +1,4 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+/// <reference types="jsr:@supabase/functions-js/edge-runtime.d.ts" />
 
 // ══ CONFIG ══
 const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
@@ -139,7 +139,7 @@ async function mintAccessToken(saJson: any): Promise<string> {
 }
 
 // ══ LLM CLIENTS ══
-async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false): Promise<string> {
+async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "qwen-max"): Promise<string> {
   const qwenKey = Deno.env.get("QWEN_API_KEY");
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   
@@ -155,9 +155,10 @@ async function callQwen(systemPrompt: string, userMessage: string | any[], jsonM
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "qwen-max",
+      model: model,
       messages: msgs,
       temperature: 0.1,
+      max_tokens: 2000,
       response_format: jsonMode ? { type: "json_object" } : undefined
     })
   });
@@ -168,21 +169,23 @@ async function callQwen(systemPrompt: string, userMessage: string | any[], jsonM
   return data.choices[0].message.content || "";
 }
 
-async function callGLM(systemPrompt: string, userMessage: string, tools?: any[]): Promise<any> {
-  const saJsonString = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "{}";
-  const saJson = JSON.parse(saJsonString);
-  const accessToken = await mintAccessToken(saJson);
-  const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
-  const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
-  const body: any = {
-    model: "zai-org/glm-5-maas",
-    messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
-    temperature: 0.1
-  };
-  if (tools && tools.length > 0) body.tools = tools;
-  const res = await fetch(url, {
-    method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
-    body: JSON.stringify(body)
+async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "glm-5.1"): Promise<any> {
+  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const msgs = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage }
+  ];
+  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: model,
+      messages: msgs,
+      temperature: 0.1,
+      max_tokens: 2000,
+      tools: tools && tools.length > 0 ? tools : undefined
+    })
   });
   if (!res.ok) throw new Error(`GLM Error: ${await res.text()}`);
   const data = await res.json();
@@ -279,10 +282,23 @@ abstract class BaseAgent {
   }
 
   protected cleanJsonResponse(rawStr: string): any {
-    const match = rawStr.match(/```(?:json)?\n([\s\S]*?)\n```/);
-    let clean = match ? match[1] : rawStr;
-    clean = clean.trim();
+    let clean = rawStr.trim();
     
+    if (clean.includes("```")) {
+      const startIdx = clean.indexOf("```");
+      if (startIdx !== -1) {
+        const newlineIdx = clean.indexOf("\n", startIdx);
+        const contentStart = newlineIdx !== -1 ? newlineIdx + 1 : startIdx + 3;
+        const endIdx = clean.indexOf("```", contentStart);
+        if (endIdx !== -1) {
+          clean = clean.substring(contentStart, endIdx);
+        } else {
+          clean = clean.substring(contentStart);
+        }
+      }
+    }
+    
+    clean = clean.trim();
     const firstBrace = clean.indexOf('{');
     const lastBrace = clean.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
@@ -314,7 +330,7 @@ Expected JSON Output:
 
   async run(messages: any[]) {
     this.logger.log(this.name, "Extracting requirements and analyzing conversation history...");
-    const res = await callQwen(this.systemPrompt, messages, true);
+    const res = await callQwen(this.systemPrompt, messages, true, "qwen3.7-plus");
     return this.cleanJsonResponse(res);
   }
 
@@ -325,24 +341,19 @@ Expected JSON Output:
 
 class ArchitecturalAgent extends BaseAgent {
   name = "Architectural Reasoning Agent";
-  llmProvider = "glm" as const;
+  llmProvider = "qwen" as const;
   systemPrompt = `You are the Architectural Reasoning Agent.
 Transform the structured brief into a spatially coherent layout or a set of modification instructions.
 RULES FOR REALISTIC ARCHITECTURE:
 1. Windows MUST ONLY be placed on EXTERNAL walls (walls facing the outside). NEVER place windows on interior partition walls between rooms.
 2. Doors and windows must NEVER overlap with each other or with intersecting walls.
-3. EVERY SINGLE ROOM MUST HAVE AT LEAST ONE DOOR. An enclosed room with no door is a fatal architectural mistake.
-4. The main exterior door must connect the inside of the house to the outside.
-5. Use realistic architectural layouts. Leave space for circulation.
-6. Apply real-world materials (concrete, brick, wood, glass) in your structural_notes if you are making edits, unless the user requests a specific style.
-7. CRITICAL TIMEOUT PREVENTION: Keep the layout simple and concise. Limit to a maximum of 4 essential rooms per storey. Excessive detail will cause the generation to timeout.
+3. EVERY SINGLE ROOM MUST HAVE AT LEAST ONE DOOR. Enclosed rooms with no door are fatal.
+4. Main entry connects inside to outside.
+5. Simple layouts with clean circulation.
+6. Max 4 essential rooms per storey to avoid timeouts.
 
-CRITICAL JSON INSTRUCTION:
-YOU MUST OUTPUT ONLY VALID RAW JSON. DO NOT OUTPUT ANY CONVERSATIONAL TEXT, PREAMBLES, OR EXPLANATIONS. DO NOT USE MARKDOWN CODE BLOCKS (\`\`\`json). START IMMEDIATELY WITH { AND END WITH }.
-If you output anything other than raw JSON, the system will crash.
-
-If "is_edit" is false, output the full spatial "storey_plans".
-If "is_edit" is true, leave "storey_plans" empty and output clear, step-by-step "structural_notes" detailing exactly what needs to be added, removed, or changed in the existing building.
+If "is_edit" is false, output "storey_plans".
+If "is_edit" is true, leave "storey_plans" empty and output "structural_notes".
 Must NOT: Call BIM tools.
 Expected JSON Output:
 {
@@ -368,28 +379,18 @@ Expected JSON Output:
 
   async run(brief: any) {
     this.logger.log(this.name, brief.is_edit ? "Formulating modification strategy..." : "Performing spatial reasoning and layout generation...");
-    // Inject previous review failures if we are in a correction loop
     let promptStr = JSON.stringify(brief);
     if (this.context.reviewHistory.length > 0) {
       promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(this.context.reviewHistory)}`;
     }
-    const msg = await callGLM(this.systemPrompt, promptStr);
-    return this.cleanJsonResponse(msg.content);
+    const res = await callQwen(this.systemPrompt, promptStr, true, "qwen3.7-max-2026-06-08");
+    return this.cleanJsonResponse(res);
   }
 
   validateOutput(output: any): boolean {
     if (!output || typeof output.is_edit !== "boolean") return false;
     if (!output.is_edit) {
       if (!Array.isArray(output.storey_plans)) return false;
-      for (const storey of output.storey_plans) {
-        if (!storey || typeof storey !== "object" || Array.isArray(storey)) return false;
-        if (storey.rooms && !Array.isArray(storey.rooms)) return false;
-        if (storey.rooms) {
-          for (const room of storey.rooms) {
-            if (!room || typeof room !== "object" || Array.isArray(room)) return false;
-          }
-        }
-      }
     }
     return true;
   }
@@ -397,7 +398,7 @@ Expected JSON Output:
 
 class BimMcpAgent extends BaseAgent {
   name = "BIM MCP Agent";
-  llmProvider = "glm" as const;
+  llmProvider = "qwen" as const;
   systemPrompt = "You are the BIM Executor.";
 
   async run(plan: any) {
@@ -417,7 +418,7 @@ class BimMcpAgent extends BaseAgent {
       return { status: "success", ifc_url: exportData.file_url || exportData.ifc_url, raw_result: buildRes };
     }
     
-    // Otherwise, use Qwen to filter tools and GLM-5 to execute them dynamically for edits or custom models
+    // Otherwise, use Qwen to filter tools and Qwen 3.7 Plus to execute them dynamically for edits or custom models
     this.logger.log(this.name, "Plan requires dynamic modifications. Routing tools via Qwen...");
     const ALWAYS_EXPOSED = new Set([
       "export_ifc", "get_scene_info", "create_surface_style", "apply_style_to_object", "create_trimesh_ifc"
@@ -434,13 +435,13 @@ Available Tools:
 ${availableToolsList}
 RULES: Return ONLY a comma-separated list of tool names. If none, reply "NONE".`;
 
-    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false);
+    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus");
     const needed = new Set<string>(ALWAYS_EXPOSED);
     if (extractedRaw && extractedRaw.trim() !== "NONE") {
       extractedRaw.split(",").map(s => s.trim()).forEach(name => { if (name) needed.add(name); });
     }
     const routedTools = this.context.availableTools.filter(t => needed.has(t.function.name));
-    this.logger.log(this.name, `Qwen extracted ${routedTools.length} relevant tools. Executing via GLM-5...`);
+    this.logger.log(this.name, `Qwen extracted ${routedTools.length} relevant tools. Executing via Qwen 3.7 Plus...`);
 
     let glmPrompt = `You are the BIM Executor. Use your tools to build or modify the requested architecture. 
 CRITICAL RULES:
@@ -461,7 +462,7 @@ CRITICAL RULES:
     let ifc_url = "";
     let executionError = "";
     
-    // Internal auto-correction loop for GLM-5 tool execution (max 3 tries)
+    // Internal auto-correction loop for tool execution (max 3 tries)
     for (let tryNum = 1; tryNum <= 3; tryNum++) {
        let currentPlanData = planData;
        if (executionError) {
@@ -470,7 +471,7 @@ CRITICAL RULES:
            executionError = ""; // Reset for this attempt
        }
        
-       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools);
+       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.7-plus");
        
        if (glmMsg.tool_calls) {
          try {
@@ -482,15 +483,14 @@ CRITICAL RULES:
                 try { const p = JSON.parse(toolRes.resultText); ifc_url = p.file_url || p.ifc_url; } catch{}
               }
            }
-           // If we got here, all tools succeeded
            break;
          } catch (err: any) {
            executionError = err.message || String(err);
            this.logger.log(this.name, `Tool Execution Failed: ${executionError}`);
-           if (tryNum === 3) throw err; // Throw on final attempt
+           if (tryNum === 3) throw err;
          }
        } else {
-          throw new Error("GLM-5 did not execute any tools.");
+          throw new Error("BIM Executor did not execute any tools.");
        }
     }
     
@@ -525,7 +525,7 @@ Expected JSON Output:
 
   async run(sceneData: any) {
     this.logger.log(this.name, "Validating geometry and IFC semantics...");
-    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true);
+    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true, "qwen3.7-max-2026-06-08");
     return this.cleanJsonResponse(res);
   }
 

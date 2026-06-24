@@ -1,5 +1,5 @@
 
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+/// <reference types="jsr:@supabase/functions-js/edge-runtime.d.ts" />
 
 export const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 export const LOCATION = "global";
@@ -140,7 +140,7 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false): Promise<string> {
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "qwen-max"): Promise<string> {
   const qwenKey = Deno.env.get("QWEN_API_KEY");
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   let msgs: any[] = [{ role: "system", content: systemPrompt }];
@@ -152,33 +152,83 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "qwen-max", messages: msgs, temperature: 0.1, response_format: jsonMode ? { type: "json_object" } : undefined })
+    body: JSON.stringify({
+      model: model,
+      messages: msgs,
+      temperature: 0.1,
+      max_tokens: 2000,
+      response_format: jsonMode ? { type: "json_object" } : undefined
+    })
   });
   if (!res.ok) throw new Error(`Qwen Error: ${await res.text()}`);
   const data = await res.json();
   return data.choices[0].message.content || "";
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[]): Promise<any> {
-  const saJsonString = Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "{}";
-  const saJson = JSON.parse(saJsonString);
-  const accessToken = await mintAccessToken(saJson);
-  const host = LOCATION === "global" ? "aiplatform.googleapis.com" : `${LOCATION}-aiplatform.googleapis.com`;
-  const url = `https://${host}/v1/projects/${saJson.project_id}/locations/${LOCATION}/endpoints/openapi/chat/completions`;
-  const body: any = { model: "zai-org/glm-5-maas", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }], temperature: 0.1 };
-  if (tools && tools.length > 0) body.tools = tools;
-  const res = await fetch(url, {
-    method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${accessToken}` },
-    body: JSON.stringify(body)
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "glm-5.1"): Promise<any> {
+  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const msgs = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage }
+  ];
+  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: model,
+      messages: msgs,
+      temperature: 0.1,
+      max_tokens: 2000,
+      tools: tools && tools.length > 0 ? tools : undefined
+    })
   });
   if (!res.ok) throw new Error(`GLM Error: ${await res.text()}`);
   const data = await res.json();
   return data.choices[0].message;
 }
 
+export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "glm-5.1"): Promise<ReadableStream<Uint8Array>> {
+  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const msgs = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage }
+  ];
+  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: model,
+      messages: msgs,
+      temperature: 0.1,
+      max_tokens: 2000,
+      stream: true
+    })
+  });
+  if (!res.ok) throw new Error(`GLM Stream Error: ${await res.text()}`);
+  if (!res.body) throw new Error("No response body from GLM Stream");
+  return res.body;
+}
+
+
 export function cleanJsonResponse(rawStr: string): any {
-  const match = rawStr.match(/```(?:json)?\n([\s\S]*?)\n```/);
-  let clean = match ? match[1] : rawStr;
+  let clean = rawStr.trim();
+  
+  if (clean.includes("```")) {
+    const startIdx = clean.indexOf("```");
+    if (startIdx !== -1) {
+      const newlineIdx = clean.indexOf("\n", startIdx);
+      const contentStart = newlineIdx !== -1 ? newlineIdx + 1 : startIdx + 3;
+      const endIdx = clean.indexOf("```", contentStart);
+      if (endIdx !== -1) {
+        clean = clean.substring(contentStart, endIdx);
+      } else {
+        clean = clean.substring(contentStart);
+      }
+    }
+  }
+  
   clean = clean.trim();
   const firstBrace = clean.indexOf('{');
   const lastBrace = clean.lastIndexOf('}');

@@ -20,7 +20,7 @@ Deno.serve(async (req: Request) => {
     let mcpSessionId = payload.mcpSessionId;
     if (!mcpSessionId) mcpSessionId = await mcpInit("");
     const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-    const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true);
+    const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true, "qwen3.7-max-2026-06-08");
     const result = cleanJsonResponse(res);
     result.mcpSessionId = mcpSessionId;
     return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
@@ -28,3 +28,4 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
   }
 });
+

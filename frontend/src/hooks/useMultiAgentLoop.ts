@@ -58,6 +58,7 @@ export async function runMultiAgentLoop(
     pushStep("Architectural Agent: Planning layout...");
     const plan = await callEdge('agent-architect', brief);
 
+
     // 3. BIM Executor (Chunking Logic)
     if (!plan.is_edit && plan.storey_plans) {
       pushStep(`BIM Agent: Received structural plan with ${plan.storey_plans.length} storeys. Beginning chunked execution...`);

@@ -247,7 +247,7 @@ if buildings:
         .map((tool: any) => `- ${tool.function.name}: ${tool.function.description}`)
         .join("\n");
       const qwenPrompt = `You are a Tool Retrieval Intelligence Layer. Extract extra tool names needed for this BIM edit plan. Plan: ${JSON.stringify(plan)} Available Tools: ${availableToolsList} RULES: Return ONLY a comma-separated list of tool names. If none, reply NONE.`;
-      const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false).catch(() => "NONE");
+      const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus").catch(() => "NONE");
 
       const needed = new Set<string>(CORE_EDIT_TOOLS);
       if (extractedRaw && extractedRaw.trim() !== "NONE") {
@@ -298,7 +298,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
           executionError = "";
         }
 
-        const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools);
+        const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.7-plus");
         const toolCalls = glmMsg.tool_calls || [];
         if (toolCalls.length === 0) {
           executionError = "No tool calls were produced.";

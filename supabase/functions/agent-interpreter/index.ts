@@ -22,7 +22,7 @@ Deno.serve(async (req: Request) => {
   try {
     const payload = await req.json();
     const messages = payload.messages || [];
-    const res = await callQwen(systemPrompt, messages, true);
+    const res = await callQwen(systemPrompt, messages, true, "qwen3.7-plus");
     const result = cleanJsonResponse(res);
     return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
   } catch (err) {
