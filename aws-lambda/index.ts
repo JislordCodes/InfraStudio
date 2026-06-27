@@ -1,8 +1,18 @@
+import { setGlobalDispatcher, Agent } from "undici";
 import { handleInterpreter } from "../supabase/functions/agent-interpreter/index.ts";
 import { handleArchitect } from "../supabase/functions/agent-architect/index.ts";
 import { handleReviewer } from "../supabase/functions/agent-reviewer/index.ts";
 import { handleBim } from "../supabase/functions/agent-bim/index.ts";
 import { mcpInit, mcpCallTool, fetchMcpTools } from "../supabase/functions/_shared/shared.ts";
+
+// Set global dispatcher with 10-minute timeouts for reasoning models (qwen3.7-max)
+const globalAgent = new Agent({
+  headersTimeout: 600000, // 10 minutes
+  bodyTimeout: 600000,    // 10 minutes
+  connectTimeout: 60000,  // 1 minute
+});
+setGlobalDispatcher(globalAgent);
+
 
 export const handler = async (event: any) => {
   const path = event.rawPath || "/";
