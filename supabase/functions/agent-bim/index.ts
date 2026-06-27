@@ -181,23 +181,20 @@ async function exportWithMaterials(mcpSessionId: string): Promise<{ ifc_url: str
   };
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  try {
-    const payload = await req.json();
-    let mcpSessionId = payload.mcpSessionId;
-    if (!mcpSessionId) mcpSessionId = await mcpInit("");
+export async function handleBim(payload: any): Promise<any> {
+  let mcpSessionId = payload.mcpSessionId;
+  if (!mcpSessionId) mcpSessionId = await mcpInit("");
 
-    if (payload.action === "initialize") {
-      const res = await mcpCallTool("initialize_project", { project_name: payload.projectName || "InfraStudio AI Building" }, mcpSessionId);
-      mcpSessionId = res.session;
-      return jsonResponse({ status: "success", mcpSessionId });
-    }
+  if (payload.action === "initialize") {
+    const res = await mcpCallTool("initialize_project", { project_name: payload.projectName || "InfraStudio AI Building" }, mcpSessionId);
+    mcpSessionId = res.session;
+    return { status: "success", mcpSessionId };
+  }
 
-    if (payload.action === "create_storey") {
-      const name = payload.name || "Storey";
-      const elevation = Number(payload.elevation || 0);
-      const code = `
+  if (payload.action === "create_storey") {
+    const name = payload.name || "Storey";
+    const elevation = Number(payload.elevation || 0);
+    const code = `
 import ifcopenshell.api as api
 ifc_file = get_ifc_file()
 buildings = ifc_file.by_type("IfcBuilding")
@@ -208,67 +205,67 @@ if buildings:
     api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
     save_and_load_ifc()
 `;
-      const res = await mcpCallTool("execute_ifc_code_tool", { code }, mcpSessionId);
-      mcpSessionId = res.session;
-      return jsonResponse({ status: "success", mcpSessionId });
+    const res = await mcpCallTool("execute_ifc_code_tool", { code }, mcpSessionId);
+    mcpSessionId = res.session;
+    return { status: "success", mcpSessionId };
+  }
+
+  if (payload.action === "build_room") {
+    const room = payload.room || {};
+    const buildRes = await mcpCallTool("build_room", {
+      room_name: room.name,
+      width: room.width || 4,
+      length: room.length || 4,
+      height: payload.storeyHeight || room.height || 3,
+      wall_thickness: room.wall_thickness || 0.2,
+      origin: room.origin || [0, 0, 0],
+      doors: room.doors || [],
+      windows: room.windows || [],
+    }, mcpSessionId);
+    mcpSessionId = buildRes.session;
+    return { status: "success", result: buildRes, mcpSessionId };
+  }
+
+  if (payload.action === "apply_materials") {
+     const materialResult = await applyDefaultMaterials(mcpSessionId);
+     mcpSessionId = materialResult.session;
+     return { status: "success", materialResult, mcpSessionId };
+  }
+
+  if (payload.action === "dynamic_edit") {
+    const plan = payload.plan;
+    const toolFetch = await fetchMcpTools(mcpSessionId);
+    mcpSessionId = toolFetch.session;
+    const availableTools = toolFetch.tools;
+    const availableByName = new Map(availableTools.map((tool: any) => [tool.function.name, tool]));
+
+    const availableToolsList = availableTools
+      .filter((tool: any) => !CORE_EDIT_TOOLS.has(tool.function.name))
+      .map((tool: any) => `- ${tool.function.name}: ${tool.function.description}`)
+      .join("\n");
+    const qwenPrompt = `You are a Tool Retrieval Intelligence Layer. Extract extra tool names needed for this BIM edit plan. Plan: ${JSON.stringify(plan)} Available Tools: ${availableToolsList} RULES: Return ONLY a comma-separated list of tool names. If none, reply NONE.`;
+    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus").catch(() => "NONE");
+
+    const needed = new Set<string>(CORE_EDIT_TOOLS);
+    if (extractedRaw && extractedRaw.trim() !== "NONE") {
+      extractedRaw.split(",").map((s) => s.trim()).forEach((name) => {
+        if (name) needed.add(name);
+      });
     }
+    const routedTools = [...needed].map((name) => availableByName.get(name)).filter(Boolean);
 
-    if (payload.action === "build_room") {
-      const room = payload.room || {};
-      const buildRes = await mcpCallTool("build_room", {
-        room_name: room.name,
-        width: room.width || 4,
-        length: room.length || 4,
-        height: payload.storeyHeight || room.height || 3,
-        wall_thickness: room.wall_thickness || 0.2,
-        origin: room.origin || [0, 0, 0],
-        doors: room.doors || [],
-        windows: room.windows || [],
-      }, mcpSessionId);
-      mcpSessionId = buildRes.session;
-      return jsonResponse({ status: "success", result: buildRes, mcpSessionId });
-    }
+    const sceneRes = await mcpCallTool("get_scene_info", {
+      limit: -1,
+      include_bbox: true,
+      include_transform: true,
+      round_decimals: 3,
+    }, mcpSessionId);
+    mcpSessionId = sceneRes.session;
 
-    if (payload.action === "apply_materials") {
-      const materialResult = await applyDefaultMaterials(mcpSessionId);
-      mcpSessionId = materialResult.session;
-      return jsonResponse({ status: "success", materialResult, mcpSessionId });
-    }
+    const overviewRes = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId).catch(() => null);
+    if (overviewRes) mcpSessionId = overviewRes.session;
 
-    if (payload.action === "dynamic_edit") {
-      const plan = payload.plan;
-      const toolFetch = await fetchMcpTools(mcpSessionId);
-      mcpSessionId = toolFetch.session;
-      const availableTools = toolFetch.tools;
-      const availableByName = new Map(availableTools.map((tool: any) => [tool.function.name, tool]));
-
-      const availableToolsList = availableTools
-        .filter((tool: any) => !CORE_EDIT_TOOLS.has(tool.function.name))
-        .map((tool: any) => `- ${tool.function.name}: ${tool.function.description}`)
-        .join("\n");
-      const qwenPrompt = `You are a Tool Retrieval Intelligence Layer. Extract extra tool names needed for this BIM edit plan. Plan: ${JSON.stringify(plan)} Available Tools: ${availableToolsList} RULES: Return ONLY a comma-separated list of tool names. If none, reply NONE.`;
-      const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus").catch(() => "NONE");
-
-      const needed = new Set<string>(CORE_EDIT_TOOLS);
-      if (extractedRaw && extractedRaw.trim() !== "NONE") {
-        extractedRaw.split(",").map((s) => s.trim()).forEach((name) => {
-          if (name) needed.add(name);
-        });
-      }
-      const routedTools = [...needed].map((name) => availableByName.get(name)).filter(Boolean);
-
-      const sceneRes = await mcpCallTool("get_scene_info", {
-        limit: -1,
-        include_bbox: true,
-        include_transform: true,
-        round_decimals: 3,
-      }, mcpSessionId);
-      mcpSessionId = sceneRes.session;
-
-      const overviewRes = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId).catch(() => null as unknown as McpCall | null);
-      if (overviewRes) mcpSessionId = overviewRes.session;
-
-      const glmPrompt = `You are the BIM Executor for an existing IFC model.
+    const glmPrompt = `You are the BIM Executor for an existing IFC model.
 You must perform real model mutations with the provided tools, then the system will export the IFC.
 Rules:
 1. Use exact GlobalId values from Current IFC Scene State. Never invent GUIDs.
@@ -278,7 +275,7 @@ Rules:
 5. If adding or moving doors/windows, keep openings on valid walls, away from corners, and do not overlap other openings.
 6. Output only tool calls. No prose.`;
 
-      const basePlanData = `Instructions: ${JSON.stringify(plan)}
+    const basePlanData = `Instructions: ${JSON.stringify(plan)}
 
 Current IFC Scene State:
 ${sceneRes.resultText}
@@ -286,69 +283,79 @@ ${sceneRes.resultText}
 IFC Overview:
 ${overviewRes?.resultText || "Unavailable"}`;
 
-      let ifc_url = "";
-      let executionError = "";
-      let executedMutation = false;
-      const executedTools: string[] = [];
+    let ifc_url = "";
+    let executionError = "";
+    let executedMutation = false;
+    const executedTools: string[] = [];
 
-      for (let tryNum = 1; tryNum <= 3; tryNum++) {
-        let currentPlanData = basePlanData;
-        if (executionError) {
-          currentPlanData += `\n\nPREVIOUS EXECUTION FAILED:\n${executionError}\nRetry with concrete mutation tool calls.`;
-          executionError = "";
-        }
-
-        const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.7-plus");
-        const toolCalls = glmMsg.tool_calls || [];
-        if (toolCalls.length === 0) {
-          executionError = "No tool calls were produced.";
-          if (tryNum === 3) throw new Error(executionError);
-          continue;
-        }
-
-        try {
-          for (const call of toolCalls) {
-            const toolName = call.function.name;
-            const args = JSON.parse(call.function.arguments || "{}");
-            const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
-            mcpSessionId = toolRes.session;
-            executedTools.push(toolName);
-
-            if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
-              executedMutation = true;
-            }
-          }
-
-          if (!executedMutation) {
-            throw new Error("The model was not edited because no mutation tool was executed.");
-          }
-          break;
-        } catch (err) {
-          executionError = err instanceof Error ? err.message : String(err);
-          if (tryNum === 3) throw err;
-        }
+    for (let tryNum = 1; tryNum <= 3; tryNum++) {
+      let currentPlanData = basePlanData;
+      if (executionError) {
+        currentPlanData += `\n\nPREVIOUS EXECUTION FAILED:\n${executionError}\nRetry with concrete mutation tool calls.`;
+        executionError = "";
       }
 
-      const exported = await exportWithMaterials(mcpSessionId);
-      ifc_url = exported.ifc_url;
-      mcpSessionId = exported.mcpSessionId;
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.7-plus");
+      const toolCalls = glmMsg.tool_calls || [];
+      if (toolCalls.length === 0) {
+        executionError = "No tool calls were produced.";
+        if (tryNum === 3) throw new Error(executionError);
+        continue;
+      }
 
-      return jsonResponse({
-        status: "success",
-        ifc_url,
-        mcpSessionId,
-        executedTools,
-        materialResult: exported.materialResult,
-      });
+      try {
+        for (const call of toolCalls) {
+          const toolName = call.function.name;
+          const args = JSON.parse(call.function.arguments || "{}");
+          const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
+          mcpSessionId = toolRes.session;
+          executedTools.push(toolName);
+
+          if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
+            executedMutation = true;
+          }
+        }
+
+        if (!executedMutation) {
+          throw new Error("The model was not edited because no mutation tool was executed.");
+        }
+        break;
+      } catch (err: any) {
+        executionError = err.message || String(err);
+        if (tryNum === 3) throw err;
+      }
     }
 
-    if (payload.action === "export") {
-      const exported = await exportWithMaterials(mcpSessionId);
-      return jsonResponse({ status: "success", ...exported });
-    }
+    const exported = await exportWithMaterials(mcpSessionId);
+    ifc_url = exported.ifc_url;
+    mcpSessionId = exported.mcpSessionId;
 
-    return jsonResponse({ error: "Invalid action" }, 400);
-  } catch (err) {
-    return jsonResponse({ error: String(err) }, 500);
+    return {
+      status: "success",
+      ifc_url,
+      mcpSessionId,
+      executedTools,
+      materialResult: exported.materialResult,
+    };
   }
-});
+
+  if (payload.action === "export") {
+    const exported = await exportWithMaterials(mcpSessionId);
+    return { status: "success", ...exported };
+  }
+
+  throw new Error("Invalid action");
+}
+
+if (typeof Deno !== "undefined" && Deno.serve) {
+  Deno.serve(async (req: Request) => {
+    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    try {
+      const payload = await req.json();
+      const result = await handleBim(payload);
+      return jsonResponse(result);
+    } catch (err) {
+      return jsonResponse({ error: String(err) }, 500);
+    }
+  });
+}

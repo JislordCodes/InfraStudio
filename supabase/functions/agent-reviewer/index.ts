@@ -13,19 +13,26 @@ Expected JSON Output:
   "retry_required": boolean
 }`;
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  try {
-    const payload = await req.json();
-    let mcpSessionId = payload.mcpSessionId;
-    if (!mcpSessionId) mcpSessionId = await mcpInit("");
-    const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-    const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true, "qwen3.7-max-2026-06-08");
-    const result = cleanJsonResponse(res);
-    result.mcpSessionId = mcpSessionId;
-    return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
-  }
-});
+export async function handleReviewer(payload: any): Promise<any> {
+  let mcpSessionId = payload.mcpSessionId;
+  if (!mcpSessionId) mcpSessionId = await mcpInit("");
+  const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
+  const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true, "qwen3.7-max-2026-06-08");
+  const result = cleanJsonResponse(res);
+  result.mcpSessionId = mcpSessionId;
+  return result;
+}
+
+if (typeof Deno !== "undefined" && Deno.serve) {
+  Deno.serve(async (req: Request) => {
+    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    try {
+      const payload = await req.json();
+      const result = await handleReviewer(payload);
+      return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
+    }
+  });
+}
 

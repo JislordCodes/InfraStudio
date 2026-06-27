@@ -17,15 +17,21 @@ Expected JSON Output:
   "edit_instructions": ["string"]
 }`;
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  try {
-    const payload = await req.json();
-    const messages = payload.messages || [];
-    const res = await callQwen(systemPrompt, messages, true, "qwen3.7-plus");
-    const result = cleanJsonResponse(res);
-    return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
-  }
-});
+export async function handleInterpreter(payload: any): Promise<any> {
+  const messages = payload.messages || [];
+  const res = await callQwen(systemPrompt, messages, true, "qwen3.7-plus");
+  return cleanJsonResponse(res);
+}
+
+if (typeof Deno !== "undefined" && Deno.serve) {
+  Deno.serve(async (req: Request) => {
+    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    try {
+      const payload = await req.json();
+      const result = await handleInterpreter(payload);
+      return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
+    }
+  });
+}

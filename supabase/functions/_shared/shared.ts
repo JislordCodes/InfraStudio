@@ -141,7 +141,7 @@ async function mintAccessToken(saJson: any): Promise<string> {
 }
 
 export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "qwen-max"): Promise<string> {
-  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   let msgs: any[] = [{ role: "system", content: systemPrompt }];
   if (Array.isArray(userMessage)) {
@@ -166,7 +166,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
 }
 
 export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "glm-5.1"): Promise<any> {
-  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   const msgs = [
     { role: "system", content: systemPrompt },
@@ -189,7 +189,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 }
 
 export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "glm-5.1"): Promise<ReadableStream<Uint8Array>> {
-  const qwenKey = Deno.env.get("QWEN_API_KEY");
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   const msgs = [
     { role: "system", content: systemPrompt },

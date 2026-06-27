@@ -163,18 +163,24 @@ function repairPlan(plan: any): any {
   return plan;
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  try {
-    const brief = await req.json();
-    let promptStr = JSON.stringify(brief);
-    if (brief.reviewHistory) {
-      promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
-    }
-    const res = await callQwen(systemPrompt, promptStr, true, "qwen3.7-max-2026-06-08");
-    const result = repairPlan(cleanJsonResponse(res));
-    return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
+export async function handleArchitect(brief: any): Promise<any> {
+  let promptStr = JSON.stringify(brief);
+  if (brief.reviewHistory) {
+    promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-});
+  const res = await callQwen(systemPrompt, promptStr, true, "qwen3.7-max-2026-06-08");
+  return repairPlan(cleanJsonResponse(res));
+}
+
+if (typeof Deno !== "undefined" && Deno.serve) {
+  Deno.serve(async (req: Request) => {
+    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    try {
+      const brief = await req.json();
+      const result = await handleArchitect(brief);
+      return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
+    }
+  });
+}
