@@ -168,7 +168,7 @@ export async function handleArchitect(brief: any): Promise<any> {
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt, promptStr, true, "qwen3.7-max-2026-06-08");
+  const res = await callQwen(systemPrompt, promptStr, true, "glm-5.1");
   return repairPlan(cleanJsonResponse(res));
 }
 

@@ -383,7 +383,7 @@ Expected JSON Output:
     if (this.context.reviewHistory.length > 0) {
       promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(this.context.reviewHistory)}`;
     }
-    const res = await callQwen(this.systemPrompt, promptStr, true, "qwen3.7-max-2026-06-08");
+    const res = await callQwen(this.systemPrompt, promptStr, true, "glm-5.1");
     return this.cleanJsonResponse(res);
   }
 
@@ -471,7 +471,7 @@ CRITICAL RULES:
            executionError = ""; // Reset for this attempt
        }
        
-       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.7-plus");
+       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
        
        if (glmMsg.tool_calls) {
          try {
@@ -525,7 +525,7 @@ Expected JSON Output:
 
   async run(sceneData: any) {
     this.logger.log(this.name, "Validating geometry and IFC semantics...");
-    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true, "qwen3.7-max-2026-06-08");
+    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true, "glm-5.1");
     return this.cleanJsonResponse(res);
   }
 
