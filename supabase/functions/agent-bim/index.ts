@@ -265,15 +265,22 @@ if buildings:
     const overviewRes = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId).catch(() => null);
     if (overviewRes) mcpSessionId = overviewRes.session;
 
-    const glmPrompt = `You are the BIM Executor for an existing IFC model.
-You must perform real model mutations with the provided tools, then the system will export the IFC.
-Rules:
-1. Use exact GlobalId values from Current IFC Scene State. Never invent GUIDs.
-2. For edits, call at least one mutation tool before export: update_*, create_*, delete_*, build_*, apply_style_to_object, update_style, or execute_ifc_code_tool.
-3. If the user asks for material changes, create a style if needed and apply it to concrete target GUIDs.
-4. If adding new rooms/elements, place them so they do not overlap existing bounding boxes.
-5. If adding or moving doors/windows, keep openings on valid walls, away from corners, and do not overlap other openings.
-6. Output only tool calls. No prose.`;
+    const glmPrompt = `You are the BIM MCP Execution Agent for InfraStudio.
+Your responsibility is to translate deterministic spatial blueprints into native IFC entities by invoking highly specific tools via the Model Context Protocol (MCP).
+
+Execution Directives:
+ 1. Tool Hierarchy: Use the highest-level orchestration tool available for the task (e.g., use build_building, build_floor_plan, or build_room instead of drawing individual walls if building a complete room/floor).
+ 2. Boolean Operations (CRITICAL): When placing doors or windows using individual tools like create_door or create_window, you MUST pass "create_opening": true in the arguments. Failure to do so will result in solid wall geometry covering the door/window.
+ 3. Material Workflow: To apply materials, follow a strict 3-step sequence:
+    Step 1: Create the physical geometry (e.g. build_room or create_wall).
+    Step 2: Invoke create_surface_style (e.g. name="Timber_Finish", color=[0.6, 0.4, 0.2]).
+    Step 3: Invoke apply_style_to_object using the target entity's exact GlobalId (GUID).
+ 4. Complex Geometry & Features: For roofs, use create_roof. For stairs, use create_stairs. For custom shapes, furniture, or complex parametric structures, use create_trimesh_ifc or execute_ifc_code_tool.
+ 5. Edits & Revisions: If responding to a Correction Loop or user edit request, use the EXACT GlobalId (GUID) values from the provided scene state. NEVER invent fake GUIDs.
+
+Strict Restrictions:
+ * You execute; you do not redesign. Follow the spatial coordinates provided by the Architectural Agent exactly.
+ * Output ONLY structured JSON tool calls or valid MCP responses. No prose.`;
 
     const basePlanData = `Instructions: ${JSON.stringify(plan)}
 

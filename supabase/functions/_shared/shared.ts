@@ -156,7 +156,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
       model: model,
       messages: msgs,
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: 8000,
       response_format: jsonMode ? { type: "json_object" } : undefined
     })
   });
@@ -179,7 +179,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
       model: model,
       messages: msgs,
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: 8000,
       tools: tools && tools.length > 0 ? tools : undefined
     })
   });
@@ -202,7 +202,7 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
       model: model,
       messages: msgs,
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: 8000,
       stream: true
     })
   });
@@ -235,5 +235,14 @@ export function cleanJsonResponse(rawStr: string): any {
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
     clean = clean.substring(firstBrace, lastBrace + 1);
   }
-  return JSON.parse(clean);
+
+  // Strip trailing commas before closing brackets or braces
+  clean = clean.replace(/,\s*([\}\]])/g, '$1');
+
+  try {
+    return JSON.parse(clean);
+  } catch (_err) {
+    const sanitized = clean.replace(/[\u0000-\u001F]+/g, " ");
+    return JSON.parse(sanitized);
+  }
 }
