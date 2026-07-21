@@ -237,22 +237,8 @@ if buildings:
     const toolFetch = await fetchMcpTools(mcpSessionId);
     mcpSessionId = toolFetch.session;
     const availableTools = toolFetch.tools;
-    const availableByName = new Map(availableTools.map((tool: any) => [tool.function.name, tool]));
-
-    const availableToolsList = availableTools
-      .filter((tool: any) => !CORE_EDIT_TOOLS.has(tool.function.name))
-      .map((tool: any) => `- ${tool.function.name}: ${tool.function.description}`)
-      .join("\n");
-    const qwenPrompt = `You are a Tool Retrieval Intelligence Layer. Extract extra tool names needed for this BIM edit plan. Plan: ${JSON.stringify(plan)} Available Tools: ${availableToolsList} RULES: Return ONLY a comma-separated list of tool names. If none, reply NONE.`;
-    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus").catch(() => "NONE");
-
-    const needed = new Set<string>(CORE_EDIT_TOOLS);
-    if (extractedRaw && extractedRaw.trim() !== "NONE") {
-      extractedRaw.split(",").map((s) => s.trim()).forEach((name) => {
-        if (name) needed.add(name);
-      });
-    }
-    const routedTools = [...needed].map((name) => availableByName.get(name)).filter(Boolean);
+    // ALWAYS expose 100% of all MCP tools directly to the model
+    const routedTools = availableTools;
 
     const sceneRes = await mcpCallTool("get_scene_info", {
       limit: -1,

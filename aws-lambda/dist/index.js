@@ -25573,39 +25573,6 @@ var MUTATION_TOOLS = /* @__PURE__ */ new Set([
   "update_style",
   "remove_style"
 ]);
-var CORE_EDIT_TOOLS = /* @__PURE__ */ new Set([
-  "export_ifc",
-  "get_scene_info",
-  "get_ifc_scene_overview",
-  "get_object_info",
-  "list_styles",
-  "create_surface_style",
-  "create_pbr_style",
-  "apply_style_to_object",
-  "update_style",
-  "build_room",
-  "build_wall_assembly",
-  "build_floor_plan",
-  "create_wall",
-  "create_two_point_wall",
-  "create_polyline_walls",
-  "update_wall",
-  "create_slab",
-  "update_slab",
-  "create_door",
-  "update_door",
-  "create_window",
-  "update_window",
-  "create_roof",
-  "update_roof",
-  "delete_roof",
-  "create_stairs",
-  "update_stairs",
-  "delete_stairs",
-  "create_trimesh_ifc",
-  "create_mesh_ifc",
-  "execute_ifc_code_tool"
-]);
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -25760,17 +25727,7 @@ if buildings:
     const toolFetch = await fetchMcpTools(mcpSessionId);
     mcpSessionId = toolFetch.session;
     const availableTools = toolFetch.tools;
-    const availableByName = new Map(availableTools.map((tool) => [tool.function.name, tool]));
-    const availableToolsList = availableTools.filter((tool) => !CORE_EDIT_TOOLS.has(tool.function.name)).map((tool) => `- ${tool.function.name}: ${tool.function.description}`).join("\n");
-    const qwenPrompt = `You are a Tool Retrieval Intelligence Layer. Extract extra tool names needed for this BIM edit plan. Plan: ${JSON.stringify(plan)} Available Tools: ${availableToolsList} RULES: Return ONLY a comma-separated list of tool names. If none, reply NONE.`;
-    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus").catch(() => "NONE");
-    const needed = new Set(CORE_EDIT_TOOLS);
-    if (extractedRaw && extractedRaw.trim() !== "NONE") {
-      extractedRaw.split(",").map((s) => s.trim()).forEach((name) => {
-        if (name) needed.add(name);
-      });
-    }
-    const routedTools = [...needed].map((name) => availableByName.get(name)).filter(Boolean);
+    const routedTools = availableTools;
     const sceneRes = await mcpCallTool("get_scene_info", {
       limit: -1,
       include_bbox: true,
