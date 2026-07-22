@@ -25718,12 +25718,33 @@ if buildings:
     return { status: "success", materialResult, mcpSessionId };
   }
   if (payload.action === "create_roof") {
-    const roofType = payload.roof_type || "flat";
+    const rawType = (payload.roof_type || "flat").toUpperCase();
+    let roof_type = "FLAT";
+    if (rawType.includes("GABLE")) roof_type = "GABLE_ROOF";
+    else if (rawType.includes("HIP")) roof_type = "HIP_ROOF";
+    else if (rawType.includes("SHED")) roof_type = "SHED";
+    const bbox = payload.bbox || { minX: 0, minY: 0, maxX: 6, maxY: 6, height: 3 };
+    const overhang = 0.4;
+    const x0 = Number(bbox.minX) - overhang;
+    const x1 = Number(bbox.maxX) + overhang;
+    const y0 = Number(bbox.minY) - overhang;
+    const y1 = Number(bbox.maxY) + overhang;
+    const z = Number(bbox.height || 3);
+    const polyline = [
+      [x0, y0, z],
+      [x1, y0, z],
+      [x1, y1, z],
+      [x0, y1, z]
+    ];
     const buildRes = await mcpCallTool("create_roof", {
-      roof_type: roofType,
-      thickness: 0.3,
-      overhang: 0.4
-    }, mcpSessionId).catch(() => null);
+      polyline,
+      roof_type,
+      angle: roof_type === "GABLE_ROOF" || roof_type === "HIP_ROOF" ? 35 : 0,
+      thickness: 0.3
+    }, mcpSessionId).catch((err) => {
+      console.error("create_roof execution error:", err);
+      return null;
+    });
     if (buildRes) mcpSessionId = buildRes.session;
     return { status: "success", mcpSessionId };
   }

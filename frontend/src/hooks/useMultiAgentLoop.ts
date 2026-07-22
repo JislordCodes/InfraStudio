@@ -85,9 +85,30 @@ export async function runMultiAgentLoop(
         }
       }
       
-      if (plan.roof_type && plan.roof_type !== "none") {
-        pushStep(`BIM Agent: Creating ${plan.roof_type} roof...`);
-        bimRes = await callEdge('agent-bim', { action: 'create_roof', roof_type: plan.roof_type, mcpSessionId: sessionId });
+      const roofTypeRequested = plan.roof_type || (plan.special_elements?.find((e: string) => /roof|gable|hip|flat/i.test(e)));
+      if (roofTypeRequested && roofTypeRequested !== "none") {
+        pushStep(`BIM Agent: Creating ${roofTypeRequested} roof...`);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxHeight = 3;
+        for (const storey of plan.storey_plans || []) {
+          maxHeight = Math.max(maxHeight, storey.height || 3);
+          for (const r of storey.rooms || []) {
+            const [ox, oy] = r.origin || [0, 0, 0];
+            const w = r.width || 4;
+            const l = r.length || 4;
+            minX = Math.min(minX, ox);
+            minY = Math.min(minY, oy);
+            maxX = Math.max(maxX, ox + w);
+            maxY = Math.max(maxY, oy + l);
+          }
+        }
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 6; maxY = 6; }
+
+        bimRes = await callEdge('agent-bim', {
+          action: 'create_roof',
+          roof_type: roofTypeRequested,
+          bbox: { minX, minY, maxX, maxY, height: maxHeight },
+          mcpSessionId: sessionId
+        });
         if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
       }
 
