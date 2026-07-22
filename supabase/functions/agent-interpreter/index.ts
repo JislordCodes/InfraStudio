@@ -31,7 +31,7 @@ Expected JSON Schema:
 
 export async function handleInterpreter(payload: any): Promise<any> {
   const messages = payload.messages || [];
-  const res = await callQwen(systemPrompt, messages, true, "qwen3.7-plus");
+  const res = await callQwen(systemPrompt, messages, true, "qwen-plus");
   return cleanJsonResponse(res);
 }
 

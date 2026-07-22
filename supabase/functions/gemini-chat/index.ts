@@ -344,7 +344,7 @@ Expected JSON Schema:
 
   async run(messages: any[]) {
     this.logger.log(this.name, "Extracting requirements and analyzing conversation history...");
-    const res = await callQwen(this.systemPrompt, messages, true, "qwen3.7-plus");
+    const res = await callQwen(this.systemPrompt, messages, true, "qwen-plus");
     return this.cleanJsonResponse(res);
   }
 
@@ -448,7 +448,7 @@ Expected JSON Schema:
     if (this.context.reviewHistory.length > 0) {
       promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(this.context.reviewHistory)}`;
     }
-    const res = await callQwen(this.systemPrompt, promptStr, true, "glm-5.1");
+    const res = await callQwen(this.systemPrompt, promptStr, true, "qwen-plus");
     return this.cleanJsonResponse(res);
   }
 
@@ -500,7 +500,7 @@ Available Tools:
 ${availableToolsList}
 RULES: Return ONLY a comma-separated list of tool names. If none, reply "NONE".`;
 
-    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen3.7-plus");
+    const extractedRaw = await callQwen(qwenPrompt, "Extract tools", false, "qwen-plus");
     const needed = new Set<string>(ALWAYS_EXPOSED);
     if (extractedRaw && extractedRaw.trim() !== "NONE") {
       extractedRaw.split(",").map(s => s.trim()).forEach(name => { if (name) needed.add(name); });
@@ -536,7 +536,7 @@ CRITICAL RULES:
            executionError = ""; // Reset for this attempt
        }
        
-       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
+       const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen-plus");
        
        if (glmMsg.tool_calls) {
          try {
@@ -590,7 +590,7 @@ Expected JSON Output:
 
   async run(sceneData: any) {
     this.logger.log(this.name, "Validating geometry and IFC semantics...");
-    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true, "glm-5.1");
+    const res = await callQwen(this.systemPrompt, JSON.stringify(sceneData), true, "qwen-plus");
     return this.cleanJsonResponse(res);
   }
 

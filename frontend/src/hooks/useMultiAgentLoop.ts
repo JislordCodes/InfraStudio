@@ -51,7 +51,7 @@ export async function runMultiAgentLoop(
   try {
     // 1. Interpreter
     pushStep("Interpreter Agent: Processing request...");
-    const brief = await callEdge('agent-interpreter', { messages });
+    const brief = await callEdge('agent-interpreter', { messages, sessionId });
     
     // 2. Architect
     pushStep("Architectural Agent: Planning layout...");

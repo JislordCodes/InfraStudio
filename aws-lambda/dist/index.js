@@ -25281,7 +25281,7 @@ Expected JSON Schema:
 }`;
 async function handleInterpreter(payload) {
   const messages = payload.messages || [];
-  const res = await callQwen(systemPrompt, messages, true, "qwen3.7-plus");
+  const res = await callQwen(systemPrompt, messages, true, "qwen-plus");
   return cleanJsonResponse(res);
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
@@ -25299,25 +25299,30 @@ if (typeof Deno !== "undefined" && Deno.serve) {
 
 // ../supabase/functions/agent-architect/index.ts
 var systemPrompt2 = `You are the Architectural Reasoning Agent for InfraStudio.
-Your mission is to transform a structured architectural brief into a spatially coherent, mathematically sound topological layout. You act as the "thinking" brain of the pipeline.
+Your mission is to transform a structured architectural brief into a fast, spatially coherent, mathematically sound 2D grid layout.
 
-Spatial Axioms & Laws:
- * Rooms must be adjacent non-overlapping rectangles aligned to a clean 2D coordinate grid (origin [x, y, z]).
- * Every defined room MUST have at least one door connecting to a circulation space (Living Room, Corridor, Entry) or an adjacent valid room.
- * MAIN ENTRY: The building MUST have at least one entry door on an exterior wall (usually south or north of the Entry/Living room) leading to the outside world.
- * CIRCULATION: Bathrooms and bedrooms must connect via a central circulation space (Living Room/Corridor/Entry), NEVER through each other.
- * WINDOW PLACEMENT: Windows MUST ONLY be placed on EXTERIOR walls (walls that do not touch any adjacent room).
- * EDGE OFFSETS: Keep all door and window openings at least 0.45m away from wall vertices/corners.
- * OPENING SIZES: Entry doors = 1.0m width, Interior doors = 0.9m width, Bathroom doors = 0.8m width. Living windows = 1.8m width, Bedroom windows = 1.5m width, Bathroom windows = 0.6m width. Standard door height = 2.1m. Standard window sill height = 0.9m, height = 1.2m.
- * Wall names use cardinal directions: "south", "east", "north", "west" relative to the room's local origin. "offset" is the distance in meters from the start of the wall.
-
-Workflow:
- 1. Calculate the bounding box coordinates for all requested rooms.
- 2. Ensure circulation paths are logical (e.g., bedrooms do not connect through bathrooms).
- 3. If "is_edit": true is passed from the Interpreter, focus ONLY on the spatial logic required for the modification.
+Spatial Axioms & Rules:
+ 1. 2D GRID LAYOUT: Arrange rooms as adjacent, non-overlapping rectangles starting from local origin [0,0,0].
+    - Master Bedroom / Bedroom 1: e.g. origin [0,0,0], width 4.5, length 3.5
+    - Bedroom 2: e.g. origin [4.5,0,0], width 4.0, length 3.5
+    - Living Room / Corridor: e.g. origin [0,3.5,0], width 8.5, length 4.5 (acting as central circulation hub)
+    - Kitchen: e.g. origin [0,8.0,0], width 4.0, length 3.0
+    - Bathroom: e.g. origin [4.0,8.0,0], width 3.0, length 2.5
+    - Entry: e.g. origin [7.0,8.0,0], width 1.5, length 2.5
+ 2. DOORS (CRITICAL):
+    - EVERY room MUST have at least one door connecting to a central circulation space (Living Room, Corridor, or Entry).
+    - MAIN ENTRY: The Entry or Living Room MUST have an exterior door (e.g. wall="south", offset=1.0, width=1.0) opening to the outside world.
+    - Bathroom and Bedroom doors connect to the Corridor/Living Room, NEVER into each other.
+    - Door offset must be between 0.45m and (wall_length - width - 0.45m).
+ 3. WINDOWS (CRITICAL):
+    - Windows MUST ONLY be placed on EXTERIOR walls (walls not shared with any adjacent room).
+    - Never place windows on internal partition walls between rooms.
+ 4. MATERIALS:
+    - Always include material_palette with realistic finishes: wall, floor, door, window_glass, roof_or_ceiling.
+ 5. EDITS:
+    - If is_edit=true, set storey_plans=[] and describe the specific edit actions in structural_notes.
 
 Strict Restrictions:
- * You MUST NOT generate IFC code or call external tools.
  * Return ONLY raw JSON matching the schema below. No markdown codeblocks or prose.
 
 Expected JSON Schema:
@@ -25362,26 +25367,7 @@ Expected JSON Schema:
       ]
     }
   ],
-  "walls": [
-    {
-      "id": "string",
-      "start_pt": [number, number],
-      "end_pt": [number, number],
-      "thickness": number
-    }
-  ],
-  "openings": [
-    {
-      "host_wall_id": "string",
-      "type": "door|window",
-      "offset_from_start": number,
-      "width": number
-    }
-  ],
-  "adjacency_graph": ["string"],
-  "circulation_paths": ["string"],
-  "structural_notes": ["string"],
-  "design_rationale": "string"
+  "structural_notes": ["string"]
 }`;
 var WALLS = ["south", "east", "north", "west"];
 function wallLength(room, wall) {
@@ -25483,7 +25469,7 @@ async function handleArchitect(brief) {
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt2, promptStr, true, "glm-5.1");
+  const res = await callQwen(systemPrompt2, promptStr, true, "qwen-plus");
   return repairPlan(cleanJsonResponse(res));
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
@@ -25525,7 +25511,7 @@ async function handleReviewer(payload) {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "glm-5.1");
+  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "qwen-plus");
   const result = cleanJsonResponse(res);
   result.mcpSessionId = mcpSessionId;
   return result;
@@ -25738,21 +25724,16 @@ if buildings:
     const overviewRes = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId).catch(() => null);
     if (overviewRes) mcpSessionId = overviewRes.session;
     const glmPrompt = `You are the BIM MCP Execution Agent for InfraStudio.
-Your responsibility is to translate deterministic spatial blueprints into native IFC entities by invoking highly specific tools via the Model Context Protocol (MCP).
+Your sole job is to call real MCP tools to perform the requested edit or creation on the active IFC model.
 
-Execution Directives:
- 1. Tool Hierarchy: Use the highest-level orchestration tool available for the task (e.g., use build_building, build_floor_plan, or build_room instead of drawing individual walls if building a complete room/floor).
- 2. Boolean Operations (CRITICAL): When placing doors or windows using individual tools like create_door or create_window, you MUST pass "create_opening": true in the arguments. Failure to do so will result in solid wall geometry covering the door/window.
- 3. Material Workflow: To apply materials, follow a strict 3-step sequence:
-    Step 1: Create the physical geometry (e.g. build_room or create_wall).
-    Step 2: Invoke create_surface_style (e.g. name="Timber_Finish", color=[0.6, 0.4, 0.2]).
-    Step 3: Invoke apply_style_to_object using the target entity's exact GlobalId (GUID).
- 4. Complex Geometry & Features: For roofs, use create_roof. For stairs, use create_stairs. For custom shapes, furniture, or complex parametric structures, use create_trimesh_ifc or execute_ifc_code_tool.
- 5. Edits & Revisions: If responding to a Correction Loop or user edit request, use the EXACT GlobalId (GUID) values from the provided scene state. NEVER invent fake GUIDs.
-
-Strict Restrictions:
- * You execute; you do not redesign. Follow the spatial coordinates provided by the Architectural Agent exactly.
- * Output ONLY structured JSON tool calls or valid MCP responses. No prose.`;
+Rules for Edits:
+ 1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
+ 2. To add a door or window: Call create_door or create_window, setting wall_guid to the target wall's GlobalId, and ALWAYS set "create_opening": true.
+ 3. To change materials: Call create_surface_style or create_pbr_style, then call apply_style_to_object with the target entity's GlobalId.
+ 4. To add a roof: Call create_roof on the top storey or host walls.
+ 5. To add stairs: Call create_stairs between storeys.
+ 6. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
+ 7. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
     const basePlanData = `Instructions: ${JSON.stringify(plan)}
 
 Current IFC Scene State:
@@ -25774,7 +25755,7 @@ ${executionError}
 Retry with concrete mutation tool calls.`;
         executionError = "";
       }
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen-plus");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

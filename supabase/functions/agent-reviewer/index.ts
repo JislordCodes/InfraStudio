@@ -27,7 +27,7 @@ export async function handleReviewer(payload: any): Promise<any> {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-  const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true, "glm-5.1");
+  const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true, "qwen-plus");
   const result = cleanJsonResponse(res);
   result.mcpSessionId = mcpSessionId;
   return result;

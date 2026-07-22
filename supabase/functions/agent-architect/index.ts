@@ -2,25 +2,30 @@
 import { CORS, callQwen, cleanJsonResponse } from "../_shared/shared.ts";
 
 const systemPrompt = `You are the Architectural Reasoning Agent for InfraStudio.
-Your mission is to transform a structured architectural brief into a spatially coherent, mathematically sound topological layout. You act as the "thinking" brain of the pipeline.
+Your mission is to transform a structured architectural brief into a fast, spatially coherent, mathematically sound 2D grid layout.
 
-Spatial Axioms & Laws:
- * Rooms must be adjacent non-overlapping rectangles aligned to a clean 2D coordinate grid (origin [x, y, z]).
- * Every defined room MUST have at least one door connecting to a circulation space (Living Room, Corridor, Entry) or an adjacent valid room.
- * MAIN ENTRY: The building MUST have at least one entry door on an exterior wall (usually south or north of the Entry/Living room) leading to the outside world.
- * CIRCULATION: Bathrooms and bedrooms must connect via a central circulation space (Living Room/Corridor/Entry), NEVER through each other.
- * WINDOW PLACEMENT: Windows MUST ONLY be placed on EXTERIOR walls (walls that do not touch any adjacent room).
- * EDGE OFFSETS: Keep all door and window openings at least 0.45m away from wall vertices/corners.
- * OPENING SIZES: Entry doors = 1.0m width, Interior doors = 0.9m width, Bathroom doors = 0.8m width. Living windows = 1.8m width, Bedroom windows = 1.5m width, Bathroom windows = 0.6m width. Standard door height = 2.1m. Standard window sill height = 0.9m, height = 1.2m.
- * Wall names use cardinal directions: "south", "east", "north", "west" relative to the room's local origin. "offset" is the distance in meters from the start of the wall.
-
-Workflow:
- 1. Calculate the bounding box coordinates for all requested rooms.
- 2. Ensure circulation paths are logical (e.g., bedrooms do not connect through bathrooms).
- 3. If "is_edit": true is passed from the Interpreter, focus ONLY on the spatial logic required for the modification.
+Spatial Axioms & Rules:
+ 1. 2D GRID LAYOUT: Arrange rooms as adjacent, non-overlapping rectangles starting from local origin [0,0,0].
+    - Master Bedroom / Bedroom 1: e.g. origin [0,0,0], width 4.5, length 3.5
+    - Bedroom 2: e.g. origin [4.5,0,0], width 4.0, length 3.5
+    - Living Room / Corridor: e.g. origin [0,3.5,0], width 8.5, length 4.5 (acting as central circulation hub)
+    - Kitchen: e.g. origin [0,8.0,0], width 4.0, length 3.0
+    - Bathroom: e.g. origin [4.0,8.0,0], width 3.0, length 2.5
+    - Entry: e.g. origin [7.0,8.0,0], width 1.5, length 2.5
+ 2. DOORS (CRITICAL):
+    - EVERY room MUST have at least one door connecting to a central circulation space (Living Room, Corridor, or Entry).
+    - MAIN ENTRY: The Entry or Living Room MUST have an exterior door (e.g. wall="south", offset=1.0, width=1.0) opening to the outside world.
+    - Bathroom and Bedroom doors connect to the Corridor/Living Room, NEVER into each other.
+    - Door offset must be between 0.45m and (wall_length - width - 0.45m).
+ 3. WINDOWS (CRITICAL):
+    - Windows MUST ONLY be placed on EXTERIOR walls (walls not shared with any adjacent room).
+    - Never place windows on internal partition walls between rooms.
+ 4. MATERIALS:
+    - Always include material_palette with realistic finishes: wall, floor, door, window_glass, roof_or_ceiling.
+ 5. EDITS:
+    - If is_edit=true, set storey_plans=[] and describe the specific edit actions in structural_notes.
 
 Strict Restrictions:
- * You MUST NOT generate IFC code or call external tools.
  * Return ONLY raw JSON matching the schema below. No markdown codeblocks or prose.
 
 Expected JSON Schema:
@@ -65,26 +70,7 @@ Expected JSON Schema:
       ]
     }
   ],
-  "walls": [
-    {
-      "id": "string",
-      "start_pt": [number, number],
-      "end_pt": [number, number],
-      "thickness": number
-    }
-  ],
-  "openings": [
-    {
-      "host_wall_id": "string",
-      "type": "door|window",
-      "offset_from_start": number,
-      "width": number
-    }
-  ],
-  "adjacency_graph": ["string"],
-  "circulation_paths": ["string"],
-  "structural_notes": ["string"],
-  "design_rationale": "string"
+  "structural_notes": ["string"]
 }`;
 
 type Opening = { wall?: string; offset?: number; width?: number; height?: number; sill_height?: number; operation_type?: string };
@@ -212,7 +198,7 @@ export async function handleArchitect(brief: any): Promise<any> {
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt, promptStr, true, "glm-5.1");
+  const res = await callQwen(systemPrompt, promptStr, true, "qwen-plus");
   return repairPlan(cleanJsonResponse(res));
 }
 

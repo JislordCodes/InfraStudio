@@ -252,21 +252,16 @@ if buildings:
     if (overviewRes) mcpSessionId = overviewRes.session;
 
     const glmPrompt = `You are the BIM MCP Execution Agent for InfraStudio.
-Your responsibility is to translate deterministic spatial blueprints into native IFC entities by invoking highly specific tools via the Model Context Protocol (MCP).
+Your sole job is to call real MCP tools to perform the requested edit or creation on the active IFC model.
 
-Execution Directives:
- 1. Tool Hierarchy: Use the highest-level orchestration tool available for the task (e.g., use build_building, build_floor_plan, or build_room instead of drawing individual walls if building a complete room/floor).
- 2. Boolean Operations (CRITICAL): When placing doors or windows using individual tools like create_door or create_window, you MUST pass "create_opening": true in the arguments. Failure to do so will result in solid wall geometry covering the door/window.
- 3. Material Workflow: To apply materials, follow a strict 3-step sequence:
-    Step 1: Create the physical geometry (e.g. build_room or create_wall).
-    Step 2: Invoke create_surface_style (e.g. name="Timber_Finish", color=[0.6, 0.4, 0.2]).
-    Step 3: Invoke apply_style_to_object using the target entity's exact GlobalId (GUID).
- 4. Complex Geometry & Features: For roofs, use create_roof. For stairs, use create_stairs. For custom shapes, furniture, or complex parametric structures, use create_trimesh_ifc or execute_ifc_code_tool.
- 5. Edits & Revisions: If responding to a Correction Loop or user edit request, use the EXACT GlobalId (GUID) values from the provided scene state. NEVER invent fake GUIDs.
-
-Strict Restrictions:
- * You execute; you do not redesign. Follow the spatial coordinates provided by the Architectural Agent exactly.
- * Output ONLY structured JSON tool calls or valid MCP responses. No prose.`;
+Rules for Edits:
+ 1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
+ 2. To add a door or window: Call create_door or create_window, setting wall_guid to the target wall's GlobalId, and ALWAYS set "create_opening": true.
+ 3. To change materials: Call create_surface_style or create_pbr_style, then call apply_style_to_object with the target entity's GlobalId.
+ 4. To add a roof: Call create_roof on the top storey or host walls.
+ 5. To add stairs: Call create_stairs between storeys.
+ 6. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
+ 7. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
 
     const basePlanData = `Instructions: ${JSON.stringify(plan)}
 
@@ -288,7 +283,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen-plus");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";
