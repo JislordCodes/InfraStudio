@@ -232,6 +232,17 @@ if buildings:
      return { status: "success", materialResult, mcpSessionId };
   }
 
+  if (payload.action === "create_roof") {
+    const roofType = payload.roof_type || "flat";
+    const buildRes = await mcpCallTool("create_roof", {
+      roof_type: roofType,
+      thickness: 0.3,
+      overhang: 0.4
+    }, mcpSessionId).catch(() => null);
+    if (buildRes) mcpSessionId = buildRes.session;
+    return { status: "success", mcpSessionId };
+  }
+
   if (payload.action === "dynamic_edit") {
     const plan = payload.plan;
     const toolFetch = await fetchMcpTools(mcpSessionId);
@@ -283,7 +294,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen-plus");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

@@ -25253,17 +25253,17 @@ function cleanJsonResponse(rawStr) {
 
 // ../supabase/functions/agent-interpreter/index.ts
 var systemPrompt = `You are the Interpreter Agent for InfraStudio.
-Your sole responsibility is to convert vague natural-language user intent into a structured, machine-readable architectural brief.
+Your sole responsibility is to convert natural-language user intent into a complete, machine-readable architectural brief.
 
 Core Directives:
- 1. Analyze the conversation history to determine if the user is requesting a completely NEW building, or asking to EDIT/CHANGE an existing model state. If editing, set "is_edit": true and summarize changes in "edit_instructions".
- 2. Extract and normalize all dimensional constraints and room typologies.
- 3. Preserve material intent. If the user requests specific finishes (e.g., timber, concrete, glass, brick, plaster, tile), capture these in "style_preferences" and "material_requirements".
- 4. Identify ambiguities. If a request is physically impossible or underspecified, note it in "clarifications_needed" and estimate a "confidence_score" between 0.0 and 1.0.
+ 1. EDIT vs NEW: Determine if the user is asking to EDIT/MODIFY an existing building, or build a completely NEW building. If modifying an active session or making an edit, set "is_edit": true and list explicit steps in "edit_instructions".
+ 2. ROOM TYPOLOGIES: Extract ALL requested rooms (bedrooms, bathrooms, living room, kitchen, dining, study, hallway, entry, garage, balcony, terrace, utility).
+ 3. SPECIAL FEATURES (CRITICAL): Capture all structural features mentioned by the user (e.g. roof type: gable/flat/hip, stairs, balcony, pool, porch, columns) in "special_features".
+ 4. MATERIALS & FINISHES (CRITICAL): Capture all material requests (e.g. brick walls, timber floor, glass windows, concrete slab, wooden doors) in "material_requirements" and "style_preferences".
 
 Strict Restrictions:
- * You MUST NOT generate geometry, calculate coordinates, or invoke BIM/MCP tools.
- * Return ONLY raw JSON matching the exact schema below. No markdown formatting or conversational prose.
+ * You MUST NOT generate geometry or invoke BIM/MCP tools.
+ * Return ONLY raw JSON matching the exact schema below.
 
 Expected JSON Schema:
 {
@@ -25272,16 +25272,19 @@ Expected JSON Schema:
   "project_type": "string",
   "storeys": [{"name": "string", "elevation": number, "height": number}],
   "room_requirements": [{"name": "string", "suggested_area": number}],
-  "constraints": ["string"],
-  "style_preferences": ["string"],
+  "special_features": ["string"],
   "material_requirements": ["string"],
-  "assumptions": ["string"],
-  "clarifications_needed": ["string"],
+  "style_preferences": ["string"],
+  "constraints": ["string"],
   "confidence_score": number
 }`;
 async function handleInterpreter(payload) {
   const messages = payload.messages || [];
-  const res = await callQwen(systemPrompt, messages, true, "qwen-plus");
+  let userPrompt = messages;
+  if (payload.sessionId) {
+    userPrompt = [...messages, { role: "system", content: `ACTIVE_MODEL_SESSION_EXISTS: session_id=${payload.sessionId}. Determine if current user message is an edit or addition.` }];
+  }
+  const res = await callQwen(systemPrompt, userPrompt, true, "glm-5.1");
   return cleanJsonResponse(res);
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
@@ -25299,35 +25302,33 @@ if (typeof Deno !== "undefined" && Deno.serve) {
 
 // ../supabase/functions/agent-architect/index.ts
 var systemPrompt2 = `You are the Architectural Reasoning Agent for InfraStudio.
-Your mission is to transform a structured architectural brief into a fast, spatially coherent, mathematically sound 2D grid layout.
+Your mission is to transform a structured architectural brief into a complete, spatially coherent, mathematically sound layout or edit plan.
 
 Spatial Axioms & Rules:
- 1. 2D GRID LAYOUT: Arrange rooms as adjacent, non-overlapping rectangles starting from local origin [0,0,0].
-    - Master Bedroom / Bedroom 1: e.g. origin [0,0,0], width 4.5, length 3.5
-    - Bedroom 2: e.g. origin [4.5,0,0], width 4.0, length 3.5
-    - Living Room / Corridor: e.g. origin [0,3.5,0], width 8.5, length 4.5 (acting as central circulation hub)
-    - Kitchen: e.g. origin [0,8.0,0], width 4.0, length 3.0
-    - Bathroom: e.g. origin [4.0,8.0,0], width 3.0, length 2.5
-    - Entry: e.g. origin [7.0,8.0,0], width 1.5, length 2.5
- 2. DOORS (CRITICAL):
-    - EVERY room MUST have at least one door connecting to a central circulation space (Living Room, Corridor, or Entry).
-    - MAIN ENTRY: The Entry or Living Room MUST have an exterior door (e.g. wall="south", offset=1.0, width=1.0) opening to the outside world.
-    - Bathroom and Bedroom doors connect to the Corridor/Living Room, NEVER into each other.
+ 1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (e.g. Bedrooms, Living Room, Kitchen, Bathroom, Corridor, Entry, Balcony, Garage, Utility). Never omit requested rooms.
+ 2. 2D GRID LAYOUT: Arrange rooms as non-overlapping adjacent rectangles starting from origin [0,0,0].
+ 3. DOORS (CRITICAL):
+    - EVERY room MUST have at least one door connecting to a circulation space (Living Room, Corridor, or Entry).
+    - MAIN ENTRY: The Entry/Living Room MUST have an exterior door opening to the outside world.
     - Door offset must be between 0.45m and (wall_length - width - 0.45m).
- 3. WINDOWS (CRITICAL):
-    - Windows MUST ONLY be placed on EXTERIOR walls (walls not shared with any adjacent room).
-    - Never place windows on internal partition walls between rooms.
- 4. MATERIALS:
-    - Always include material_palette with realistic finishes: wall, floor, door, window_glass, roof_or_ceiling.
- 5. EDITS:
-    - If is_edit=true, set storey_plans=[] and describe the specific edit actions in structural_notes.
+ 4. WINDOWS (CRITICAL):
+    - Windows MUST ONLY be placed on EXTERIOR walls. Never place windows on interior partition walls.
+ 5. ROOF & SPECIAL FEATURES:
+    - Set "roof_type": "gable" | "flat" | "hip" based on brief (default "flat" for apartments, "gable" for houses).
+    - Capture any special elements (balcony, stairs, columns, porch) in "special_elements".
+ 6. MATERIALS:
+    - Include material_palette mapping wall, floor, door, window_glass, roof_or_ceiling to requested materials.
+ 7. EDITS & REVISONS:
+    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions" (e.g., [{"action": "create_window", "target": "Bedroom 1", "wall": "east"}, {"action": "create_roof", "type": "gable"}]).
 
 Strict Restrictions:
- * Return ONLY raw JSON matching the schema below. No markdown codeblocks or prose.
+ * Return ONLY raw JSON matching the schema below.
 
 Expected JSON Schema:
 {
   "is_edit": boolean,
+  "roof_type": "flat|gable|hip",
+  "has_stairs": boolean,
   "material_palette": {
     "wall": "string",
     "floor": "string",
@@ -25365,6 +25366,14 @@ Expected JSON Schema:
           ]
         }
       ]
+    }
+  ],
+  "special_elements": ["string"],
+  "target_actions": [
+    {
+      "action": "string",
+      "target": "string",
+      "parameters": {}
     }
   ],
   "structural_notes": ["string"]
@@ -25469,7 +25478,7 @@ async function handleArchitect(brief) {
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt2, promptStr, true, "qwen-plus");
+  const res = await callQwen(systemPrompt2, promptStr, true, "glm-5.1");
   return repairPlan(cleanJsonResponse(res));
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
@@ -25511,7 +25520,7 @@ async function handleReviewer(payload) {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "qwen-plus");
+  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "glm-5.1");
   const result = cleanJsonResponse(res);
   result.mcpSessionId = mcpSessionId;
   return result;
@@ -25708,6 +25717,16 @@ if buildings:
     mcpSessionId = materialResult.session;
     return { status: "success", materialResult, mcpSessionId };
   }
+  if (payload.action === "create_roof") {
+    const roofType = payload.roof_type || "flat";
+    const buildRes = await mcpCallTool("create_roof", {
+      roof_type: roofType,
+      thickness: 0.3,
+      overhang: 0.4
+    }, mcpSessionId).catch(() => null);
+    if (buildRes) mcpSessionId = buildRes.session;
+    return { status: "success", mcpSessionId };
+  }
   if (payload.action === "dynamic_edit") {
     const plan = payload.plan;
     const toolFetch = await fetchMcpTools(mcpSessionId);
@@ -25755,7 +25774,7 @@ ${executionError}
 Retry with concrete mutation tool calls.`;
         executionError = "";
       }
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen-plus");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

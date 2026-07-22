@@ -2,35 +2,33 @@
 import { CORS, callQwen, cleanJsonResponse } from "../_shared/shared.ts";
 
 const systemPrompt = `You are the Architectural Reasoning Agent for InfraStudio.
-Your mission is to transform a structured architectural brief into a fast, spatially coherent, mathematically sound 2D grid layout.
+Your mission is to transform a structured architectural brief into a complete, spatially coherent, mathematically sound layout or edit plan.
 
 Spatial Axioms & Rules:
- 1. 2D GRID LAYOUT: Arrange rooms as adjacent, non-overlapping rectangles starting from local origin [0,0,0].
-    - Master Bedroom / Bedroom 1: e.g. origin [0,0,0], width 4.5, length 3.5
-    - Bedroom 2: e.g. origin [4.5,0,0], width 4.0, length 3.5
-    - Living Room / Corridor: e.g. origin [0,3.5,0], width 8.5, length 4.5 (acting as central circulation hub)
-    - Kitchen: e.g. origin [0,8.0,0], width 4.0, length 3.0
-    - Bathroom: e.g. origin [4.0,8.0,0], width 3.0, length 2.5
-    - Entry: e.g. origin [7.0,8.0,0], width 1.5, length 2.5
- 2. DOORS (CRITICAL):
-    - EVERY room MUST have at least one door connecting to a central circulation space (Living Room, Corridor, or Entry).
-    - MAIN ENTRY: The Entry or Living Room MUST have an exterior door (e.g. wall="south", offset=1.0, width=1.0) opening to the outside world.
-    - Bathroom and Bedroom doors connect to the Corridor/Living Room, NEVER into each other.
+ 1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (e.g. Bedrooms, Living Room, Kitchen, Bathroom, Corridor, Entry, Balcony, Garage, Utility). Never omit requested rooms.
+ 2. 2D GRID LAYOUT: Arrange rooms as non-overlapping adjacent rectangles starting from origin [0,0,0].
+ 3. DOORS (CRITICAL):
+    - EVERY room MUST have at least one door connecting to a circulation space (Living Room, Corridor, or Entry).
+    - MAIN ENTRY: The Entry/Living Room MUST have an exterior door opening to the outside world.
     - Door offset must be between 0.45m and (wall_length - width - 0.45m).
- 3. WINDOWS (CRITICAL):
-    - Windows MUST ONLY be placed on EXTERIOR walls (walls not shared with any adjacent room).
-    - Never place windows on internal partition walls between rooms.
- 4. MATERIALS:
-    - Always include material_palette with realistic finishes: wall, floor, door, window_glass, roof_or_ceiling.
- 5. EDITS:
-    - If is_edit=true, set storey_plans=[] and describe the specific edit actions in structural_notes.
+ 4. WINDOWS (CRITICAL):
+    - Windows MUST ONLY be placed on EXTERIOR walls. Never place windows on interior partition walls.
+ 5. ROOF & SPECIAL FEATURES:
+    - Set "roof_type": "gable" | "flat" | "hip" based on brief (default "flat" for apartments, "gable" for houses).
+    - Capture any special elements (balcony, stairs, columns, porch) in "special_elements".
+ 6. MATERIALS:
+    - Include material_palette mapping wall, floor, door, window_glass, roof_or_ceiling to requested materials.
+ 7. EDITS & REVISONS:
+    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions" (e.g., [{"action": "create_window", "target": "Bedroom 1", "wall": "east"}, {"action": "create_roof", "type": "gable"}]).
 
 Strict Restrictions:
- * Return ONLY raw JSON matching the schema below. No markdown codeblocks or prose.
+ * Return ONLY raw JSON matching the schema below.
 
 Expected JSON Schema:
 {
   "is_edit": boolean,
+  "roof_type": "flat|gable|hip",
+  "has_stairs": boolean,
   "material_palette": {
     "wall": "string",
     "floor": "string",
@@ -68,6 +66,14 @@ Expected JSON Schema:
           ]
         }
       ]
+    }
+  ],
+  "special_elements": ["string"],
+  "target_actions": [
+    {
+      "action": "string",
+      "target": "string",
+      "parameters": {}
     }
   ],
   "structural_notes": ["string"]
@@ -198,7 +204,7 @@ export async function handleArchitect(brief: any): Promise<any> {
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt, promptStr, true, "qwen-plus");
+  const res = await callQwen(systemPrompt, promptStr, true, "glm-5.1");
   return repairPlan(cleanJsonResponse(res));
 }
 

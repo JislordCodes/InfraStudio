@@ -85,7 +85,19 @@ export async function runMultiAgentLoop(
         }
       }
       
-      pushStep("BIM Agent: All rooms built. Exporting IFC...");
+      if (plan.roof_type && plan.roof_type !== "none") {
+        pushStep(`BIM Agent: Creating ${plan.roof_type} roof...`);
+        bimRes = await callEdge('agent-bim', { action: 'create_roof', roof_type: plan.roof_type, mcpSessionId: sessionId });
+        if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
+      }
+
+      if (plan.material_palette) {
+        pushStep("BIM Agent: Applying requested material finishes...");
+        bimRes = await callEdge('agent-bim', { action: 'apply_materials', mcpSessionId: sessionId });
+        if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
+      }
+
+      pushStep("BIM Agent: All elements generated. Exporting IFC...");
       const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
       ifc_url = exportRes.ifc_url;
 
