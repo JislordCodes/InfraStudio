@@ -25706,6 +25706,8 @@ if buildings:
       height: payload.storeyHeight || room.height || 3,
       wall_thickness: room.wall_thickness || 0.2,
       origin: room.origin || [0, 0, 0],
+      floor_slab: true,
+      ceiling_slab: true,
       doors: room.doors || [],
       windows: room.windows || []
     }, mcpSessionId);
