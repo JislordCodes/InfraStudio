@@ -6,7 +6,10 @@ Your mission is to transform a structured architectural brief into a complete, s
 
 Spatial Axioms & Rules:
  1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (e.g. Bedrooms, Living Room, Kitchen, Bathroom, Corridor, Entry, Balcony, Garage, Utility). Never omit requested rooms.
- 2. 2D GRID LAYOUT: Arrange rooms as non-overlapping adjacent rectangles starting from origin [0,0,0].
+ 2. FLUSH GRID LAYOUT (CRITICAL):
+    - Arrange rooms in a clean 2D grid of rows and columns starting from origin [0,0,0].
+    - Adjacent rooms MUST share exact flush boundary lines. If Row 1 ends at Y=5.0m, Row 2 MUST start at Y=5.0m across all columns. If Column 1 ends at X=5.0m, Column 2 MUST start at X=5.0m across all rows.
+    - NEVER leave unbuilt gaps, staggered wall offsets, or narrow dead strips between rooms. All internal walls must form continuous straight grid lines.
  3. DOORS (CRITICAL):
     - EVERY room MUST have at least one door connecting to a circulation space (Living Room, Corridor, or Entry).
     - MAIN ENTRY: The Entry/Living Room MUST have an exterior door opening to the outside world.
@@ -19,10 +22,11 @@ Spatial Axioms & Rules:
  6. MATERIALS:
     - Include material_palette mapping wall, floor, door, window_glass, roof_or_ceiling to requested materials.
  7. EDITS & REVISONS:
-    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions" (e.g., [{"action": "create_window", "target": "Bedroom 1", "wall": "east"}, {"action": "create_roof", "type": "gable"}]).
+    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions".
 
 Strict Restrictions:
  * Return ONLY raw JSON matching the schema below.
+ * CRITICAL: Start your output immediately with '{'. Do NOT wrap JSON in outer keys like "architectural_analysis". Output ONLY root keys: "is_edit", "roof_type", "has_stairs", "material_palette", "storey_plans".
 
 Expected JSON Schema:
 {
@@ -76,6 +80,56 @@ Expected JSON Schema:
       "parameters": {}
     }
   ],
+  "structural_notes": ["string"]
+}`;
+
+const infrastructurePrompt = `You are the Structural Design Agent for InfraStudio.
+Your mission is to transform a structured design brief into a precise component-based construction plan for NON-BUILDING structures (bridges, tunnels, towers, MEP systems, custom geometry).
+
+You must output a JSON plan with components, each specifying:
+- name: descriptive name
+- ifc_class: the IFC class to use (IfcBeam, IfcColumn, IfcSlab, IfcMember, IfcFooting, IfcBuildingElementProxy, IfcPipeSegment, IfcDuctSegment, etc.)
+- geometry_type: "box" | "cylinder" | "sphere" | "custom_trimesh"
+- dimensions: { length, width, height } for box, { radius, height } for cylinder, { radius } for sphere
+- position: [x, y, z] center position in meters
+- rotation: [rx, ry, rz] rotation in degrees (optional, default [0,0,0])
+- material: material description string
+- trimesh_code: (only for geometry_type="custom_trimesh") Python trimesh code. MUST assign result variable. Available: trimesh.primitives.Box, Cylinder, Sphere, Extrusion. Boolean: .union(), .difference(), .intersection(). Transform: .apply_translation([x,y,z]), .apply_transform(matrix).
+
+Spatial Rules:
+ 1. Use a RIGHT-HANDED coordinate system: X=length, Y=width, Z=up.
+ 2. Position components so they connect properly (e.g. bridge piers touch the underside of the deck).
+ 3. Use realistic engineering dimensions (bridge deck thickness ~0.8-1.5m, pier diameter ~1-2m, etc.).
+ 4. For bridges: deck at top, piers below connecting deck to ground (z=0).
+ 5. For MEP: pipes and ducts should connect end-to-end with realistic diameters.
+
+Strict Restrictions:
+ * Return ONLY raw JSON.
+ * Do NOT include rooms, doors, or windows.
+ * Start output immediately with '{'.
+
+Expected JSON Schema:
+{
+  "structure_category": "infrastructure" | "mep" | "custom",
+  "is_edit": false,
+  "structure_name": "string",
+  "components": [
+    {
+      "name": "string",
+      "ifc_class": "string",
+      "geometry_type": "box | cylinder | sphere | custom_trimesh",
+      "dimensions": {},
+      "position": [number, number, number],
+      "rotation": [number, number, number],
+      "material": "string",
+      "trimesh_code": "string (optional)"
+    }
+  ],
+  "material_palette": {
+    "primary": "string",
+    "secondary": "string",
+    "accent": "string"
+  },
   "structural_notes": ["string"]
 }`;
 
@@ -134,8 +188,72 @@ function openingsOverlap(a: Opening, b: Opening): boolean {
   return rangesOverlap(a0, a1, b0, b1);
 }
 
+function alignFloorplanGrid(rooms: Room[]): void {
+  if (!rooms || rooms.length <= 1) return;
+
+  const xCoords: number[] = [];
+  const yCoords: number[] = [];
+
+  for (const r of rooms) {
+    const [x, y] = r.origin || [0, 0, 0];
+    const w = Number(r.width || 4);
+    const l = Number(r.length || 4);
+    xCoords.push(x, x + w);
+    yCoords.push(y, y + l);
+  }
+
+  xCoords.sort((a, b) => a - b);
+  yCoords.sort((a, b) => a - b);
+
+  const clusterMap = (coords: number[], tolerance = 1.2) => {
+    const map = new Map<number, number>();
+    for (const c of coords) {
+      let matchedTarget: number | null = null;
+      for (const target of map.values()) {
+        if (Math.abs(c - target) <= tolerance) {
+          matchedTarget = target;
+          break;
+        }
+      }
+      if (matchedTarget !== null) {
+        map.set(c, matchedTarget);
+      } else {
+        map.set(c, c);
+      }
+    }
+    return map;
+  };
+
+  const xMap = clusterMap(xCoords, 1.2);
+  const yMap = clusterMap(yCoords, 1.2);
+
+  for (const r of rooms) {
+    const [x, y, z] = r.origin || [0, 0, 0];
+    const w = Number(r.width || 4);
+    const l = Number(r.length || 4);
+
+    const snappedX = xMap.get(x) ?? x;
+    const snappedRightX = xMap.get(x + w) ?? (x + w);
+    const snappedY = yMap.get(y) ?? y;
+    const snappedTopY = yMap.get(y + l) ?? (y + l);
+
+    r.origin = [Number(snappedX.toFixed(2)), Number(snappedY.toFixed(2)), z];
+    r.width = Math.max(2.2, Number((snappedRightX - snappedX).toFixed(2)));
+    r.length = Math.max(2.2, Number((snappedTopY - snappedY).toFixed(2)));
+  }
+}
+
 function repairPlan(plan: any): any {
-  if (!plan || plan.is_edit) return plan;
+  if (!plan) return {};
+  if (typeof plan === "object") {
+    for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
+      if (plan[key] && typeof plan[key] === "object") {
+        plan = { ...plan[key], ...plan };
+      }
+    }
+  }
+
+  if (plan.is_edit) return plan;
 
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
     plan.storey_plans = [
@@ -157,6 +275,7 @@ function repairPlan(plan: any): any {
     }
 
     const rooms: Room[] = Array.isArray(storey.rooms) ? storey.rooms : [];
+    alignFloorplanGrid(rooms);
     for (const room of rooms) {
       if ((room as any).dimensions && Array.isArray((room as any).dimensions)) {
         room.width = Number((room as any).dimensions[0]);
@@ -200,12 +319,46 @@ function repairPlan(plan: any): any {
 }
 
 export async function handleArchitect(brief: any): Promise<any> {
+  const category = brief.structure_category || "building";
+  const isBuilding = category === "building";
+  const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
+  
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt, promptStr, true, "glm-5.1");
-  return repairPlan(cleanJsonResponse(res));
+
+  const models = ["glm-5.2", "glm-5.2", "qwen3.7-max-2026-05-20"];
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < models.length; attempt++) {
+    const model = models[attempt];
+    try {
+      const res = await callQwen(prompt, promptStr, true, model);
+      if (!res || res.trim().length < 5) {
+        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty/tiny response (${res?.length || 0} chars), retrying...`);
+        lastError = new Error(`Empty response from ${model}`);
+        continue;
+      }
+      const parsed = cleanJsonResponse(res);
+      if (isBuilding) {
+        return repairPlan(parsed);
+      } else {
+        // For infrastructure, ensure structure_category is preserved
+        parsed.structure_category = category;
+        parsed.is_edit = false;
+        return parsed;
+      }
+    } catch (err: any) {
+      lastError = err;
+      console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}) failed: ${err.message}`);
+      if (attempt < models.length - 1) {
+        console.error(`[architect] Retrying with ${models[attempt + 1]}...`);
+      }
+    }
+  }
+
+  throw new Error(`All ${models.length} architect attempts failed. Last error: ${lastError?.message || lastError}`);
 }
 
 if (typeof Deno !== "undefined" && Deno.serve) {

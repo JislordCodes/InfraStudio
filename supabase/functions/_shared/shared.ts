@@ -140,7 +140,14 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "qwen-max"): Promise<string> {
+function getTargetModel(model: string): string {
+  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
+    return "qwen3.7-max-2026-05-20";
+  }
+  return model;
+}
+
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "glm-5.1"): Promise<string> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   let msgs: any[] = [{ role: "system", content: systemPrompt }];
@@ -149,20 +156,34 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   } else {
     msgs.push({ role: "user", content: userMessage });
   }
+
+  const targetModel = getTargetModel(model);
+
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: model,
+      model: targetModel,
       messages: msgs,
       temperature: 0.1,
-      max_tokens: 8000,
+      max_tokens: 16384,
       response_format: jsonMode ? { type: "json_object" } : undefined
     })
   });
-  if (!res.ok) throw new Error(`Qwen Error: ${await res.text()}`);
+  
+  if (!res.ok) {
+    if (targetModel === "qwen-max") {
+      return await callQwen(systemPrompt, userMessage, jsonMode, "qwen-flash");
+    }
+    throw new Error(`Qwen Error: ${await res.text()}`);
+  }
+  
   const data = await res.json();
-  return data.choices[0].message.content || "";
+  const choice = data.choices?.[0];
+  if (choice?.finish_reason === "length") {
+    console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length). Response may be incomplete.`);
+  }
+  return choice?.message?.content || "";
 }
 
 export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "glm-5.1"): Promise<any> {
@@ -172,18 +193,28 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage }
   ];
+
+  const targetModel = getTargetModel(model);
+
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: model,
+      model: targetModel,
       messages: msgs,
+      tools: (tools && tools.length > 0) ? tools : undefined,
       temperature: 0.1,
-      max_tokens: 8000,
-      tools: tools && tools.length > 0 ? tools : undefined
+      max_tokens: 16384
     })
   });
-  if (!res.ok) throw new Error(`GLM Error: ${await res.text()}`);
+  
+  if (!res.ok) {
+    if (targetModel === "qwen-max") {
+      return await callGLM(systemPrompt, userMessage, tools, "qwen-flash");
+    }
+    throw new Error(`GLM Error: ${await res.text()}`);
+  }
+  
   const data = await res.json();
   return data.choices[0].message;
 }
@@ -195,22 +226,78 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage }
   ];
+  const targetModel = getTargetModel(model);
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: model,
+      model: targetModel,
       messages: msgs,
       temperature: 0.1,
-      max_tokens: 8000,
+      max_tokens: 16384,
       stream: true
     })
   });
-  if (!res.ok) throw new Error(`GLM Stream Error: ${await res.text()}`);
+  if (!res.ok) {
+    if (targetModel === "qwen-max") {
+      return await callGLMStream(systemPrompt, userMessage, "qwen-flash");
+    }
+    throw new Error(`GLM Stream Error: ${await res.text()}`);
+  }
   if (!res.body) throw new Error("No response body from GLM Stream");
   return res.body;
 }
 
+
+function autoRepairTruncatedJson(jsonStr: string): string {
+  let str = jsonStr.trim();
+
+  // Strip incomplete trailing key/value fragments
+  str = str.replace(/,\s*"[^"]*"?\s*:\s*[^,\}\]]*$/, '');
+  str = str.replace(/,\s*"[^"]*$/, '');
+  str = str.replace(/,\s*$/, '');
+
+  let inString = false;
+  let escape = false;
+  const stack: string[] = [];
+
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === '\\') {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{') {
+        stack.push('}');
+      } else if (char === '[') {
+        stack.push(']');
+      } else if (char === '}' || char === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === char) {
+          stack.pop();
+        }
+      }
+    }
+  }
+
+  if (inString) {
+    str += '"';
+  }
+
+  str = str.replace(/,\s*$/, '');
+
+  while (stack.length > 0) {
+    str += stack.pop();
+  }
+
+  return str;
+}
 
 export function cleanJsonResponse(rawStr: string): any {
   let clean = rawStr.trim();
@@ -231,9 +318,15 @@ export function cleanJsonResponse(rawStr: string): any {
   
   clean = clean.trim();
   const firstBrace = clean.indexOf('{');
+  if (firstBrace !== -1) {
+    clean = clean.substring(firstBrace);
+  }
   const lastBrace = clean.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    clean = clean.substring(firstBrace, lastBrace + 1);
+  if (lastBrace !== -1 && lastBrace > 0) {
+    const candidate = clean.substring(0, lastBrace + 1);
+    try {
+      return JSON.parse(candidate.replace(/,\s*([\}])\}/g, '$1}'));
+    } catch { /* fall through to repair */ }
   }
 
   // Strip trailing commas before closing brackets or braces
@@ -242,7 +335,12 @@ export function cleanJsonResponse(rawStr: string): any {
   try {
     return JSON.parse(clean);
   } catch (_err) {
-    const sanitized = clean.replace(/[\u0000-\u001F]+/g, " ");
-    return JSON.parse(sanitized);
+    const repaired = autoRepairTruncatedJson(clean);
+    try {
+      return JSON.parse(repaired);
+    } catch (_err2) {
+      const sanitized = repaired.replace(/[\u0000-\u001F]+/g, " ");
+      return JSON.parse(sanitized);
+    }
   }
 }

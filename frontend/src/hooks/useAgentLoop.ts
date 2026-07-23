@@ -256,15 +256,23 @@ export async function runQwenAgentLoop(
           const objectList = Array.isArray(objects) ? objects : [];
           
           
-          const hasDoors = objectList.some((o: any) => o.ifc_class === 'IfcDoor' || o.type === 'IfcDoor');
-          const hasWindows = objectList.some((o: any) => o.ifc_class === 'IfcWindow' || o.type === 'IfcWindow');
+          // Detect if this is a building or non-building structure
           const wallCount = objectList.filter((o: any) => o.ifc_class === 'IfcWall' || o.type === 'IfcWall').length;
+          const isLikelyBuilding = wallCount >= 2 || /room|house|apartment|office|building|bedroom|kitchen|bathroom/i.test(userMessage);
           
           // Build a specific list of what's missing
           const missing: string[] = [];
-          if (wallCount < 4) missing.push(`Only ${wallCount} walls found — a room needs exactly 4 walls to be enclosed`);
-          if (!hasDoors) missing.push("No doors found — every room needs at least one entry door. Use create_door with wall_guid + create_opening=true");
-          if (!hasWindows) missing.push("No windows found — add at least one window for natural light. Use create_window with wall_guid + create_opening=true");
+          if (isLikelyBuilding) {
+            // Building-specific checks
+            const hasDoors = objectList.some((o: any) => o.ifc_class === 'IfcDoor' || o.type === 'IfcDoor');
+            const hasWindows = objectList.some((o: any) => o.ifc_class === 'IfcWindow' || o.type === 'IfcWindow');
+            if (wallCount < 4) missing.push(`Only ${wallCount} walls found — a room needs exactly 4 walls to be enclosed`);
+            if (!hasDoors) missing.push("No doors found — every room needs at least one entry door. Use create_door with wall_guid + create_opening=true");
+            if (!hasWindows) missing.push("No windows found — add at least one window for natural light. Use create_window with wall_guid + create_opening=true");
+          } else {
+            // Non-building: just check that at least one geometric object exists
+            if (objectList.length === 0) missing.push("No geometry found — you must create at least one 3D element.");
+          }
           
           // Always need styles and export
           missing.push("You MUST create surface styles (create_surface_style) and apply them to ALL elements (apply_style_to_object)");

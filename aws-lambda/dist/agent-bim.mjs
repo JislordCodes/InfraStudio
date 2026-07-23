@@ -1,96 +1,181 @@
-import { CORS, mcpInit, mcpCallTool, fetchMcpTools, callQwen, callGLM } from "../_shared/shared.ts";
-
-type McpCall = { resultText: string; session: string };
-
-const MUTATION_TOOLS = new Set([
-  "build_room",
-  "build_wall_assembly",
-  "build_floor_plan",
-  "create_wall",
-  "create_two_point_wall",
-  "create_polyline_walls",
-  "update_wall",
-  "create_slab",
-  "update_slab",
-  "create_door",
-  "update_door",
-  "create_window",
-  "update_window",
-  "create_roof",
-  "update_roof",
-  "delete_roof",
-  "create_stairs",
-  "update_stairs",
-  "delete_stairs",
-  "create_trimesh_ifc",
-  "create_mesh_ifc",
-  "execute_ifc_code_tool",
-  "create_surface_style",
-  "create_pbr_style",
-  "apply_style_to_object",
-  "update_style",
-  "remove_style",
-  "create_polyline_slab",
-  "create_circular_slab",
-  "create_opening",
-  "build_building",
-]);
-
-const CORE_EDIT_TOOLS = new Set([
-  "export_ifc",
-  "get_scene_info",
-  "get_ifc_scene_overview",
-  "get_object_info",
-  "list_styles",
-  "create_surface_style",
-  "create_pbr_style",
-  "apply_style_to_object",
-  "update_style",
-  "build_room",
-  "build_wall_assembly",
-  "build_floor_plan",
-  "create_wall",
-  "create_two_point_wall",
-  "create_polyline_walls",
-  "update_wall",
-  "create_slab",
-  "update_slab",
-  "create_door",
-  "update_door",
-  "create_window",
-  "update_window",
-  "create_roof",
-  "update_roof",
-  "delete_roof",
-  "create_stairs",
-  "update_stairs",
-  "delete_stairs",
-  "create_trimesh_ifc",
-  "create_mesh_ifc",
-  "execute_ifc_code_tool",
-]);
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS, "Content-Type": "application/json" },
+// ../supabase/functions/_shared/shared.ts
+var MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
+var CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS"
+};
+function extractText(content) {
+  if (!content) return void 0;
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (Array.isArray(item)) {
+        const r = extractText(item);
+        if (r) return r;
+      } else if (typeof item === "object" && item !== null) {
+        const o = item;
+        if (typeof o.text === "string") return o.text;
+      }
+    }
+  }
+  return void 0;
+}
+async function mcpPost(body, clientSessionId) {
+  const headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream"
+  };
+  if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
+  const res = await fetch(MCP_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
   });
+  const returnedSession = res.headers.get("mcp-session-id") || clientSessionId;
+  const text = await res.text();
+  if (text.trim().startsWith("data:")) {
+    const l = text.split("\n").find((l2) => l2.startsWith("data:"));
+    const data = l ? JSON.parse(l.slice(5).trim()) : {};
+    return { data, session: returnedSession };
+  }
+  try {
+    return { data: JSON.parse(text), session: returnedSession };
+  } catch {
+    return { data: { raw: text }, session: returnedSession };
+  }
+}
+async function mcpInit(clientSessionId) {
+  const res1 = await mcpPost({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
+  }, clientSessionId);
+  const newSession = res1.session;
+  await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, newSession).catch(() => {
+  });
+  return newSession;
+}
+async function mcpCallTool(name, args, clientSessionId) {
+  const res = await mcpPost({
+    jsonrpc: "2.0",
+    id: Date.now(),
+    method: "tools/call",
+    params: { name, arguments: args }
+  }, clientSessionId);
+  const payload = res.data;
+  if (payload.error) {
+    throw new Error(`Tool ${name} failed: ${JSON.stringify(payload.error)}`);
+  }
+  if (!payload.result && payload.raw) {
+    throw new Error(`Tool ${name} returned invalid response from server: ${payload.raw}`);
+  }
+  const resultText = extractText(payload?.result?.content) || JSON.stringify(payload?.result ?? "done");
+  try {
+    const parsed = JSON.parse(resultText);
+    if (parsed && typeof parsed === "object") {
+      if (parsed.success === false || parsed.error) {
+        throw new Error(`Tool ${name} reported failure: ${parsed.error || JSON.stringify(parsed)}`);
+      }
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("Tool ")) throw e;
+  }
+  return { resultText, session: res.session };
+}
+async function fetchMcpTools(clientSessionId) {
+  const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, clientSessionId);
+  const data = res.data;
+  const tools = data?.result?.tools || [];
+  return {
+    tools: tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: (t.description || "").slice(0, 256),
+        parameters: t.inputSchema || { type: "object", properties: {} }
+      }
+    })),
+    session: res.session
+  };
+}
+async function callGLM(systemPrompt, userMessage, tools, model = "glm-5.1") {
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
+  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const msgs = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage }
+  ];
+  const targetModel = model === "glm-5.1" ? "qwen-plus" : model;
+  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: targetModel,
+      messages: msgs,
+      tools: tools && tools.length > 0 ? tools : void 0,
+      temperature: 0.1,
+      max_tokens: 8e3
+    })
+  });
+  if (!res.ok) {
+    if (res.status === 429 || res.status === 503 || res.status === 504) {
+      if (targetModel === "qwen-plus") return await callGLM(systemPrompt, userMessage, tools, "qwen-turbo");
+    }
+    throw new Error(`GLM Error: ${await res.text()}`);
+  }
+  const data = await res.json();
+  return data.choices[0].message;
 }
 
-function parseJson(text: string): any {
+// ../supabase/functions/agent-bim/index.ts
+var MUTATION_TOOLS = /* @__PURE__ */ new Set([
+  "build_room",
+  "build_wall_assembly",
+  "build_floor_plan",
+  "create_wall",
+  "create_two_point_wall",
+  "create_polyline_walls",
+  "update_wall",
+  "create_slab",
+  "update_slab",
+  "create_door",
+  "update_door",
+  "create_window",
+  "update_window",
+  "create_roof",
+  "update_roof",
+  "delete_roof",
+  "create_stairs",
+  "update_stairs",
+  "delete_stairs",
+  "create_trimesh_ifc",
+  "create_mesh_ifc",
+  "execute_ifc_code_tool",
+  "create_surface_style",
+  "create_pbr_style",
+  "apply_style_to_object",
+  "update_style",
+  "remove_style"
+]);
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" }
+  });
+}
+function parseJson(text) {
   try {
     return JSON.parse(text);
   } catch {
     return null;
   }
 }
-
-function literal(value: unknown): string {
+function literal(value) {
   return JSON.stringify(String(value ?? ""));
 }
-
-function guidsByClass(scene: any): Record<string, string[]> {
-  const grouped: Record<string, string[]> = {};
+function guidsByClass(scene) {
+  const grouped = {};
   for (const obj of scene?.objects || []) {
     if (!obj?.guid || !obj?.ifc_class) continue;
     const cls = String(obj.ifc_class);
@@ -99,79 +184,71 @@ function guidsByClass(scene: any): Record<string, string[]> {
   }
   return grouped;
 }
-
-async function applyDefaultMaterials(mcpSessionId: string): Promise<{ session: string; summary: Record<string, number>; errors: string[] }> {
+async function applyDefaultMaterials(mcpSessionId) {
   let session = mcpSessionId;
-  const errors: string[] = [];
-  const summary: Record<string, number> = {};
-
+  const errors = [];
+  const summary = {};
   const sceneRes = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: false, include_transform: false }, session);
   session = sceneRes.session;
   const scene = parseJson(sceneRes.resultText);
   const byClass = guidsByClass(scene);
-
   const styleRun = Date.now();
   const styles = [
     {
       name: `InfraStudio_Plaster_${styleRun}`,
       color: [0.86, 0.84, 0.78],
       transparency: 0,
-      classes: ["IfcWall", "IfcWallStandardCase"],
+      classes: ["IfcWall", "IfcWallStandardCase"]
     },
     {
       name: `InfraStudio_ConcreteFloor_${styleRun}`,
       color: [0.48, 0.48, 0.46],
       transparency: 0,
-      classes: ["IfcSlab", "IfcRoof"],
+      classes: ["IfcSlab", "IfcRoof"]
     },
     {
       name: `InfraStudio_WoodDoor_${styleRun}`,
       color: [0.45, 0.28, 0.14],
       transparency: 0,
-      classes: ["IfcDoor"],
+      classes: ["IfcDoor"]
     },
     {
       name: `InfraStudio_Glass_${styleRun}`,
       color: [0.62, 0.82, 0.92],
       transparency: 0.55,
-      classes: ["IfcWindow"],
+      classes: ["IfcWindow"]
     },
     {
       name: `InfraStudio_StairConcrete_${styleRun}`,
       color: [0.58, 0.58, 0.56],
       transparency: 0,
-      classes: ["IfcStair", "IfcStairFlight"],
-    },
+      classes: ["IfcStair", "IfcStairFlight"]
+    }
   ];
-
   for (const style of styles) {
     const targetGuids = style.classes.flatMap((cls) => byClass[cls] || []);
     summary[style.name] = targetGuids.length;
     if (targetGuids.length === 0) continue;
-
     try {
       const created = await mcpCallTool("create_surface_style", {
         name: style.name,
         color: style.color,
         transparency: style.transparency,
-        style_type: "rendering",
+        style_type: "rendering"
       }, session);
       session = created.session;
-
       const applied = await mcpCallTool("apply_style_to_object", {
         object_guids: targetGuids,
-        style_name: style.name,
+        style_name: style.name
       }, session);
       session = applied.session;
     } catch (err) {
       errors.push(`${style.name}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-
   return { session, summary, errors };
 }
-
-async function exportWithMaterials(mcpSessionId: string): Promise<{ ifc_url: string; mcpSessionId: string; materialResult: unknown; rawData: unknown }> {
+async function exportWithMaterials(mcpSessionId) {
   const materialResult = await applyDefaultMaterials(mcpSessionId);
   let session = materialResult.session;
   const exportRes = await mcpCallTool("export_ifc", {}, session);
@@ -181,20 +258,17 @@ async function exportWithMaterials(mcpSessionId: string): Promise<{ ifc_url: str
     ifc_url: exportData.file_url || exportData.ifc_url || "",
     mcpSessionId: session,
     materialResult,
-    rawData: exportData,
+    rawData: exportData
   };
 }
-
-export async function handleBim(payload: any): Promise<any> {
+async function handleBim(payload) {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
-
   if (payload.action === "initialize") {
     const res = await mcpCallTool("initialize_project", { project_name: payload.projectName || "InfraStudio AI Building" }, mcpSessionId);
     mcpSessionId = res.session;
     return { status: "success", mcpSessionId };
   }
-
   if (payload.action === "create_storey") {
     const name = payload.name || "Storey";
     const elevation = Number(payload.elevation || 0);
@@ -213,7 +287,6 @@ if buildings:
     mcpSessionId = res.session;
     return { status: "success", mcpSessionId };
   }
-
   if (payload.action === "build_room") {
     const room = payload.room || {};
     const buildRes = await mcpCallTool("build_room", {
@@ -226,12 +299,11 @@ if buildings:
       floor_slab: true,
       ceiling_slab: true,
       doors: room.doors || [],
-      windows: room.windows || [],
+      windows: room.windows || []
     }, mcpSessionId);
     mcpSessionId = buildRes.session;
     return { status: "success", result: buildRes, mcpSessionId };
   }
-
   if (payload.action === "deduplicate_walls") {
     const dedupeCode = `
 import bpy
@@ -311,7 +383,6 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
 `;
     const res = await mcpCallTool("execute_blender_code", { code: dedupeCode }, mcpSessionId);
     mcpSessionId = res.session;
-
     let removed = 0;
     try {
       const match = res.resultText.match(/DEDUP_RESULT:(\{[\s\S]*?\})/);
@@ -319,24 +390,21 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         const parsed = JSON.parse(match[1]);
         removed = parsed.count || 0;
       }
-    } catch { /* ignore */ }
-
+    } catch {
+    }
     return { status: "success", removed, mcpSessionId };
   }
-
   if (payload.action === "apply_materials") {
-     const materialResult = await applyDefaultMaterials(mcpSessionId);
-     mcpSessionId = materialResult.session;
-     return { status: "success", materialResult, mcpSessionId };
+    const materialResult = await applyDefaultMaterials(mcpSessionId);
+    mcpSessionId = materialResult.session;
+    return { status: "success", materialResult, mcpSessionId };
   }
-
   if (payload.action === "create_roof") {
     const rawType = (payload.roof_type || "flat").toUpperCase();
     let roof_type = "FLAT";
     if (rawType.includes("GABLE")) roof_type = "GABLE_ROOF";
     else if (rawType.includes("HIP")) roof_type = "HIP_ROOF";
     else if (rawType.includes("SHED")) roof_type = "SHED";
-
     const bbox = payload.bbox || { minX: 0, minY: 0, maxX: 6, maxY: 6, height: 3 };
     const overhang = 0.4;
     const x0 = Number(bbox.minX) - overhang;
@@ -344,18 +412,16 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     const y0 = Number(bbox.minY) - overhang;
     const y1 = Number(bbox.maxY) + overhang;
     const z = Number(bbox.height || 3);
-
     const polyline = [
       [x0, y0, z],
       [x1, y0, z],
       [x1, y1, z],
       [x0, y1, z]
     ];
-
     const buildRes = await mcpCallTool("create_roof", {
       polyline,
       roof_type,
-      angle: roof_type === "GABLE_ROOF" || roof_type === "HIP_ROOF" ? 35.0 : 0.0,
+      angle: roof_type === "GABLE_ROOF" || roof_type === "HIP_ROOF" ? 35 : 0,
       thickness: 0.3
     }, mcpSessionId).catch((err) => {
       console.error("create_roof execution error:", err);
@@ -364,144 +430,21 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     if (buildRes) mcpSessionId = buildRes.session;
     return { status: "success", mcpSessionId };
   }
-
-  if (payload.action === "build_freeform") {
-    // Initialize fresh project
-    const initRes = await mcpCallTool("initialize_project", { project_name: payload.plan?.structure_name || "InfraStudio Structure" }, mcpSessionId);
-    mcpSessionId = initRes.session;
-
-    // Fetch all available MCP tools
-    const toolFetch = await fetchMcpTools(mcpSessionId);
-    mcpSessionId = toolFetch.session;
-    const allTools = toolFetch.tools;
-
-    // Fetch trimesh examples to give the LLM concrete code templates
-    let trimeshExamples = "";
-    try {
-      const exRes = await mcpCallTool("get_trimesh_examples", {}, mcpSessionId);
-      mcpSessionId = exRes.session;
-      trimeshExamples = exRes.resultText;
-    } catch { /* non-fatal */ }
-
-    const freeformPrompt = `You are the BIM Execution Agent for InfraStudio.
-You have access to ALL available MCP tools. Your job is to build the requested structure by calling the right tools.
-This is NOT a building with rooms — do NOT use build_room or create doors/windows unless explicitly requested.
-
-For 3D shapes, your PRIMARY tool is create_trimesh_ifc. Write Python code using the trimesh library.
-Available trimesh primitives:
-- trimesh.primitives.Box(extents=[x,y,z]) — rectangular solid
-- trimesh.primitives.Cylinder(radius=r, height=h) — cylinder
-- trimesh.primitives.Sphere(radius=r) — sphere
-- trimesh.creation.extrude_polygon(polygon, height) — extrude a 2D shape
-- Boolean operations: mesh_a.union(mesh_b), mesh_a.difference(mesh_b), mesh_a.intersection(mesh_b)
-- Transforms: mesh.apply_translation([x,y,z]), mesh.apply_transform(matrix)
-
-CRITICAL RULES for trimesh code:
-- You MUST assign the final mesh to a variable named exactly 'result'
-- NEVER use print() statements
-- Import nothing — trimesh, np, and math are pre-imported
-- Translate objects BEFORE combining with .union()
-
-For standard structural elements, you can also use:
-- create_slab (rectangular slabs/decks)
-- create_polyline_slab (custom polygon slabs)
-- create_circular_slab (round slabs)
-- create_polyline_walls (walls along a path)
-- execute_ifc_code_tool (raw ifcopenshell API calls)
-
-IFC classes for infrastructure:
-- IfcBeam, IfcColumn, IfcSlab, IfcMember, IfcFooting, IfcPile
-- IfcBuildingElementProxy (generic element)
-- IfcPipeSegment, IfcDuctSegment, IfcCableCarrierSegment (MEP)
-
-Think step by step:
-1. What components does the structure need?
-2. What geometry (box, cylinder, custom) best represents each component?
-3. What are the correct positions so components connect properly?
-4. Call create_trimesh_ifc for each component with the right ifc_class.
-5. After all components, apply materials using create_surface_style + apply_style_to_object.
-
-IMPORTANT: You MUST make at least one mutation tool call. Output ONLY tool_calls.`;
-
-    const planDescription = `Structure to build: ${JSON.stringify(payload.plan)}
-
-Trimesh code examples for reference:
-${trimeshExamples}`;
-
-    let executedMutation = false;
-    const executedTools: string[] = [];
-    let executionError = "";
-
-    for (let tryNum = 1; tryNum <= 3; tryNum++) {
-      let currentPlan = planDescription;
-      if (executionError) {
-        currentPlan += `\n\nPREVIOUS ATTEMPT FAILED:\n${executionError}\nFix the issues and try again with correct tool calls.`;
-        executionError = "";
-      }
-
-      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "kimi-k2.7-code");
-      const toolCalls = glmMsg.tool_calls || [];
-      if (toolCalls.length === 0) {
-        executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
-        if (tryNum === 3) throw new Error(executionError);
-        continue;
-      }
-
-      try {
-        for (const call of toolCalls) {
-          const toolName = call.function.name;
-          const args = JSON.parse(call.function.arguments || "{}");
-          console.log(`[build_freeform] Executing tool: ${toolName}`);
-          const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
-          mcpSessionId = toolRes.session;
-          executedTools.push(toolName);
-
-          if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
-            executedMutation = true;
-          }
-        }
-
-        if (!executedMutation) {
-          throw new Error("No geometry was created. You must call create_trimesh_ifc or similar tools.");
-        }
-        break;
-      } catch (err: any) {
-        executionError = err.message || String(err);
-        console.error(`[build_freeform] Attempt ${tryNum} failed: ${executionError}`);
-        if (tryNum === 3) throw err;
-      }
-    }
-
-    // Apply materials and export
-    const exported = await exportWithMaterials(mcpSessionId);
-    return {
-      status: "success",
-      ifc_url: exported.ifc_url,
-      mcpSessionId: exported.mcpSessionId,
-      executedTools,
-      materialResult: exported.materialResult,
-    };
-  }
-
   if (payload.action === "dynamic_edit") {
     const plan = payload.plan;
     const toolFetch = await fetchMcpTools(mcpSessionId);
     mcpSessionId = toolFetch.session;
     const availableTools = toolFetch.tools;
-    // ALWAYS expose 100% of all MCP tools directly to the model
     const routedTools = availableTools;
-
     const sceneRes = await mcpCallTool("get_scene_info", {
       limit: -1,
       include_bbox: true,
       include_transform: true,
-      round_decimals: 3,
+      round_decimals: 3
     }, mcpSessionId);
     mcpSessionId = sceneRes.session;
-
     const overviewRes = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId).catch(() => null);
     if (overviewRes) mcpSessionId = overviewRes.session;
-
     const glmPrompt = `You are the BIM MCP Execution Agent for InfraStudio.
 Your sole job is to call real MCP tools to perform the requested edit or creation on the active IFC model.
 
@@ -513,7 +456,6 @@ Rules for Edits:
  5. To add stairs: Call create_stairs between storeys.
  6. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
  7. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
-
     const basePlanData = `Instructions: ${JSON.stringify(plan)}
 
 Current IFC Scene State:
@@ -521,27 +463,27 @@ ${sceneRes.resultText}
 
 IFC Overview:
 ${overviewRes?.resultText || "Unavailable"}`;
-
     let ifc_url = "";
     let executionError = "";
     let executedMutation = false;
-    const executedTools: string[] = [];
-
+    const executedTools = [];
     for (let tryNum = 1; tryNum <= 3; tryNum++) {
       let currentPlanData = basePlanData;
       if (executionError) {
-        currentPlanData += `\n\nPREVIOUS EXECUTION FAILED:\n${executionError}\nRetry with concrete mutation tool calls.`;
+        currentPlanData += `
+
+PREVIOUS EXECUTION FAILED:
+${executionError}
+Retry with concrete mutation tool calls.`;
         executionError = "";
       }
-
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "kimi-k2.7-code");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";
         if (tryNum === 3) throw new Error(executionError);
         continue;
       }
-
       try {
         for (const call of toolCalls) {
           const toolName = call.function.name;
@@ -549,45 +491,38 @@ ${overviewRes?.resultText || "Unavailable"}`;
           const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
           mcpSessionId = toolRes.session;
           executedTools.push(toolName);
-
           if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
             executedMutation = true;
           }
         }
-
         if (!executedMutation) {
           throw new Error("The model was not edited because no mutation tool was executed.");
         }
         break;
-      } catch (err: any) {
+      } catch (err) {
         executionError = err.message || String(err);
         if (tryNum === 3) throw err;
       }
     }
-
     const exported = await exportWithMaterials(mcpSessionId);
     ifc_url = exported.ifc_url;
     mcpSessionId = exported.mcpSessionId;
-
     return {
       status: "success",
       ifc_url,
       mcpSessionId,
       executedTools,
-      materialResult: exported.materialResult,
+      materialResult: exported.materialResult
     };
   }
-
   if (payload.action === "export") {
     const exported = await exportWithMaterials(mcpSessionId);
     return { status: "success", ...exported };
   }
-
   throw new Error("Invalid action");
 }
-
 if (typeof Deno !== "undefined" && Deno.serve) {
-  Deno.serve(async (req: Request) => {
+  Deno.serve(async (req) => {
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     try {
       const payload = await req.json();
@@ -598,3 +533,6 @@ if (typeof Deno !== "undefined" && Deno.serve) {
     }
   });
 }
+export {
+  handleBim
+};

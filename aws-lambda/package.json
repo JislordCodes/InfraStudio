@@ -11,6 +11,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "puppeteer": "^25.3.0",
     "undici": "^7.28.0"
   }
 }

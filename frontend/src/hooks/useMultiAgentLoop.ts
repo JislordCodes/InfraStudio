@@ -1,4 +1,3 @@
-
 // ══ CONFIG ══
 const EDGE_PROXY_BASE = "https://225v6b2eozsjnityz5eo7p3jnq0qoawb.lambda-url.eu-west-2.on.aws";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
@@ -52,15 +51,20 @@ export async function runMultiAgentLoop(
     // 1. Interpreter
     pushStep("Interpreter Agent: Processing request...");
     const brief = await callEdge('agent-interpreter', { messages, sessionId });
+    const structureCategory = brief.structure_category || "building";
+    pushStep(`Interpreter Agent: Classified as '${structureCategory}' structure.`);
     
     // 2. Architect
     pushStep("Architectural Agent: Planning layout...");
     const plan = await callEdge('agent-architect', brief);
 
+    // 3. BIM Executor — branch based on structure category
+    const isBuilding = structureCategory === "building" && !plan.is_edit && plan.storey_plans;
+    const isInfrastructure = !plan.is_edit && (structureCategory !== "building" || plan.components);
 
-    // 3. BIM Executor (Chunking Logic)
-    if (!plan.is_edit && plan.storey_plans) {
-      pushStep(`BIM Agent: Received structural plan with ${plan.storey_plans.length} storeys. Beginning chunked execution...`);
+    if (isBuilding) {
+      // ═══ BUILDING MODE: Existing room-by-room pipeline ═══
+      pushStep(`BIM Agent: Building mode — ${plan.storey_plans.length} storeys. Beginning chunked execution...`);
       
       pushStep("BIM Agent: Initializing new project...");
       let bimRes = await callEdge('agent-bim', { action: 'initialize', mcpSessionId: sessionId });
@@ -83,6 +87,18 @@ export async function runMultiAgentLoop(
           });
           sessionId = bimRes.mcpSessionId;
         }
+      }
+
+      // Deduplicate shared walls between adjacent rooms
+      pushStep("BIM Agent: Removing duplicate walls at shared boundaries...");
+      try {
+        const dedupRes = await callEdge('agent-bim', { action: 'deduplicate_walls', mcpSessionId: sessionId });
+        sessionId = dedupRes.mcpSessionId;
+        if (dedupRes.removed > 0) {
+          pushStep(`BIM Agent: Removed ${dedupRes.removed} overlapping wall(s).`);
+        }
+      } catch (e) {
+        console.warn('Wall deduplication skipped:', e);
       }
       
       const roofTypeRequested = plan.roof_type || (plan.special_elements?.find((e: string) => /roof|gable|hip|flat/i.test(e)));
@@ -122,7 +138,25 @@ export async function runMultiAgentLoop(
       const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
       ifc_url = exportRes.ifc_url;
 
+    } else if (isInfrastructure) {
+      // ═══ INFRASTRUCTURE/MEP/CUSTOM MODE: Let BIM agent think freely ═══
+      const componentCount = plan.components?.length || 0;
+      pushStep(`BIM Agent: Infrastructure mode — ${componentCount} components planned. Letting BIM agent decide tools...`);
+      
+      const bimRes = await callEdge('agent-bim', {
+        action: 'build_freeform',
+        plan: plan,
+        mcpSessionId: sessionId
+      });
+      ifc_url = bimRes.ifc_url;
+      sessionId = bimRes.mcpSessionId;
+      
+      if (bimRes.executedTools?.length) {
+        pushStep(`BIM Agent: Executed ${bimRes.executedTools.length} tool calls: ${bimRes.executedTools.join(', ')}`);
+      }
+
     } else {
+      // ═══ EDIT MODE ═══
       pushStep("BIM Agent: Executing dynamic modifications...");
       const bimRes = await callEdge('agent-bim', {
         action: 'dynamic_edit',
@@ -143,7 +177,7 @@ export async function runMultiAgentLoop(
       pushStep(`❌ Quality Review Issues: ${review.issues?.join(', ')}`);
     }
 
-    finalReply = "Multi-Agent Generation Complete. I've broken the rendering down into manageable chunks to prevent timeouts, and the final model is ready.";
+    finalReply = "Multi-Agent Generation Complete. The final model is ready.";
     if (onAssistantMessage) {
       onAssistantMessage({ role: "assistant", content: finalReply });
     }

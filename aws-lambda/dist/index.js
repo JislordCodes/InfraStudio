@@ -25175,7 +25175,13 @@ async function fetchMcpTools(clientSessionId) {
     session: res.session
   };
 }
-async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "qwen-max") {
+function getTargetModel(model) {
+  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
+    return "qwen3.7-max-2026-05-20";
+  }
+  return model;
+}
+async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "glm-5.1") {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   let msgs = [{ role: "system", content: systemPrompt4 }];
@@ -25184,20 +25190,30 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "q
   } else {
     msgs.push({ role: "user", content: userMessage });
   }
+  const targetModel = getTargetModel(model);
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
+      model: targetModel,
       messages: msgs,
       temperature: 0.1,
-      max_tokens: 8e3,
+      max_tokens: 16384,
       response_format: jsonMode ? { type: "json_object" } : void 0
     })
   });
-  if (!res.ok) throw new Error(`Qwen Error: ${await res.text()}`);
+  if (!res.ok) {
+    if (targetModel === "qwen-max") {
+      return await callQwen(systemPrompt4, userMessage, jsonMode, "qwen-flash");
+    }
+    throw new Error(`Qwen Error: ${await res.text()}`);
+  }
   const data = await res.json();
-  return data.choices[0].message.content || "";
+  const choice = data.choices?.[0];
+  if (choice?.finish_reason === "length") {
+    console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length). Response may be incomplete.`);
+  }
+  return choice?.message?.content || "";
 }
 async function callGLM(systemPrompt4, userMessage, tools, model = "glm-5.1") {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
@@ -25206,20 +25222,67 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "glm-5.1") {
     { role: "system", content: systemPrompt4 },
     { role: "user", content: userMessage }
   ];
+  const targetModel = getTargetModel(model);
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
+      model: targetModel,
       messages: msgs,
+      tools: tools && tools.length > 0 ? tools : void 0,
       temperature: 0.1,
-      max_tokens: 8e3,
-      tools: tools && tools.length > 0 ? tools : void 0
+      max_tokens: 16384
     })
   });
-  if (!res.ok) throw new Error(`GLM Error: ${await res.text()}`);
+  if (!res.ok) {
+    if (targetModel === "qwen-max") {
+      return await callGLM(systemPrompt4, userMessage, tools, "qwen-flash");
+    }
+    throw new Error(`GLM Error: ${await res.text()}`);
+  }
   const data = await res.json();
   return data.choices[0].message;
+}
+function autoRepairTruncatedJson(jsonStr) {
+  let str = jsonStr.trim();
+  str = str.replace(/,\s*"[^"]*"?\s*:\s*[^,\}\]]*$/, "");
+  str = str.replace(/,\s*"[^"]*$/, "");
+  str = str.replace(/,\s*$/, "");
+  let inString = false;
+  let escape = false;
+  const stack = [];
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === "\\") {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+      } else if (char === "{") {
+        stack.push("}");
+      } else if (char === "[") {
+        stack.push("]");
+      } else if (char === "}" || char === "]") {
+        if (stack.length > 0 && stack[stack.length - 1] === char) {
+          stack.pop();
+        }
+      }
+    }
+  }
+  if (inString) {
+    str += '"';
+  }
+  str = str.replace(/,\s*$/, "");
+  while (stack.length > 0) {
+    str += stack.pop();
+  }
+  return str;
 }
 function cleanJsonResponse(rawStr) {
   let clean = rawStr.trim();
@@ -25238,28 +25301,44 @@ function cleanJsonResponse(rawStr) {
   }
   clean = clean.trim();
   const firstBrace = clean.indexOf("{");
+  if (firstBrace !== -1) {
+    clean = clean.substring(firstBrace);
+  }
   const lastBrace = clean.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    clean = clean.substring(firstBrace, lastBrace + 1);
+  if (lastBrace !== -1 && lastBrace > 0) {
+    const candidate = clean.substring(0, lastBrace + 1);
+    try {
+      return JSON.parse(candidate.replace(/,\s*([\}])\}/g, "$1}"));
+    } catch {
+    }
   }
   clean = clean.replace(/,\s*([\}\]])/g, "$1");
   try {
     return JSON.parse(clean);
   } catch (_err) {
-    const sanitized = clean.replace(/[\u0000-\u001F]+/g, " ");
-    return JSON.parse(sanitized);
+    const repaired = autoRepairTruncatedJson(clean);
+    try {
+      return JSON.parse(repaired);
+    } catch (_err2) {
+      const sanitized = repaired.replace(/[\u0000-\u001F]+/g, " ");
+      return JSON.parse(sanitized);
+    }
   }
 }
 
 // ../supabase/functions/agent-interpreter/index.ts
 var systemPrompt = `You are the Interpreter Agent for InfraStudio.
-Your sole responsibility is to convert natural-language user intent into a complete, machine-readable architectural brief.
+Your sole responsibility is to convert natural-language user intent into a complete, machine-readable design brief.
 
 Core Directives:
- 1. EDIT vs NEW: Determine if the user is asking to EDIT/MODIFY an existing building, or build a completely NEW building. If modifying an active session or making an edit, set "is_edit": true and list explicit steps in "edit_instructions".
- 2. ROOM TYPOLOGIES: Extract ALL requested rooms (bedrooms, bathrooms, living room, kitchen, dining, study, hallway, entry, garage, balcony, terrace, utility).
- 3. SPECIAL FEATURES (CRITICAL): Capture all structural features mentioned by the user (e.g. roof type: gable/flat/hip, stairs, balcony, pool, porch, columns) in "special_features".
- 4. MATERIALS & FINISHES (CRITICAL): Capture all material requests (e.g. brick walls, timber floor, glass windows, concrete slab, wooden doors) in "material_requirements" and "style_preferences".
+ 1. STRUCTURE CATEGORY (CRITICAL): Classify the user request into ONE of these categories:
+    - "building" \u2014 houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
+    - "infrastructure" \u2014 bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
+    - "mep" \u2014 pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
+    - "custom" \u2014 furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
+ 2. EDIT vs NEW: Determine if the user is asking to EDIT/MODIFY an existing model, or create something completely NEW. If modifying, set "is_edit": true.
+ 3. FOR BUILDINGS: Extract rooms, storeys, special features, materials (existing behavior).
+ 4. FOR NON-BUILDINGS: Extract component_requirements \u2014 a list of named structural components with descriptions, approximate dimensions, and positions.
 
 Strict Restrictions:
  * You MUST NOT generate geometry or invoke BIM/MCP tools.
@@ -25269,9 +25348,11 @@ Expected JSON Schema:
 {
   "is_edit": boolean,
   "edit_instructions": ["string"],
+  "structure_category": "building" | "infrastructure" | "mep" | "custom",
   "project_type": "string",
   "storeys": [{"name": "string", "elevation": number, "height": number}],
   "room_requirements": [{"name": "string", "suggested_area": number}],
+  "component_requirements": [{"name": "string", "type": "string", "description": "string"}],
   "special_features": ["string"],
   "material_requirements": ["string"],
   "style_preferences": ["string"],
@@ -25284,8 +25365,12 @@ async function handleInterpreter(payload) {
   if (payload.sessionId) {
     userPrompt = [...messages, { role: "system", content: `ACTIVE_MODEL_SESSION_EXISTS: session_id=${payload.sessionId}. Determine if current user message is an edit or addition.` }];
   }
-  const res = await callQwen(systemPrompt, userPrompt, true, "glm-5.1");
-  return cleanJsonResponse(res);
+  const res = await callQwen(systemPrompt, userPrompt, true, "qwen3.7-max-2026-05-20");
+  const result = cleanJsonResponse(res);
+  if (!result.structure_category) {
+    result.structure_category = "building";
+  }
+  return result;
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
   Deno.serve(async (req) => {
@@ -25306,7 +25391,10 @@ Your mission is to transform a structured architectural brief into a complete, s
 
 Spatial Axioms & Rules:
  1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (e.g. Bedrooms, Living Room, Kitchen, Bathroom, Corridor, Entry, Balcony, Garage, Utility). Never omit requested rooms.
- 2. 2D GRID LAYOUT: Arrange rooms as non-overlapping adjacent rectangles starting from origin [0,0,0].
+ 2. FLUSH GRID LAYOUT (CRITICAL):
+    - Arrange rooms in a clean 2D grid of rows and columns starting from origin [0,0,0].
+    - Adjacent rooms MUST share exact flush boundary lines. If Row 1 ends at Y=5.0m, Row 2 MUST start at Y=5.0m across all columns. If Column 1 ends at X=5.0m, Column 2 MUST start at X=5.0m across all rows.
+    - NEVER leave unbuilt gaps, staggered wall offsets, or narrow dead strips between rooms. All internal walls must form continuous straight grid lines.
  3. DOORS (CRITICAL):
     - EVERY room MUST have at least one door connecting to a circulation space (Living Room, Corridor, or Entry).
     - MAIN ENTRY: The Entry/Living Room MUST have an exterior door opening to the outside world.
@@ -25319,10 +25407,11 @@ Spatial Axioms & Rules:
  6. MATERIALS:
     - Include material_palette mapping wall, floor, door, window_glass, roof_or_ceiling to requested materials.
  7. EDITS & REVISONS:
-    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions" (e.g., [{"action": "create_window", "target": "Bedroom 1", "wall": "east"}, {"action": "create_roof", "type": "gable"}]).
+    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions".
 
 Strict Restrictions:
  * Return ONLY raw JSON matching the schema below.
+ * CRITICAL: Start your output immediately with '{'. Do NOT wrap JSON in outer keys like "architectural_analysis". Output ONLY root keys: "is_edit", "roof_type", "has_stairs", "material_palette", "storey_plans".
 
 Expected JSON Schema:
 {
@@ -25378,6 +25467,55 @@ Expected JSON Schema:
   ],
   "structural_notes": ["string"]
 }`;
+var infrastructurePrompt = `You are the Structural Design Agent for InfraStudio.
+Your mission is to transform a structured design brief into a precise component-based construction plan for NON-BUILDING structures (bridges, tunnels, towers, MEP systems, custom geometry).
+
+You must output a JSON plan with components, each specifying:
+- name: descriptive name
+- ifc_class: the IFC class to use (IfcBeam, IfcColumn, IfcSlab, IfcMember, IfcFooting, IfcBuildingElementProxy, IfcPipeSegment, IfcDuctSegment, etc.)
+- geometry_type: "box" | "cylinder" | "sphere" | "custom_trimesh"
+- dimensions: { length, width, height } for box, { radius, height } for cylinder, { radius } for sphere
+- position: [x, y, z] center position in meters
+- rotation: [rx, ry, rz] rotation in degrees (optional, default [0,0,0])
+- material: material description string
+- trimesh_code: (only for geometry_type="custom_trimesh") Python trimesh code. MUST assign result variable. Available: trimesh.primitives.Box, Cylinder, Sphere, Extrusion. Boolean: .union(), .difference(), .intersection(). Transform: .apply_translation([x,y,z]), .apply_transform(matrix).
+
+Spatial Rules:
+ 1. Use a RIGHT-HANDED coordinate system: X=length, Y=width, Z=up.
+ 2. Position components so they connect properly (e.g. bridge piers touch the underside of the deck).
+ 3. Use realistic engineering dimensions (bridge deck thickness ~0.8-1.5m, pier diameter ~1-2m, etc.).
+ 4. For bridges: deck at top, piers below connecting deck to ground (z=0).
+ 5. For MEP: pipes and ducts should connect end-to-end with realistic diameters.
+
+Strict Restrictions:
+ * Return ONLY raw JSON.
+ * Do NOT include rooms, doors, or windows.
+ * Start output immediately with '{'.
+
+Expected JSON Schema:
+{
+  "structure_category": "infrastructure" | "mep" | "custom",
+  "is_edit": false,
+  "structure_name": "string",
+  "components": [
+    {
+      "name": "string",
+      "ifc_class": "string",
+      "geometry_type": "box | cylinder | sphere | custom_trimesh",
+      "dimensions": {},
+      "position": [number, number, number],
+      "rotation": [number, number, number],
+      "material": "string",
+      "trimesh_code": "string (optional)"
+    }
+  ],
+  "material_palette": {
+    "primary": "string",
+    "secondary": "string",
+    "accent": "string"
+  },
+  "structural_notes": ["string"]
+}`;
 var WALLS = ["south", "east", "north", "west"];
 function wallLength(room, wall) {
   return wall === "south" || wall === "north" ? Number(room.width || 4) : Number(room.length || 4);
@@ -25419,8 +25557,62 @@ function openingsOverlap(a, b) {
   const b1 = b0 + Number(b.width || 1.2);
   return rangesOverlap(a0, a1, b0, b1);
 }
+function alignFloorplanGrid(rooms) {
+  if (!rooms || rooms.length <= 1) return;
+  const xCoords = [];
+  const yCoords = [];
+  for (const r of rooms) {
+    const [x, y] = r.origin || [0, 0, 0];
+    const w = Number(r.width || 4);
+    const l = Number(r.length || 4);
+    xCoords.push(x, x + w);
+    yCoords.push(y, y + l);
+  }
+  xCoords.sort((a, b) => a - b);
+  yCoords.sort((a, b) => a - b);
+  const clusterMap = (coords, tolerance = 1.2) => {
+    const map = /* @__PURE__ */ new Map();
+    for (const c of coords) {
+      let matchedTarget = null;
+      for (const target of map.values()) {
+        if (Math.abs(c - target) <= tolerance) {
+          matchedTarget = target;
+          break;
+        }
+      }
+      if (matchedTarget !== null) {
+        map.set(c, matchedTarget);
+      } else {
+        map.set(c, c);
+      }
+    }
+    return map;
+  };
+  const xMap = clusterMap(xCoords, 1.2);
+  const yMap = clusterMap(yCoords, 1.2);
+  for (const r of rooms) {
+    const [x, y, z] = r.origin || [0, 0, 0];
+    const w = Number(r.width || 4);
+    const l = Number(r.length || 4);
+    const snappedX = xMap.get(x) ?? x;
+    const snappedRightX = xMap.get(x + w) ?? x + w;
+    const snappedY = yMap.get(y) ?? y;
+    const snappedTopY = yMap.get(y + l) ?? y + l;
+    r.origin = [Number(snappedX.toFixed(2)), Number(snappedY.toFixed(2)), z];
+    r.width = Math.max(2.2, Number((snappedRightX - snappedX).toFixed(2)));
+    r.length = Math.max(2.2, Number((snappedTopY - snappedY).toFixed(2)));
+  }
+}
 function repairPlan(plan) {
-  if (!plan || plan.is_edit) return plan;
+  if (!plan) return {};
+  if (typeof plan === "object") {
+    for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
+      if (plan[key] && typeof plan[key] === "object") {
+        plan = { ...plan[key], ...plan };
+      }
+    }
+  }
+  if (plan.is_edit) return plan;
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
     plan.storey_plans = [
       {
@@ -25438,6 +25630,7 @@ function repairPlan(plan) {
       storey.rooms = plan.rooms;
     }
     const rooms = Array.isArray(storey.rooms) ? storey.rooms : [];
+    alignFloorplanGrid(rooms);
     for (const room of rooms) {
       if (room.dimensions && Array.isArray(room.dimensions)) {
         room.width = Number(room.dimensions[0]);
@@ -25472,14 +25665,43 @@ function repairPlan(plan) {
   return plan;
 }
 async function handleArchitect(brief) {
+  const category = brief.structure_category || "building";
+  const isBuilding = category === "building";
+  const prompt = isBuilding ? systemPrompt2 : infrastructurePrompt;
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const res = await callQwen(systemPrompt2, promptStr, true, "glm-5.1");
-  return repairPlan(cleanJsonResponse(res));
+  const models = ["glm-5.2", "glm-5.2", "qwen3.7-max-2026-05-20"];
+  let lastError = null;
+  for (let attempt = 0; attempt < models.length; attempt++) {
+    const model = models[attempt];
+    try {
+      const res = await callQwen(prompt, promptStr, true, model);
+      if (!res || res.trim().length < 5) {
+        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty/tiny response (${res?.length || 0} chars), retrying...`);
+        lastError = new Error(`Empty response from ${model}`);
+        continue;
+      }
+      const parsed = cleanJsonResponse(res);
+      if (isBuilding) {
+        return repairPlan(parsed);
+      } else {
+        parsed.structure_category = category;
+        parsed.is_edit = false;
+        return parsed;
+      }
+    } catch (err) {
+      lastError = err;
+      console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}) failed: ${err.message}`);
+      if (attempt < models.length - 1) {
+        console.error(`[architect] Retrying with ${models[attempt + 1]}...`);
+      }
+    }
+  }
+  throw new Error(`All ${models.length} architect attempts failed. Last error: ${lastError?.message || lastError}`);
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
   Deno.serve(async (req) => {
@@ -25496,16 +25718,15 @@ if (typeof Deno !== "undefined" && Deno.serve) {
 
 // ../supabase/functions/agent-reviewer/index.ts
 var systemPrompt3 = `You are the Quality Review Agent for InfraStudio.
-Your role is to inspect the generated IFC model state, validate semantic topologies, and act as the gatekeeper before the final model is served to the user.
+Your role is to inspect the generated IFC model state, validate semantic topologies, and act as the final quality gatekeeper.
 
-Validation Checks:
- 1. Syntax & Element Counts: Ensure standard structural elements exist (IfcWall, IfcSlab, IfcDoor, IfcWindow). If walls exist but no doors or slabs exist, mark as FAIL.
- 2. Topological Integrity: Verify that every room is enclosed, every door provides access, and windows are placed on exterior walls.
- 3. Voids & Openings: Verify that doors and windows cut proper void openings in host walls rather than clashing inside solid geometry.
- 4. Material & Style Integrity: Verify that surface styles/materials are attached to key structural elements.
+Validation Criteria:
+ 1. Standard BIM Topology: Ensure key structural elements exist (IfcWall > 0, IfcSlab > 0, IfcDoor > 0, IfcWindow > 0). If all key element types exist and building geometry is generated, mark "status": "PASS".
+ 2. Failure Threshold: Mark "status": "FAIL" ONLY if critical structural components are completely missing (e.g. walls exist but zero doors or zero slabs were built) or geometry is severely malformed.
 
 Correction Loop Enforcement:
-If you detect an error, you MUST set "status": "FAIL" and "retry_required": true. You MUST provide explicit, step-by-step instructions in "fix_recommendations" detailing which entity GUID or room is failing and exactly what the BIM MCP Agent needs to do to resolve it (e.g. "Delete IfcWall [GUID] and recreate with create_door wall_guid=[GUID] create_opening=true").
+If you detect a critical failure, set "status": "FAIL" and "retry_required": true with step-by-step fix recommendations.
+Otherwise, set "status": "PASS" and "retry_required": false.
 
 Expected JSON Schema:
 {
@@ -25520,7 +25741,7 @@ async function handleReviewer(payload) {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "glm-5.1");
+  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "qwen3.7-plus");
   const result = cleanJsonResponse(res);
   result.mcpSessionId = mcpSessionId;
   return result;
@@ -25566,7 +25787,11 @@ var MUTATION_TOOLS = /* @__PURE__ */ new Set([
   "create_pbr_style",
   "apply_style_to_object",
   "update_style",
-  "remove_style"
+  "remove_style",
+  "create_polyline_slab",
+  "create_circular_slab",
+  "create_opening",
+  "build_building"
 ]);
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -25714,6 +25939,96 @@ if buildings:
     mcpSessionId = buildRes.session;
     return { status: "success", result: buildRes, mcpSessionId };
   }
+  if (payload.action === "deduplicate_walls") {
+    const dedupeCode = `
+import bpy
+import mathutils
+import json
+import ifcopenshell
+import ifcopenshell.api as api
+
+ifc_file = None
+try:
+    import tool
+    ifc_file = tool.Ifc.get()
+except:
+    try:
+        import blenderbim.tool as tool
+        ifc_file = tool.Ifc.get()
+    except:
+        ifc_file = None
+
+def get_wall_bbox(obj):
+    corners = [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box]
+    xs = [c.x for c in corners]; ys = [c.y for c in corners]; zs = [c.z for c in corners]
+    return (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
+
+walls = [o for o in bpy.data.objects if o.type == 'MESH' and 'Wall' in o.name]
+to_remove = []
+
+for i in range(len(walls)):
+    if walls[i] in to_remove:
+        continue
+    for j in range(i+1, len(walls)):
+        if walls[j] in to_remove:
+            continue
+        a = get_wall_bbox(walls[i])
+        b = get_wall_bbox(walls[j])
+        
+        ox = max(0, min(a[3], b[3]) - max(a[0], b[0]))
+        oy = max(0, min(a[4], b[4]) - max(a[1], b[1]))
+        oz = max(0, min(a[5], b[5]) - max(a[2], b[2]))
+        overlap_vol = ox * oy * oz
+        
+        vol_a = (a[3]-a[0]) * (a[4]-a[1]) * (a[5]-a[2])
+        vol_b = (b[3]-b[0]) * (b[4]-b[1]) * (b[5]-b[2])
+        min_vol = min(vol_a, vol_b)
+        
+        if min_vol > 0 and overlap_vol / min_vol > 0.5:
+            to_remove.append(walls[j])
+
+removed_names = []
+for obj in to_remove:
+    removed_names.append(obj.name)
+    element = None
+    if tool:
+        try: element = tool.Ifc.get_entity(obj)
+        except: pass
+
+    if element and ifc_file:
+        try:
+            api.run('root.remove_product', ifc_file, product=element)
+        except Exception as e:
+            try: ifc_file.remove(element)
+            except: pass
+
+    mesh = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if mesh and mesh.users == 0:
+        bpy.data.meshes.remove(mesh)
+
+if removed_names:
+    try:
+        if tool and hasattr(tool.Ifc, 'save'):
+            tool.Ifc.save()
+    except Exception as e:
+        print("save warning:", str(e))
+
+print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(removed_names)}))
+`;
+    const res = await mcpCallTool("execute_blender_code", { code: dedupeCode }, mcpSessionId);
+    mcpSessionId = res.session;
+    let removed = 0;
+    try {
+      const match = res.resultText.match(/DEDUP_RESULT:(\{[\s\S]*?\})/);
+      if (match) {
+        const parsed = JSON.parse(match[1]);
+        removed = parsed.count || 0;
+      }
+    } catch {
+    }
+    return { status: "success", removed, mcpSessionId };
+  }
   if (payload.action === "apply_materials") {
     const materialResult = await applyDefaultMaterials(mcpSessionId);
     mcpSessionId = materialResult.session;
@@ -25749,6 +26064,113 @@ if buildings:
     });
     if (buildRes) mcpSessionId = buildRes.session;
     return { status: "success", mcpSessionId };
+  }
+  if (payload.action === "build_freeform") {
+    const initRes = await mcpCallTool("initialize_project", { project_name: payload.plan?.structure_name || "InfraStudio Structure" }, mcpSessionId);
+    mcpSessionId = initRes.session;
+    const toolFetch = await fetchMcpTools(mcpSessionId);
+    mcpSessionId = toolFetch.session;
+    const allTools = toolFetch.tools;
+    let trimeshExamples = "";
+    try {
+      const exRes = await mcpCallTool("get_trimesh_examples", {}, mcpSessionId);
+      mcpSessionId = exRes.session;
+      trimeshExamples = exRes.resultText;
+    } catch {
+    }
+    const freeformPrompt = `You are the BIM Execution Agent for InfraStudio.
+You have access to ALL available MCP tools. Your job is to build the requested structure by calling the right tools.
+This is NOT a building with rooms \u2014 do NOT use build_room or create doors/windows unless explicitly requested.
+
+For 3D shapes, your PRIMARY tool is create_trimesh_ifc. Write Python code using the trimesh library.
+Available trimesh primitives:
+- trimesh.primitives.Box(extents=[x,y,z]) \u2014 rectangular solid
+- trimesh.primitives.Cylinder(radius=r, height=h) \u2014 cylinder
+- trimesh.primitives.Sphere(radius=r) \u2014 sphere
+- trimesh.creation.extrude_polygon(polygon, height) \u2014 extrude a 2D shape
+- Boolean operations: mesh_a.union(mesh_b), mesh_a.difference(mesh_b), mesh_a.intersection(mesh_b)
+- Transforms: mesh.apply_translation([x,y,z]), mesh.apply_transform(matrix)
+
+CRITICAL RULES for trimesh code:
+- You MUST assign the final mesh to a variable named exactly 'result'
+- NEVER use print() statements
+- Import nothing \u2014 trimesh, np, and math are pre-imported
+- Translate objects BEFORE combining with .union()
+
+For standard structural elements, you can also use:
+- create_slab (rectangular slabs/decks)
+- create_polyline_slab (custom polygon slabs)
+- create_circular_slab (round slabs)
+- create_polyline_walls (walls along a path)
+- execute_ifc_code_tool (raw ifcopenshell API calls)
+
+IFC classes for infrastructure:
+- IfcBeam, IfcColumn, IfcSlab, IfcMember, IfcFooting, IfcPile
+- IfcBuildingElementProxy (generic element)
+- IfcPipeSegment, IfcDuctSegment, IfcCableCarrierSegment (MEP)
+
+Think step by step:
+1. What components does the structure need?
+2. What geometry (box, cylinder, custom) best represents each component?
+3. What are the correct positions so components connect properly?
+4. Call create_trimesh_ifc for each component with the right ifc_class.
+5. After all components, apply materials using create_surface_style + apply_style_to_object.
+
+IMPORTANT: You MUST make at least one mutation tool call. Output ONLY tool_calls.`;
+    const planDescription = `Structure to build: ${JSON.stringify(payload.plan)}
+
+Trimesh code examples for reference:
+${trimeshExamples}`;
+    let executedMutation = false;
+    const executedTools = [];
+    let executionError = "";
+    for (let tryNum = 1; tryNum <= 3; tryNum++) {
+      let currentPlan = planDescription;
+      if (executionError) {
+        currentPlan += `
+
+PREVIOUS ATTEMPT FAILED:
+${executionError}
+Fix the issues and try again with correct tool calls.`;
+        executionError = "";
+      }
+      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "kimi-k2.7-code");
+      const toolCalls = glmMsg.tool_calls || [];
+      if (toolCalls.length === 0) {
+        executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
+        if (tryNum === 3) throw new Error(executionError);
+        continue;
+      }
+      try {
+        for (const call of toolCalls) {
+          const toolName = call.function.name;
+          const args = JSON.parse(call.function.arguments || "{}");
+          console.log(`[build_freeform] Executing tool: ${toolName}`);
+          const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
+          mcpSessionId = toolRes.session;
+          executedTools.push(toolName);
+          if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
+            executedMutation = true;
+          }
+        }
+        if (!executedMutation) {
+          throw new Error("No geometry was created. You must call create_trimesh_ifc or similar tools.");
+        }
+        break;
+      } catch (err) {
+        executionError = err.message || String(err);
+        console.error(`[build_freeform] Attempt ${tryNum} failed: ${executionError}`);
+        if (tryNum === 3) throw err;
+      }
+    }
+    const exported = await exportWithMaterials(mcpSessionId);
+    return {
+      status: "success",
+      ifc_url: exported.ifc_url,
+      mcpSessionId: exported.mcpSessionId,
+      executedTools,
+      materialResult: exported.materialResult
+    };
   }
   if (payload.action === "dynamic_edit") {
     const plan = payload.plan;
@@ -25797,7 +26219,7 @@ ${executionError}
 Retry with concrete mutation tool calls.`;
         executionError = "";
       }
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.1");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "kimi-k2.7-code");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";
