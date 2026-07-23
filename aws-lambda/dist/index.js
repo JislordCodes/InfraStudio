@@ -26070,7 +26070,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     let args = {};
     if (comp.trimesh_code) {
       args = {
-        code: comp.trimesh_code,
+        trimesh_code: comp.trimesh_code,
         ifc_class: comp.ifc_class || "IfcBuildingElementProxy",
         name: comp.name || "Component"
       };
@@ -26100,7 +26100,7 @@ b.apply_translation([${x}, ${y}, ${z}])
 result = b`;
       }
       args = {
-        code,
+        trimesh_code: code,
         ifc_class: comp.ifc_class || "IfcBuildingElementProxy",
         name: comp.name || "Component"
       };
