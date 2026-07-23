@@ -139,20 +139,43 @@ export async function runMultiAgentLoop(
       ifc_url = exportRes.ifc_url;
 
     } else if (isInfrastructure) {
-      // ═══ INFRASTRUCTURE/MEP/CUSTOM MODE: Let BIM agent think freely ═══
-      const componentCount = plan.components?.length || 0;
-      pushStep(`BIM Agent: Infrastructure mode — ${componentCount} components planned. Letting BIM agent decide tools...`);
-      
-      const bimRes = await callEdge('agent-bim', {
-        action: 'build_freeform',
-        plan: plan,
-        mcpSessionId: sessionId
-      });
-      ifc_url = bimRes.ifc_url;
-      sessionId = bimRes.mcpSessionId;
-      
-      if (bimRes.executedTools?.length) {
-        pushStep(`BIM Agent: Executed ${bimRes.executedTools.length} tool calls: ${bimRes.executedTools.join(', ')}`);
+      // ═══ INFRASTRUCTURE/MEP/CUSTOM MODE: Chunked component execution ═══
+      const components = plan.components || [];
+      if (components.length > 0) {
+        pushStep(`BIM Agent: Infrastructure mode — ${components.length} components planned. Beginning chunked generation...`);
+        pushStep("BIM Agent: Initializing infrastructure project...");
+        let bimRes = await callEdge('agent-bim', { action: 'initialize', projectName: plan.structure_name || 'InfraStudio Infrastructure', mcpSessionId: sessionId });
+        sessionId = bimRes.mcpSessionId;
+
+        for (let i = 0; i < components.length; i++) {
+          const comp = components[i];
+          pushStep(`BIM Agent: Building ${comp.name || 'Component'} (${i + 1}/${components.length})...`);
+          bimRes = await callEdge('agent-bim', {
+            action: 'build_component',
+            component: comp,
+            mcpSessionId: sessionId
+          });
+          sessionId = bimRes.mcpSessionId;
+        }
+
+        if (plan.material_palette) {
+          pushStep("BIM Agent: Applying material finishes...");
+          bimRes = await callEdge('agent-bim', { action: 'apply_materials', mcpSessionId: sessionId });
+          if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
+        }
+
+        pushStep("BIM Agent: All components generated. Exporting IFC...");
+        const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
+        ifc_url = exportRes.ifc_url;
+      } else {
+        pushStep("BIM Agent: Infrastructure mode — letting BIM agent decide freeform tools...");
+        const bimRes = await callEdge('agent-bim', {
+          action: 'build_freeform',
+          plan: plan,
+          mcpSessionId: sessionId
+        });
+        ifc_url = bimRes.ifc_url;
+        sessionId = bimRes.mcpSessionId;
       }
 
     } else {

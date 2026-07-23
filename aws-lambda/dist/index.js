@@ -26065,6 +26065,50 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     if (buildRes) mcpSessionId = buildRes.session;
     return { status: "success", mcpSessionId };
   }
+  if (payload.action === "build_component") {
+    const comp = payload.component || {};
+    let args = {};
+    if (comp.trimesh_code) {
+      args = {
+        code: comp.trimesh_code,
+        ifc_class: comp.ifc_class || "IfcBuildingElementProxy",
+        name: comp.name || "Component"
+      };
+    } else {
+      const geomType = (comp.geometry_type || "box").toLowerCase();
+      const dims = comp.dimensions || {};
+      const pos = comp.position || [0, 0, 0];
+      const x = Number(pos[0] || 0), y = Number(pos[1] || 0), z = Number(pos[2] || 0);
+      let code = "";
+      if (geomType === "cylinder") {
+        const r = Number(dims.radius || 1);
+        const h = Number(dims.height || 5);
+        code = `c = trimesh.primitives.Cylinder(radius=${r}, height=${h})
+c.apply_translation([${x}, ${y}, ${z}])
+result = c`;
+      } else if (geomType === "sphere") {
+        const r = Number(dims.radius || 1);
+        code = `s = trimesh.primitives.Sphere(radius=${r})
+s.apply_translation([${x}, ${y}, ${z}])
+result = s`;
+      } else {
+        const l = Number(dims.length || 5);
+        const w = Number(dims.width || 2);
+        const h = Number(dims.height || 1);
+        code = `b = trimesh.primitives.Box(extents=[${l}, ${w}, ${h}])
+b.apply_translation([${x}, ${y}, ${z}])
+result = b`;
+      }
+      args = {
+        code,
+        ifc_class: comp.ifc_class || "IfcBuildingElementProxy",
+        name: comp.name || "Component"
+      };
+    }
+    const res = await mcpCallTool("create_trimesh_ifc", args, mcpSessionId);
+    mcpSessionId = res.session;
+    return { status: "success", result: res.resultText, mcpSessionId };
+  }
   if (payload.action === "build_freeform") {
     const initRes = await mcpCallTool("initialize_project", { project_name: payload.plan?.structure_name || "InfraStudio Structure" }, mcpSessionId);
     mcpSessionId = initRes.session;

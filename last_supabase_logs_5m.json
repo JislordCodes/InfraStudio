@@ -1,0 +1,116 @@
+﻿[
+    {
+        "event_message":  "DELETE | 204 | https://pzeoilvqeyuheslkfhjq.supabase.co/rest/v1/ifc_sessions?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20 | Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 OPR/131.0.0.0",
+        "id":  "7ee838c2-3cd6-470d-8442-7cdd59c04a90",
+        "metadata":  [
+                         {
+                             "load_balancer_experimental_routing":  null,
+                             "load_balancer_geo_aware_info":  [
+
+                                                              ],
+                             "load_balancer_redirect_identifier":  null,
+                             "logflare_worker":  [
+
+                                                 ],
+                             "request":  [
+                                             {
+                                                 "cf":  "",
+                                                 "headers":  "",
+                                                 "host":  "pzeoilvqeyuheslkfhjq.supabase.co",
+                                                 "method":  "DELETE",
+                                                 "path":  "/rest/v1/ifc_sessions",
+                                                 "port":  null,
+                                                 "protocol":  "https:",
+                                                 "sb":  "",
+                                                 "search":  "?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20",
+                                                 "url":  "https://pzeoilvqeyuheslkfhjq.supabase.co/rest/v1/ifc_sessions?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20"
+                                             }
+                                         ],
+                             "response":  [
+                                              {
+                                                  "headers":  "",
+                                                  "origin_time":  69,
+                                                  "status_code":  204
+                                              }
+                                          ]
+                         }
+                     ],
+        "timestamp":  1782254811502000
+    },
+    {
+        "event_message":  "DELETE | 204 | https://pzeoilvqeyuheslkfhjq.supabase.co/rest/v1/ifc_sessions?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20 | Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 OPR/131.0.0.0",
+        "id":  "855844f5-2c7e-41aa-b2ab-2ca4722fbe6d",
+        "metadata":  [
+                         {
+                             "load_balancer_experimental_routing":  null,
+                             "load_balancer_geo_aware_info":  [
+
+                                                              ],
+                             "load_balancer_redirect_identifier":  null,
+                             "logflare_worker":  [
+
+                                                 ],
+                             "request":  [
+                                             {
+                                                 "cf":  "",
+                                                 "headers":  "",
+                                                 "host":  "pzeoilvqeyuheslkfhjq.supabase.co",
+                                                 "method":  "DELETE",
+                                                 "path":  "/rest/v1/ifc_sessions",
+                                                 "port":  null,
+                                                 "protocol":  "https:",
+                                                 "sb":  "",
+                                                 "search":  "?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20",
+                                                 "url":  "https://pzeoilvqeyuheslkfhjq.supabase.co/rest/v1/ifc_sessions?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20"
+                                             }
+                                         ],
+                             "response":  [
+                                              {
+                                                  "headers":  "",
+                                                  "origin_time":  106,
+                                                  "status_code":  204
+                                              }
+                                          ]
+                         }
+                     ],
+        "timestamp":  1782254811436000
+    },
+    {
+        "event_message":  "OPTIONS | 200 | https://pzeoilvqeyuheslkfhjq.supabase.co/rest/v1/ifc_sessions?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20 | Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 OPR/131.0.0.0",
+        "id":  "70782967-e37c-4a5f-ab98-abf7ff2182c5",
+        "metadata":  [
+                         {
+                             "load_balancer_experimental_routing":  null,
+                             "load_balancer_geo_aware_info":  [
+
+                                                              ],
+                             "load_balancer_redirect_identifier":  null,
+                             "logflare_worker":  [
+
+                                                 ],
+                             "request":  [
+                                             {
+                                                 "cf":  "",
+                                                 "headers":  "",
+                                                 "host":  "pzeoilvqeyuheslkfhjq.supabase.co",
+                                                 "method":  "OPTIONS",
+                                                 "path":  "/rest/v1/ifc_sessions",
+                                                 "port":  null,
+                                                 "protocol":  "https:",
+                                                 "sb":  "",
+                                                 "search":  "?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20",
+                                                 "url":  "https://pzeoilvqeyuheslkfhjq.supabase.co/rest/v1/ifc_sessions?id=eq.060cc39a-9f5d-40e5-9da4-585cb3d78c20"
+                                             }
+                                         ],
+                             "response":  [
+                                              {
+                                                  "headers":  "",
+                                                  "origin_time":  19,
+                                                  "status_code":  200
+                                              }
+                                          ]
+                         }
+                     ],
+        "timestamp":  1782254811230000
+    }
+]

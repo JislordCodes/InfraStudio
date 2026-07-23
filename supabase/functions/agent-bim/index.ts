@@ -365,6 +365,49 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     return { status: "success", mcpSessionId };
   }
 
+  if (payload.action === "build_component") {
+    const comp = payload.component || {};
+    let args: any = {};
+
+    if (comp.trimesh_code) {
+      args = {
+        code: comp.trimesh_code,
+        ifc_class: comp.ifc_class || "IfcBuildingElementProxy",
+        name: comp.name || "Component"
+      };
+    } else {
+      const geomType = (comp.geometry_type || "box").toLowerCase();
+      const dims = comp.dimensions || {};
+      const pos = comp.position || [0, 0, 0];
+      const x = Number(pos[0] || 0), y = Number(pos[1] || 0), z = Number(pos[2] || 0);
+
+      let code = "";
+      if (geomType === "cylinder") {
+        const r = Number(dims.radius || 1.0);
+        const h = Number(dims.height || 5.0);
+        code = `c = trimesh.primitives.Cylinder(radius=${r}, height=${h})\nc.apply_translation([${x}, ${y}, ${z}])\nresult = c`;
+      } else if (geomType === "sphere") {
+        const r = Number(dims.radius || 1.0);
+        code = `s = trimesh.primitives.Sphere(radius=${r})\ns.apply_translation([${x}, ${y}, ${z}])\nresult = s`;
+      } else {
+        const l = Number(dims.length || 5.0);
+        const w = Number(dims.width || 2.0);
+        const h = Number(dims.height || 1.0);
+        code = `b = trimesh.primitives.Box(extents=[${l}, ${w}, ${h}])\nb.apply_translation([${x}, ${y}, ${z}])\nresult = b`;
+      }
+
+      args = {
+        code,
+        ifc_class: comp.ifc_class || "IfcBuildingElementProxy",
+        name: comp.name || "Component"
+      };
+    }
+
+    const res = await mcpCallTool("create_trimesh_ifc", args, mcpSessionId);
+    mcpSessionId = res.session;
+    return { status: "success", result: res.resultText, mcpSessionId };
+  }
+
   if (payload.action === "build_freeform") {
     // Initialize fresh project
     const initRes = await mcpCallTool("initialize_project", { project_name: payload.plan?.structure_name || "InfraStudio Structure" }, mcpSessionId);
