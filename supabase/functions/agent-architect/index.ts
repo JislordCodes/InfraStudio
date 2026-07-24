@@ -142,11 +142,26 @@ function wallLength(room: Room, wall: string): number {
   return wall === "south" || wall === "north" ? Number(room.width || 4) : Number(room.length || 4);
 }
 
+function originToOffset(opening: any, room: Room): number {
+  // Gemini sometimes outputs door/window position as 'origin:[x,y,z]' instead of 'offset:number'
+  // Convert: for south/north walls offset is along X axis; for east/west offset is along Y axis
+  if (opening.offset !== undefined && opening.offset !== null) return Number(opening.offset);
+  if (Array.isArray(opening.origin)) {
+    const [ox, oy] = opening.origin as number[];
+    const [rx, ry] = (room.origin || [0, 0, 0]) as number[];
+    const wall = String(opening.wall || "south");
+    if (wall === "south" || wall === "north") return Math.abs(ox - rx);
+    if (wall === "east" || wall === "west")  return Math.abs(oy - ry);
+  }
+  return 0.9;
+}
+
 function clampOpening(opening: Opening, room: Room, defaultWidth: number): Opening {
   const wall = WALLS.includes(String(opening.wall)) ? String(opening.wall) : "south";
   const width = Math.max(0.6, Math.min(Number(opening.width || defaultWidth), wallLength(room, wall) - 0.9));
   const maxOffset = Math.max(0.45, wallLength(room, wall) - width - 0.45);
-  const offset = Math.max(0.45, Math.min(Number(opening.offset || 0.9), maxOffset));
+  const rawOffset = originToOffset(opening, room);
+  const offset = Math.max(0.45, Math.min(rawOffset, maxOffset));
   return { ...opening, wall, width, offset };
 }
 
@@ -329,12 +344,24 @@ export async function handleArchitect(brief: any): Promise<any> {
   }
 
   // EXCLUSIVELY use Gemini 3.6 Flash (Strict, zero fallbacks)
-  const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
+  let geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
   if (!geminiRes || geminiRes.trim().length < 5) {
     throw new Error("Gemini 3.6 Flash returned an empty or invalid response.");
   }
 
-  const parsed = cleanJsonResponse(geminiRes);
+  // Attempt JSON parse — retry once if it fails (Gemini occasionally adds commentary)
+  let parsed: any;
+  try {
+    parsed = cleanJsonResponse(geminiRes);
+  } catch (firstErr) {
+    console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
+    const retryPrompt = `You are an architect AI. Return ONLY valid JSON — no markdown, no text, no thinking.
+The user wants: ${brief.project_type || "a building"} with these rooms: ${(brief.room_requirements || []).map((r: any) => r.name).join(", ")}.
+Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_palette, storey_plans(array of floors with rooms having name/width/length/origin[x,y,z]/doors[]/windows[]), special_elements, structural_notes.`;
+    geminiRes = await callGemini(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "gemini-3.6-flash");
+    parsed = cleanJsonResponse(geminiRes);
+  }
+
   if (isBuilding) {
     return repairPlan(parsed);
   } else {

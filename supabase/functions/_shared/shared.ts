@@ -178,7 +178,7 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
           generationConfig: {
-            maxOutputTokens: 8192,
+            maxOutputTokens: 16384,
             responseMimeType: jsonMode ? "application/json" : "text/plain"
           }
         })
