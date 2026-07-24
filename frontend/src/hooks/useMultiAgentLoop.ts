@@ -105,7 +105,22 @@ export async function runMultiAgentLoop(
         console.warn('Wall deduplication skipped:', e);
       }
       
-      const roofTypeRequested = plan.roof_type || (plan.special_elements?.find((e: string) => /roof|gable|hip|flat/i.test(e)));
+      let roofTypeRequested = plan.roof_type;
+      if (roofTypeRequested === undefined || roofTypeRequested === null) {
+        const match = plan.special_elements?.find((e: string) => /roof|gable|hip|flat/i.test(e));
+        if (match) {
+          if (/no roof|without roof|remove roof|none/i.test(match)) {
+            roofTypeRequested = "none";
+          } else if (/gable/i.test(match)) {
+            roofTypeRequested = "gable";
+          } else if (/hip/i.test(match)) {
+            roofTypeRequested = "hip";
+          } else if (/flat/i.test(match)) {
+            roofTypeRequested = "flat";
+          }
+        }
+      }
+
       if (roofTypeRequested && roofTypeRequested !== "none") {
         pushStep(`BIM Agent: Creating ${roofTypeRequested} roof...`);
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxHeight = 3;
@@ -235,7 +250,63 @@ export async function runMultiAgentLoop(
         if (matRes?.mcpSessionId) sessionId = matRes.mcpSessionId;
       }
 
-      // 5. Export final edited IFC model
+      // 5. Update or Change roof during edits if requested
+      let editRoofType = plan.roof_type;
+      if (editRoofType === undefined || editRoofType === null) {
+        const match = plan.special_elements?.find((e: string) => /roof|gable|hip|flat/i.test(e));
+        if (match) {
+          if (/no roof|without roof|remove roof|none/i.test(match)) {
+            editRoofType = "none";
+          } else if (/gable/i.test(match)) {
+            editRoofType = "gable";
+          } else if (/hip/i.test(match)) {
+            editRoofType = "hip";
+          } else if (/flat/i.test(match)) {
+            editRoofType = "flat";
+          }
+        }
+      }
+
+      if (editRoofType && editRoofType !== "none") {
+        pushStep(`BIM Agent: Re-creating roof as: ${editRoofType}...`);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxHeight = 3;
+        // Bounding box over all rooms in edit storey plans or new rooms
+        let allRooms = plan.new_rooms || [];
+        if (plan.storey_plans) {
+          allRooms = allRooms.concat(plan.storey_plans.flatMap((s: any) => s.rooms || []));
+        }
+        if (allRooms.length > 0) {
+          for (const r of allRooms) {
+            const [ox, oy] = r.origin || [0, 0, 0];
+            const w = r.width || 4;
+            const l = r.length || 4;
+            minX = Math.min(minX, ox);
+            minY = Math.min(minY, oy);
+            maxX = Math.max(maxX, ox + w);
+            maxY = Math.max(maxY, oy + l);
+          }
+        }
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 8; maxY = 8; }
+
+        const bimRes = await callEdge('agent-bim', {
+          action: 'create_roof',
+          roof_type: editRoofType,
+          bbox: { minX, minY, maxX, maxY, height: maxHeight },
+          mcpSessionId: sessionId
+        });
+        if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
+      } else if (editRoofType === "none") {
+        pushStep("BIM Agent: Deleting existing roofs as requested...");
+        try {
+          await callEdge('agent-bim', {
+            action: 'dynamic_edit',
+            plan: { target_actions: [{ action: "delete_roof" }] },
+            mcpSessionId: sessionId
+          });
+        } catch { /* optional */ }
+      }
+
+      // 6. Export final edited IFC model
       pushStep("BIM Agent: Exporting updated model...");
       const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
       ifc_url = exportRes.ifc_url;

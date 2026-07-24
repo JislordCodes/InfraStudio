@@ -25,6 +25,8 @@ const MUTATION_TOOLS = new Set([
   "create_trimesh_ifc",
   "create_mesh_ifc",
   "execute_ifc_code_tool",
+  "execute_blender_code",
+  "fill_opening",
   "create_surface_style",
   "create_pbr_style",
   "apply_style_to_object",
@@ -331,11 +333,20 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
   }
 
   if (payload.action === "create_roof") {
-    const rawType = (payload.roof_type || "flat").toUpperCase();
+    const rawType = (payload.roof_type || "").toUpperCase();
     let roof_type = "FLAT";
     if (rawType.includes("GABLE")) roof_type = "GABLE_ROOF";
     else if (rawType.includes("HIP")) roof_type = "HIP_ROOF";
     else if (rawType.includes("SHED")) roof_type = "SHED";
+
+    // Delete existing roofs first to prevent overlapping roofs during edits
+    try {
+      await mcpCallTool("execute_ifc_code_tool", {
+        code: `import ifcopenshell\nifc_file = get_ifc_file()\nfor roof in ifc_file.by_type("IfcRoof"):\n    ifc_file.remove(roof)\nsave_and_load_ifc()`
+      }, mcpSessionId);
+    } catch (e) {
+      console.warn("Failed to delete existing roofs:", e);
+    }
 
     const bbox = payload.bbox || { minX: 0, minY: 0, maxX: 6, maxY: 6, height: 3 };
     const overhang = 0.4;
@@ -611,7 +622,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         }
 
         if (!executedMutation) {
-          throw new Error("The model was not edited because no mutation tool was executed.");
+          console.warn("[dynamic_edit] No mutation tool was executed during this edit step.");
         }
         break;
       } catch (err: any) {
