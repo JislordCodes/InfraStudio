@@ -32,37 +32,19 @@ export async function runMultiAgentLoop(
 
   const messages = [...previousMessages, { role: "user", content: userMessage }];
 
-  const callEdge = async (funcName: string, body: any, retries = 3): Promise<any> => {
+  const callEdge = async (funcName: string, body: any) => {
     const url = `${EDGE_PROXY_BASE}/${funcName}`;
-    let lastErr: any = null;
-
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_ANON_KEY,
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify(body)
-        });
-
-        if (!res.ok) {
-          const errText = await res.text().catch(() => res.statusText);
-          throw new Error(`HTTP ${res.status} from ${funcName}: ${errText}`);
-        }
-        return await res.json();
-      } catch (err: any) {
-        lastErr = err;
-        console.warn(`[callEdge] ${funcName} attempt ${attempt}/${retries} failed:`, err.message || err);
-        if (attempt < retries) {
-          await new Promise((r) => setTimeout(r, 1500 * attempt));
-        }
-      }
-    }
-
-    throw new Error(`Connection to ${funcName} failed after ${retries} attempts (${lastErr?.message || String(lastErr)})`);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`Error from ${funcName}: ${await res.text()}`);
+    return res.json();
   };
 
   try {
@@ -70,18 +52,22 @@ export async function runMultiAgentLoop(
     pushStep("Interpreter Agent: Processing request...");
     const brief = await callEdge('agent-interpreter', { messages, sessionId });
     const structureCategory = brief.structure_category || "building";
-    pushStep(`Interpreter Agent: Classified as '${structureCategory}' structure.`);
+    const isEdit = Boolean(brief.is_edit);
+    pushStep(`Interpreter Agent: Classified as '${structureCategory}' structure (is_edit: ${isEdit}).`);
     
     // 2. Architect
     pushStep("Architectural Agent: Planning layout...");
     const plan = await callEdge('agent-architect', brief);
 
-    // 3. BIM Executor — branch based on structure category
-    const isBuilding = structureCategory === "building" && !plan.is_edit && plan.storey_plans;
-    const isInfrastructure = !plan.is_edit && (structureCategory !== "building" || plan.components);
+    // Force plan.is_edit if interpreter determined it is an edit
+    if (isEdit) plan.is_edit = true;
 
-    if (isBuilding) {
-      // ═══ BUILDING MODE: Existing room-by-room pipeline ═══
+    // 3. BIM Executor — branch based on edit vs new building vs infrastructure
+    const isBuildingNew = structureCategory === "building" && !plan.is_edit && plan.storey_plans;
+    const isInfrastructureNew = !plan.is_edit && (structureCategory !== "building" || plan.components);
+
+    if (isBuildingNew) {
+      // ═══ NEW BUILDING MODE: Room-by-room pipeline from scratch ═══
       pushStep(`BIM Agent: Building mode — ${plan.storey_plans.length} storeys. Beginning chunked execution...`);
       
       pushStep("BIM Agent: Initializing new project...");
@@ -156,8 +142,8 @@ export async function runMultiAgentLoop(
       const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
       ifc_url = exportRes.ifc_url;
 
-    } else if (isInfrastructure) {
-      // ═══ INFRASTRUCTURE/MEP/CUSTOM MODE: Chunked component execution ═══
+    } else if (isInfrastructureNew) {
+      // ═══ NEW INFRASTRUCTURE/MEP/CUSTOM MODE ═══
       const components = plan.components || [];
       if (components.length > 0) {
         pushStep(`BIM Agent: Infrastructure mode — ${components.length} components planned. Beginning chunked generation...`);
@@ -197,15 +183,63 @@ export async function runMultiAgentLoop(
       }
 
     } else {
-      // ═══ EDIT MODE ═══
-      pushStep("BIM Agent: Executing dynamic modifications...");
-      const bimRes = await callEdge('agent-bim', {
-        action: 'dynamic_edit',
-        plan: plan,
-        mcpSessionId: sessionId
-      });
-      ifc_url = bimRes.ifc_url;
-      sessionId = bimRes.mcpSessionId;
+      // ═══ EDIT MODE (BUILD UPON ACTIVE MODEL - DO NOT INITIALIZE / ERASE) ═══
+      pushStep(`BIM Agent: Modifying active model in session (Session: ${sessionId || 'new'})...`);
+
+      // 1. Create any new storeys requested in the edit
+      const editStoreys = plan.new_storeys || [];
+      for (const storey of editStoreys) {
+        pushStep(`BIM Agent: Adding new storey: ${storey.name}...`);
+        const sRes = await callEdge('agent-bim', { action: 'create_storey', name: storey.name, elevation: storey.elevation || 0, mcpSessionId: sessionId });
+        sessionId = sRes.mcpSessionId;
+      }
+
+      // 2. Build any new rooms requested in the edit onto the active model
+      const editRooms = plan.new_rooms || (plan.storey_plans ? plan.storey_plans.flatMap((s: any) => s.rooms || []) : []);
+      if (editRooms.length > 0) {
+        pushStep(`BIM Agent: Adding ${editRooms.length} new room(s) to existing structure...`);
+        for (let i = 0; i < editRooms.length; i++) {
+          const room = editRooms[i];
+          pushStep(`BIM Agent: Building ${room.name || 'Room Extension'} (${i + 1}/${editRooms.length})...`);
+          const rRes = await callEdge('agent-bim', {
+            action: 'build_room',
+            mcpSessionId: sessionId,
+            storeyHeight: room.height || 3,
+            room: room
+          });
+          sessionId = rRes.mcpSessionId;
+        }
+
+        // Deduplicate overlapping walls between new and existing rooms
+        try {
+          const dedupRes = await callEdge('agent-bim', { action: 'deduplicate_walls', mcpSessionId: sessionId });
+          sessionId = dedupRes.mcpSessionId;
+        } catch { /* non-fatal */ }
+      }
+
+      // 3. Execute dynamic modifications / tool calls for specific element edits (windows, doors, roofs, balconies, material styles)
+      if (plan.target_actions?.length || plan.edit_instructions?.length || !editRooms.length) {
+        pushStep("BIM Agent: Executing dynamic element modifications...");
+        const bimRes = await callEdge('agent-bim', {
+          action: 'dynamic_edit',
+          plan: plan,
+          mcpSessionId: sessionId
+        });
+        sessionId = bimRes.mcpSessionId;
+      }
+
+      // 4. Update material finishes
+      if (plan.material_palette) {
+        pushStep("BIM Agent: Updating material finishes...");
+        const matRes = await callEdge('agent-bim', { action: 'apply_materials', mcpSessionId: sessionId });
+        if (matRes?.mcpSessionId) sessionId = matRes.mcpSessionId;
+      }
+
+      // 5. Export final edited IFC model
+      pushStep("BIM Agent: Exporting updated model...");
+      const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
+      ifc_url = exportRes.ifc_url;
+      sessionId = exportRes.mcpSessionId;
     }
 
     // 4. Quality Reviewer

@@ -1,37 +1,40 @@
-
 import { CORS, callQwen, callGemini, cleanJsonResponse } from "../_shared/shared.ts";
 
-const systemPrompt = `You are the Architectural Reasoning Agent for InfraStudio.
-Your mission is to transform a structured architectural brief into a complete, spatially coherent, mathematically sound layout or edit plan.
+const systemPrompt = `You are the Lead Architectural Reasoning Agent for InfraStudio.
+Your mission is to transform a design brief into a complete, spatially coherent, visually striking, and mathematically sound architectural plan or edit plan.
 
-Spatial Axioms & Rules:
- 1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (e.g. Bedrooms, Living Room, Kitchen, Bathroom, Corridor, Entry, Balcony, Garage, Utility). Never omit requested rooms.
- 2. FLUSH GRID LAYOUT (CRITICAL):
-    - Arrange rooms in a clean 2D grid of rows and columns starting from origin [0,0,0].
-    - Adjacent rooms MUST share exact flush boundary lines. If Row 1 ends at Y=5.0m, Row 2 MUST start at Y=5.0m across all columns. If Column 1 ends at X=5.0m, Column 2 MUST start at X=5.0m across all rows.
-    - NEVER leave unbuilt gaps, staggered wall offsets, or narrow dead strips between rooms. All internal walls must form continuous straight grid lines.
- 3. DOORS (CRITICAL):
-    - EVERY room MUST have at least one door connecting to a circulation space (Living Room, Corridor, or Entry).
-    - MAIN ENTRY: The Entry/Living Room MUST have an exterior door opening to the outside world.
-    - Door offset must be between 0.45m and (wall_length - width - 0.45m).
- 4. WINDOWS (CRITICAL):
-    - Windows MUST ONLY be placed on EXTERIOR walls. Never place windows on interior partition walls.
- 5. ROOF & SPECIAL FEATURES:
-    - Set "roof_type": "gable" | "flat" | "hip" based on brief (default "flat" for apartments, "gable" for houses).
-    - Capture any special elements (balcony, stairs, columns, porch) in "special_elements".
- 6. MATERIALS:
-    - Include material_palette mapping wall, floor, door, window_glass, roof_or_ceiling to requested materials.
- 7. EDITS & REVISONS:
-    - If is_edit=true, set storey_plans=[] and provide explicit tool actions in "target_actions".
+ARCHITECTURAL DIVERSITY & FOOTPRINT SELECTION (CRITICAL FOR NEW BUILDINGS):
+ 1. DIVERSE & CREATIVE FOOTPRINTS: Unless the user explicitly requests a plain rectangular box, dynamically choose an expressive architectural footprint shape for new builds:
+    - "L-SHAPE": Main living wing along X (e.g. 8x5m) + perpendicular private wing along Y (e.g. 5x6m starting at origin [0,5,0]), creating a protected terrace/courtyard angle.
+    - "U-SHAPE / COURTYARD": Two parallel side wings (e.g. Bedrooms & Garage) connected by a central living wing, surrounding a central open outdoor courtyard.
+    - "OFFSET DUAL-VOLUME": Two rectangular volumes offset from each other (e.g. Ground Floor Wing 1 at [0,0,0], Wing 2 shifted to [3,2,0], or a cantilevered 2nd floor volume).
+    - "T-SHAPE / CROSS": Central entry/circulation spine with function wings protruding outward.
+    - "MODERN OPEN PAVILION": Wide glass-fronted modern pavilion with attached side volume (garage, porch, deck).
+ 2. DO NOT output the exact same basic 2x2 rectangular block every time. Vary room dimensions, orientations, and roof styles to match modern architectural design!
+
+SPATIAL AXIOMS & RULES:
+ 1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (Living Room, Bedrooms, Kitchen, Bathrooms, Hallways, Garages, Balconies, etc.).
+ 2. FLUSH WALL BOUNDARIES: Adjacent rooms MUST share exact flush boundary coordinates so internal and external walls connect seamlessly.
+ 3. DOORS: EVERY room MUST have at least one door connecting to a circulation space (Living Room, Hallway, or Entry). MAIN ENTRY MUST have an exterior door.
+ 4. WINDOWS: Windows MUST ONLY be placed on EXTERIOR walls. Provide modern floor-to-ceiling or wide architectural windows on living/bedroom exterior walls.
+ 5. ROOF & ARCHITECTURAL STYLE: Choose a roof type ("gable", "flat", "hip", "shed", "butterfly") matching the architecture. Default "flat" or "shed" for modern villas/apartments, "gable" or "hip" for houses.
+ 6. MATERIALS: Specify a harmonious material palette (e.g. white render + cedar cladding, exposed concrete + black steel, light timber + slate).
+
+ITERATIVE EDITS & MODIFICATIONS (WHEN is_edit = true):
+ 1. When modifying an active existing model (is_edit = true), DO NOT erase or rebuild the building from scratch.
+ 2. If adding new rooms or storeys (e.g. garage, balcony, 2nd floor, extra bedroom):
+    - Output "new_storeys": Array of any new floors/storeys (e.g. [{"name": "First Floor", "elevation": 3.0, "height": 3.0}]).
+    - Output "new_rooms": Array of new room objects with precise origin [x,y,z], width, length, doors, windows, attached to or above the existing structure.
+ 3. Output "target_actions": List of concrete edit actions (e.g., add_room, add_window, add_door, add_balcony, change_roof, apply_material).
+ 4. Output "material_palette": Any updated material finishes requested by user.
 
 Strict Restrictions:
- * Return ONLY raw JSON matching the schema below.
- * CRITICAL: Start your output immediately with '{'. Do NOT wrap JSON in outer keys like "architectural_analysis". Output ONLY root keys: "is_edit", "roof_type", "has_stairs", "material_palette", "storey_plans".
+ * Return ONLY raw JSON matching the schema below. Start your output immediately with '{'.
 
 Expected JSON Schema:
 {
   "is_edit": boolean,
-  "roof_type": "flat|gable|hip",
+  "roof_type": "flat|gable|hip|shed|butterfly",
   "has_stairs": boolean,
   "material_palette": {
     "wall": "string",
@@ -70,6 +73,23 @@ Expected JSON Schema:
           ]
         }
       ]
+    }
+  ],
+  "new_storeys": [
+    {
+      "name": "string",
+      "elevation": number,
+      "height": number
+    }
+  ],
+  "new_rooms": [
+    {
+      "name": "string",
+      "width": number,
+      "length": number,
+      "origin": [number, number, number],
+      "doors": [],
+      "windows": []
     }
   ],
   "special_elements": ["string"],
@@ -143,8 +163,6 @@ function wallLength(room: Room, wall: string): number {
 }
 
 function originToOffset(opening: any, room: Room): number {
-  // Gemini sometimes outputs door/window position as 'origin:[x,y,z]' instead of 'offset:number'
-  // Convert: for south/north walls offset is along X axis; for east/west offset is along Y axis
   if (opening.offset !== undefined && opening.offset !== null) return Number(opening.offset);
   if (Array.isArray(opening.origin)) {
     const [ox, oy] = opening.origin as number[];
@@ -258,6 +276,31 @@ function alignFloorplanGrid(rooms: Room[]): void {
   }
 }
 
+function processRooms(rooms: Room[]): void {
+  alignFloorplanGrid(rooms);
+  for (const room of rooms) {
+    if ((room as any).dimensions && Array.isArray((room as any).dimensions)) {
+      room.width = Number((room as any).dimensions[0]);
+      room.length = Number((room as any).dimensions[1]);
+    }
+    room.width = Math.max(2.2, Number(room.width || 4));
+    room.length = Math.max(2.2, Number(room.length || 4));
+    room.origin = Array.isArray(room.origin) ? room.origin : [0, 0, 0];
+
+    room.doors = (Array.isArray(room.doors) ? room.doors : []).map((door) => clampOpening(door, room, 0.9));
+    room.windows = (Array.isArray(room.windows) ? room.windows : [])
+      .map((window) => clampOpening(window, room, 1.2))
+      .filter((window) => !isInternalWall(room, String(window.wall), rooms));
+
+    if (room.doors!.length === 0) {
+      const wall = pickDoorWall(room, rooms);
+      room.doors!.push(clampOpening({ wall, offset: wallLength(room, wall) / 2 - 0.45, width: 0.9, height: 2.1 }, room, 0.9));
+    }
+
+    room.windows = room.windows.filter((window) => !room.doors!.some((door) => openingsOverlap(window, door)));
+  }
+}
+
 function repairPlan(plan: any): any {
   if (!plan) return {};
   if (typeof plan === "object") {
@@ -268,7 +311,12 @@ function repairPlan(plan: any): any {
     }
   }
 
-  if (plan.is_edit) return plan;
+  if (plan.is_edit) {
+    if (Array.isArray(plan.new_rooms)) {
+      processRooms(plan.new_rooms);
+    }
+    return plan;
+  }
 
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
     plan.storey_plans = [
@@ -290,28 +338,7 @@ function repairPlan(plan: any): any {
     }
 
     const rooms: Room[] = Array.isArray(storey.rooms) ? storey.rooms : [];
-    alignFloorplanGrid(rooms);
-    for (const room of rooms) {
-      if ((room as any).dimensions && Array.isArray((room as any).dimensions)) {
-        room.width = Number((room as any).dimensions[0]);
-        room.length = Number((room as any).dimensions[1]);
-      }
-      room.width = Math.max(2.2, Number(room.width || 4));
-      room.length = Math.max(2.2, Number(room.length || 4));
-      room.origin = Array.isArray(room.origin) ? room.origin : [0, 0, 0];
-
-      room.doors = (Array.isArray(room.doors) ? room.doors : []).map((door) => clampOpening(door, room, 0.9));
-      room.windows = (Array.isArray(room.windows) ? room.windows : [])
-        .map((window) => clampOpening(window, room, 1.2))
-        .filter((window) => !isInternalWall(room, String(window.wall), rooms));
-
-      if (room.doors!.length === 0) {
-        const wall = pickDoorWall(room, rooms);
-        room.doors!.push(clampOpening({ wall, offset: wallLength(room, wall) / 2 - 0.45, width: 0.9, height: 2.1 }, room, 0.9));
-      }
-
-      room.windows = room.windows.filter((window) => !room.doors!.some((door) => openingsOverlap(window, door)));
-    }
+    processRooms(rooms);
 
     const hasExteriorDoor = rooms.some((room) => room.doors?.some((door) => !isInternalWall(room, String(door.wall), rooms)));
     if (!hasExteriorDoor && rooms.length > 0) {
