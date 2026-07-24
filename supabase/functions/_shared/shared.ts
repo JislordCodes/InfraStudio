@@ -140,6 +140,51 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
+export async function callGemini(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gemini-2.5-flash"): Promise<string> {
+  const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
+  if (!geminiKey) {
+    console.warn("[callGemini] GEMINI_API_KEY not found, falling back to callQwen");
+    return callQwen(systemPrompt, userMessage, jsonMode, "qwen3.7-plus");
+  }
+
+  const promptText = typeof userMessage === "string" 
+    ? userMessage 
+    : (Array.isArray(userMessage) ? userMessage.map(m => `${m.role}: ${m.content}`).join("\n") : String(userMessage));
+
+  const targetModel = model.includes("gemini") ? model : "gemini-2.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${geminiKey}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 8192,
+          responseMimeType: jsonMode ? "application/json" : "text/plain"
+        }
+      })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[callGemini] ${targetModel} failed (${res.status}): ${errText}, falling back to callQwen`);
+      return callQwen(systemPrompt, userMessage, jsonMode, "qwen3.7-plus");
+    }
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (!text) throw new Error("Empty candidate text from Gemini");
+    return text;
+  } catch (err) {
+    console.warn(`[callGemini] Error calling Gemini API:`, err);
+    return callQwen(systemPrompt, userMessage, jsonMode, "qwen3.7-plus");
+  }
+}
+
 function getTargetModel(model: string): string {
   if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
     return "qwen3.7-max-2026-05-20";

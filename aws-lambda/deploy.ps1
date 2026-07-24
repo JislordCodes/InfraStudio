@@ -17,7 +17,10 @@ Compress-Archive -Path dist/index.js -DestinationPath dist.zip -Force
 $functionName = "InfraStudio-Agents"
 $roleArn = "arn:aws:iam::907161737469:role/InfraStudio-Agents-ExecutionRole"
 $qwenApiKey = "sk-ws-H.IXPRPH.wpQo.MEYCIQDGaOFthnPMgvcqPxg5yin91LnkQFW9S2EdZDzlFjyiuwIhAO4M5pNSPn_H4ncna21SUgKCgO5vzUPKsUuuJNwaKvKv"
+$geminiApiKey = if ($env:GEMINI_API_KEY) { $env:GEMINI_API_KEY } else { "" }
 $region = "eu-west-2"
+
+$envVarString = if ($geminiApiKey) { "Variables={QWEN_API_KEY=$qwenApiKey,GEMINI_API_KEY=$geminiApiKey}" } else { "Variables={QWEN_API_KEY=$qwenApiKey}" }
 
 Write-Host "Checking if Lambda function exists in region $region..."
 $exists = aws lambda get-function --function-name $functionName --region $region 2>&1
@@ -30,7 +33,7 @@ if ($exists -match "ResourceNotFoundException" -or $exists.GetType().Name -eq "E
         --role $roleArn `
         --handler index.handler `
         --zip-file fileb://dist.zip `
-        --environment "Variables={QWEN_API_KEY=$qwenApiKey}" `
+        --environment "$envVarString" `
         --timeout 600 `
         --memory-size 1024 `
         --region $region
@@ -62,7 +65,7 @@ if ($exists -match "ResourceNotFoundException" -or $exists.GetType().Name -eq "E
     Start-Sleep -Seconds 2 # Allow code update to propagate
     aws lambda update-function-configuration `
         --function-name $functionName `
-        --environment "Variables={QWEN_API_KEY=$qwenApiKey}" `
+        --environment "$envVarString" `
         --timeout 600 `
         --memory-size 1024 `
         --region $region

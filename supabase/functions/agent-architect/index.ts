@@ -1,5 +1,5 @@
 
-import { CORS, callQwen, cleanJsonResponse } from "../_shared/shared.ts";
+import { CORS, callQwen, callGemini, cleanJsonResponse } from "../_shared/shared.ts";
 
 const systemPrompt = `You are the Architectural Reasoning Agent for InfraStudio.
 Your mission is to transform a structured architectural brief into a complete, spatially coherent, mathematically sound layout or edit plan.
@@ -328,7 +328,22 @@ export async function handleArchitect(brief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  const models = ["glm-5.2", "glm-5.2", "qwen3.7-max-2026-05-20"];
+  // 1. Try Gemini Flash (fastest, ~2s)
+  try {
+    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-2.5-flash");
+    if (geminiRes && geminiRes.trim().length >= 5) {
+      const parsed = cleanJsonResponse(geminiRes);
+      if (isBuilding) return repairPlan(parsed);
+      parsed.structure_category = category;
+      parsed.is_edit = false;
+      return parsed;
+    }
+  } catch (e) {
+    console.warn("[architect] Gemini Flash attempt failed, trying fallback models:", e);
+  }
+
+  // 2. Fallback to qwen3.7-plus / glm-5.2
+  const models = ["qwen3.7-plus", "glm-5.2"];
   let lastError: any = null;
 
   for (let attempt = 0; attempt < models.length; attempt++) {
@@ -336,7 +351,7 @@ export async function handleArchitect(brief: any): Promise<any> {
     try {
       const res = await callQwen(prompt, promptStr, true, model);
       if (!res || res.trim().length < 5) {
-        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty/tiny response (${res?.length || 0} chars), retrying...`);
+        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty response, retrying...`);
         lastError = new Error(`Empty response from ${model}`);
         continue;
       }
@@ -344,7 +359,6 @@ export async function handleArchitect(brief: any): Promise<any> {
       if (isBuilding) {
         return repairPlan(parsed);
       } else {
-        // For infrastructure, ensure structure_category is preserved
         parsed.structure_category = category;
         parsed.is_edit = false;
         return parsed;
@@ -352,13 +366,10 @@ export async function handleArchitect(brief: any): Promise<any> {
     } catch (err: any) {
       lastError = err;
       console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}) failed: ${err.message}`);
-      if (attempt < models.length - 1) {
-        console.error(`[architect] Retrying with ${models[attempt + 1]}...`);
-      }
     }
   }
 
-  throw new Error(`All ${models.length} architect attempts failed. Last error: ${lastError?.message || lastError}`);
+  throw new Error(`All architect attempts failed. Last error: ${lastError?.message || lastError}`);
 }
 
 if (typeof Deno !== "undefined" && Deno.serve) {

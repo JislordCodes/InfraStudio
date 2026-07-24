@@ -25175,6 +25175,46 @@ async function fetchMcpTools(clientSessionId) {
     session: res.session
   };
 }
+async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = "gemini-2.5-flash") {
+  const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
+  if (!geminiKey) {
+    console.warn("[callGemini] GEMINI_API_KEY not found, falling back to callQwen");
+    return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
+  }
+  const promptText = typeof userMessage === "string" ? userMessage : Array.isArray(userMessage) ? userMessage.map((m) => `${m.role}: ${m.content}`).join("\n") : String(userMessage);
+  const targetModel = model.includes("gemini") ? model : "gemini-2.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${geminiKey}`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(6e4),
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `${systemPrompt4}
+
+USER REQUEST:
+${promptText}` }] }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 8192,
+          responseMimeType: jsonMode ? "application/json" : "text/plain"
+        }
+      })
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[callGemini] ${targetModel} failed (${res.status}): ${errText}, falling back to callQwen`);
+      return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
+    }
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (!text) throw new Error("Empty candidate text from Gemini");
+    return text;
+  } catch (err) {
+    console.warn(`[callGemini] Error calling Gemini API:`, err);
+    return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
+  }
+}
 function getTargetModel(model) {
   if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
     return "qwen3.7-max-2026-05-20";
@@ -25689,14 +25729,26 @@ async function handleArchitect(brief) {
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const models = ["glm-5.2", "glm-5.2", "qwen3.7-max-2026-05-20"];
+  try {
+    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-2.5-flash");
+    if (geminiRes && geminiRes.trim().length >= 5) {
+      const parsed = cleanJsonResponse(geminiRes);
+      if (isBuilding) return repairPlan(parsed);
+      parsed.structure_category = category;
+      parsed.is_edit = false;
+      return parsed;
+    }
+  } catch (e) {
+    console.warn("[architect] Gemini Flash attempt failed, trying fallback models:", e);
+  }
+  const models = ["qwen3.7-plus", "glm-5.2"];
   let lastError = null;
   for (let attempt = 0; attempt < models.length; attempt++) {
     const model = models[attempt];
     try {
       const res = await callQwen(prompt, promptStr, true, model);
       if (!res || res.trim().length < 5) {
-        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty/tiny response (${res?.length || 0} chars), retrying...`);
+        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty response, retrying...`);
         lastError = new Error(`Empty response from ${model}`);
         continue;
       }
@@ -25711,12 +25763,9 @@ PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}
     } catch (err) {
       lastError = err;
       console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}) failed: ${err.message}`);
-      if (attempt < models.length - 1) {
-        console.error(`[architect] Retrying with ${models[attempt + 1]}...`);
-      }
     }
   }
-  throw new Error(`All ${models.length} architect attempts failed. Last error: ${lastError?.message || lastError}`);
+  throw new Error(`All architect attempts failed. Last error: ${lastError?.message || lastError}`);
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
   Deno.serve(async (req) => {
