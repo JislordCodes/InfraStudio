@@ -575,15 +575,17 @@ Rules for Edits:
  7. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
  8. To DELETE or REMOVE elements (e.g. remove a door, window, wall, slab, roof, or entire room):
     Call execute_ifc_code_tool, executing Python code to remove the target IFC entity by GlobalId.
-    Example Python code to delete an entity:
-    """
-    import ifcopenshell
-    ifc_file = get_ifc_file()
-    element = ifc_file.by_guid("TARGET_GLOBAL_ID")
-    if element:
-        ifc_file.remove(element)
-        save_and_load_ifc()
-    """
+     Example Python code to delete an entity:
+     """
+     import ifcopenshell
+     ifc_file = get_ifc_file()
+     try:
+         element = ifc_file.by_guid("TARGET_GLOBAL_ID")
+         ifc_file.remove(element)
+         save_and_load_ifc()
+     except Exception:
+         pass
+     """
     Always search the "Current IFC Scene State" for the correct GlobalId of the element to delete.
  9. For ADVANCED EDITS (e.g. moving a room, shifting a wall, renaming a storey, copying elements, or custom structural changes):
     Call execute_ifc_code_tool, writing Python code using the ifcopenshell library to modify the coordinates or attributes of the target entities.
