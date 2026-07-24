@@ -82,7 +82,15 @@ def get_valid_ifc_classes(schema_version: str = "IFC4") -> Dict[str, str]:
             "PIPESEGMENT": "IfcPipeSegment",
             "DUCTSEGMENT": "IfcDuctSegment",
             "CABLECARRIERSEGMENT": "IfcCableCarrierSegment",
-            "FLOWSEGMENT": "IfcFlowSegment"
+            "FLOWSEGMENT": "IfcFlowSegment",
+            "VALVE": "IfcValve",
+            "FLOWCONTROLLER": "IfcFlowController",
+            "FLOWTERMINAL": "IfcFlowTerminal",
+            "FLOWFITTING": "IfcFlowFitting",
+            "FLOWMOVINGDEVICE": "IfcFlowMovingDevice",
+            "ENERGYCONVERSIONDEVICE": "IfcEnergyConversionDevice",
+            "FLOWTREATMENTDEVICE": "IfcFlowTreatmentDevice",
+            "DISTRIBUTIONELEMENT": "IfcDistributionElement"
         }
 
         if schema != "IFC2X3":
