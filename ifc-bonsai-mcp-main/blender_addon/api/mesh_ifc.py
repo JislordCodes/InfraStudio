@@ -75,7 +75,14 @@ def get_valid_ifc_classes(schema_version: str = "IFC4") -> Dict[str, str]:
             "CURTAINWALL": "IfcCurtainWall",
             "MEMBER": "IfcMember",
             "PLATE": "IfcPlate",
-            "RAMP": "IfcRamp"
+            "RAMP": "IfcRamp",
+            "FOOTING": "IfcFooting",
+            "PILE": "IfcPile",
+            "CIVILELEMENT": "IfcCivilElement",
+            "PIPESEGMENT": "IfcPipeSegment",
+            "DUCTSEGMENT": "IfcDuctSegment",
+            "CABLECARRIERSEGMENT": "IfcCableCarrierSegment",
+            "FLOWSEGMENT": "IfcFlowSegment"
         }
 
         if schema != "IFC2X3":
