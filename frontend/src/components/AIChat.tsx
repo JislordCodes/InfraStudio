@@ -118,7 +118,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       setCurrentSteps(['🤖 Agent starting...']);
 
       const sessionObj = sessions.find(s => s.id === sid);
-      const clientMcpId = sessionObj?.mcp_session_id || '';
+      const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
 
       // Build history for LLM context — include tool call results so LLM knows existing GUIDs
       const history: any[] = [];
@@ -168,9 +168,13 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       setMessages(prev => [...prev, reply]);
       await saveMessage(sid, reply);
 
-      // Update session metadata
-      if (result.mcp_session_id || result.ifc_url) {
-        await updateSessionData(sid, result.mcp_session_id || clientMcpId, result.ifc_url);
+      // Update session metadata and localStorage fallback
+      const activeMcpId = result.mcp_session_id || clientMcpId;
+      if (activeMcpId) {
+        localStorage.setItem(`infrastudio_mcp_${sid}`, activeMcpId);
+      }
+      if (activeMcpId || result.ifc_url) {
+        await updateSessionData(sid, activeMcpId, result.ifc_url);
       }
 
       // Load IFC into viewer

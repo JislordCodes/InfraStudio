@@ -195,7 +195,7 @@ export async function runMultiAgentLoop(
       }
 
       // 2. Build any new rooms requested in the edit onto the active model
-      const editRooms = plan.new_rooms || (plan.storey_plans ? plan.storey_plans.flatMap((s: any) => s.rooms || []) : []);
+      const editRooms = plan.new_rooms || [];
       if (editRooms.length > 0) {
         pushStep(`BIM Agent: Adding ${editRooms.length} new room(s) to existing structure...`);
         for (let i = 0; i < editRooms.length; i++) {
