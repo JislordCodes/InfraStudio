@@ -140,7 +140,7 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
-export async function callGemini(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gemini-2.5-flash"): Promise<string> {
+export async function callGemini(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gemini-3.6-flash"): Promise<string> {
   const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
   if (!geminiKey) {
     console.warn("[callGemini] GEMINI_API_KEY not found, falling back to callQwen");
@@ -151,7 +151,7 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
     ? userMessage 
     : (Array.isArray(userMessage) ? userMessage.map(m => `${m.role}: ${m.content}`).join("\n") : String(userMessage));
 
-  const targetModel = model.includes("gemini") ? model : "gemini-2.5-flash";
+  const targetModel = model.includes("gemini") ? model : "gemini-3.6-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${geminiKey}`;
 
   try {
@@ -162,7 +162,6 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
       body: JSON.stringify({
         contents: [{ parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
         generationConfig: {
-          temperature: 0.1,
           maxOutputTokens: 8192,
           responseMimeType: jsonMode ? "application/json" : "text/plain"
         }

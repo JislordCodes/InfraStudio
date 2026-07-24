@@ -25175,14 +25175,14 @@ async function fetchMcpTools(clientSessionId) {
     session: res.session
   };
 }
-async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = "gemini-2.5-flash") {
+async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = "gemini-3.6-flash") {
   const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
   if (!geminiKey) {
     console.warn("[callGemini] GEMINI_API_KEY not found, falling back to callQwen");
     return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
   }
   const promptText = typeof userMessage === "string" ? userMessage : Array.isArray(userMessage) ? userMessage.map((m) => `${m.role}: ${m.content}`).join("\n") : String(userMessage);
-  const targetModel = model.includes("gemini") ? model : "gemini-2.5-flash";
+  const targetModel = model.includes("gemini") ? model : "gemini-3.6-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${geminiKey}`;
   try {
     const res = await fetch(url, {
@@ -25195,7 +25195,6 @@ async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = 
 USER REQUEST:
 ${promptText}` }] }],
         generationConfig: {
-          temperature: 0.1,
           maxOutputTokens: 8192,
           responseMimeType: jsonMode ? "application/json" : "text/plain"
         }
@@ -25730,7 +25729,7 @@ async function handleArchitect(brief) {
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
   try {
-    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-2.5-flash");
+    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
     if (geminiRes && geminiRes.trim().length >= 5) {
       const parsed = cleanJsonResponse(geminiRes);
       if (isBuilding) return repairPlan(parsed);

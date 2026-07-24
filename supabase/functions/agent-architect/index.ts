@@ -328,9 +328,9 @@ export async function handleArchitect(brief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  // 1. Try Gemini Flash (fastest, ~2s)
+  // 1. Try Gemini 3.6 Flash (fastest, ~1.5s)
   try {
-    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-2.5-flash");
+    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
     if (geminiRes && geminiRes.trim().length >= 5) {
       const parsed = cleanJsonResponse(geminiRes);
       if (isBuilding) return repairPlan(parsed);
