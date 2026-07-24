@@ -18,9 +18,13 @@ $functionName = "InfraStudio-Agents"
 $roleArn = "arn:aws:iam::907161737469:role/InfraStudio-Agents-ExecutionRole"
 $qwenApiKey = "sk-ws-H.IXPRPH.wpQo.MEYCIQDGaOFthnPMgvcqPxg5yin91LnkQFW9S2EdZDzlFjyiuwIhAO4M5pNSPn_H4ncna21SUgKCgO5vzUPKsUuuJNwaKvKv"
 $geminiApiKey = if ($env:GEMINI_API_KEY) { $env:GEMINI_API_KEY } else { "" }
+$gcpSaJson = if ($env:GCP_SERVICE_ACCOUNT_JSON) { $env:GCP_SERVICE_ACCOUNT_JSON } else { "" }
 $region = "eu-west-2"
 
-$envVarString = if ($geminiApiKey) { "Variables={QWEN_API_KEY=$qwenApiKey,GEMINI_API_KEY=$geminiApiKey}" } else { "Variables={QWEN_API_KEY=$qwenApiKey}" }
+$envPairs = @("QWEN_API_KEY=$qwenApiKey")
+if ($geminiApiKey) { $envPairs += "GEMINI_API_KEY=$geminiApiKey" }
+if ($gcpSaJson) { $envPairs += "GCP_SERVICE_ACCOUNT_JSON=$gcpSaJson" }
+$envVarString = "Variables={" + ($envPairs -join ",") + "}"
 
 Write-Host "Checking if Lambda function exists in region $region..."
 $exists = aws lambda get-function --function-name $functionName --region $region 2>&1

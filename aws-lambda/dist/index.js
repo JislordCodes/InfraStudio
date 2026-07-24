@@ -25175,81 +25175,69 @@ async function fetchMcpTools(clientSessionId) {
     session: res.session
   };
 }
-async function getGcpAccessToken(saJsonStr) {
-  const sa = typeof saJsonStr === "string" ? JSON.parse(saJsonStr) : saJsonStr;
-  const clientEmail = sa.client_email;
-  const privateKeyPem = sa.private_key;
-  const projectId = sa.project_id || "default";
-  if (!clientEmail || !privateKeyPem) {
-    throw new Error("Invalid Service Account JSON: client_email and private_key are required");
-  }
+function base64UrlEncode(input) {
+  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function pemToArrayBuffer(pem) {
+  const b64 = pem.replace(/-----BEGIN PRIVATE KEY-----/, "").replace(/-----END PRIVATE KEY-----/, "").replace(/\s+/g, "");
+  const binary = atob(b64);
+  const buf = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
+  return buf.buffer;
+}
+var cachedToken = null;
+async function mintAccessToken(saJson) {
   const now = Math.floor(Date.now() / 1e3);
+  if (cachedToken && cachedToken.expiresAt > now + 60) return cachedToken.token;
+  const tokenUri = saJson.token_uri || "https://oauth2.googleapis.com/token";
   const header = { alg: "RS256", typ: "JWT" };
-  const claimSet = {
-    iss: clientEmail,
-    scope: "https://www.googleapis.com/auth/cloud-platform",
-    aud: "https://oauth2.googleapis.com/token",
-    exp: now + 3600,
-    iat: now
-  };
-  const b64Header = btoa(JSON.stringify(header)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const b64Claim = btoa(JSON.stringify(claimSet)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const unsignedToken = `${b64Header}.${b64Claim}`;
-  const pemHeader = "-----BEGIN PRIVATE KEY-----";
-  const pemFooter = "-----END PRIVATE KEY-----";
-  const pemContents = privateKeyPem.substring(
-    privateKeyPem.indexOf(pemHeader) + pemHeader.length,
-    privateKeyPem.indexOf(pemFooter)
-  ).replace(/\s/g, "");
-  const binaryDerString = atob(pemContents);
-  const binaryDer = new Uint8Array(binaryDerString.length);
-  for (let i = 0; i < binaryDerString.length; i++) {
-    binaryDer[i] = binaryDerString.charCodeAt(i);
-  }
-  const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8",
-    binaryDer.buffer,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const encoder = new TextEncoder();
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    cryptoKey,
-    encoder.encode(unsignedToken)
-  );
-  const b64Signature = btoa(String.fromCharCode(...new Uint8Array(signature))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const jwt = `${unsignedToken}.${b64Signature}`;
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+  const claim = { iss: saJson.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: tokenUri, exp: now + 3600, iat: now };
+  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claim))}`;
+  const rawKey = saJson.private_key || "";
+  const privateKey = rawKey.split("\\n").join("\n");
+  const key = await crypto.subtle.importKey("pkcs8", pemToArrayBuffer(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
+  const jwt = `${unsigned}.${base64UrlEncode(new Uint8Array(sig))}`;
+  const resp = await fetch(tokenUri, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt })
   });
-  if (!tokenRes.ok) {
-    throw new Error(`GCP OAuth token request failed: ${await tokenRes.text()}`);
-  }
-  const tokenData = await tokenRes.json();
-  return { token: tokenData.access_token, projectId };
+  if (!resp.ok) throw new Error(`Failed to mint GCP access token: ${await resp.text()}`);
+  const data = await resp.json();
+  cachedToken = { token: data.access_token, expiresAt: now + data.expires_in };
+  return data.access_token;
 }
 async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = "gemini-3.6-flash") {
-  const saJson = typeof Deno !== "undefined" ? Deno.env.get("GCP_SERVICE_ACCOUNT_JSON") : process.env.GCP_SERVICE_ACCOUNT_JSON;
+  const saRaw = typeof Deno !== "undefined" ? Deno.env.get("GCP_SERVICE_ACCOUNT_JSON") : process.env.GCP_SERVICE_ACCOUNT_JSON;
   const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
-  const promptText = typeof userMessage === "string" ? userMessage : Array.isArray(userMessage) ? userMessage.map((m) => `${m.role}: ${m.content}`).join("\n") : String(userMessage);
   const targetModel = model.includes("gemini") ? model : "gemini-3.6-flash";
-  if (saJson) {
+  const promptText = typeof userMessage === "string" ? userMessage : Array.isArray(userMessage) ? userMessage.map((m) => `${m.role}: ${m.content}`).join("\n") : String(userMessage);
+  if (saRaw) {
     try {
-      const { token, projectId } = await getGcpAccessToken(saJson);
-      const vertexUrl = `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/${targetModel}:generateContent`;
-      const res = await fetch(vertexUrl, {
+      let saJson = {};
+      try {
+        saJson = JSON.parse(saRaw);
+      } catch {
+        const decoded = typeof atob !== "undefined" ? atob(saRaw) : Buffer.from(saRaw, "base64").toString("utf-8");
+        saJson = JSON.parse(decoded);
+      }
+      const accessToken = await mintAccessToken(saJson);
+      const projectId = saJson.project_id || "infrastudio";
+      const location = saJson.location || "us-central1";
+      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
+      const res = await fetch(url, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
         signal: AbortSignal.timeout(6e4),
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `${systemPrompt4}
+          contents: [{ role: "user", parts: [{ text: `${systemPrompt4}
 
 USER REQUEST:
 ${promptText}` }] }],
@@ -25259,15 +25247,16 @@ ${promptText}` }] }],
           }
         })
       });
-      if (res.ok) {
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[callGemini] Vertex AI ${targetModel} failed (${res.status}): ${errText}`);
+      } else {
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         if (text) return text;
-      } else {
-        console.warn(`[callGemini] Vertex AI returned ${res.status}: ${await res.text()}`);
       }
     } catch (e) {
-      console.warn("[callGemini] Vertex AI Service Account authentication failed:", e);
+      console.warn("[callGemini] Service account auth error, trying API key / fallback:", e);
     }
   }
   if (geminiKey) {
@@ -25293,13 +25282,12 @@ ${promptText}` }] }],
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         if (text) return text;
       } else {
-        console.warn(`[callGemini] ${targetModel} API key call failed (${res.status}): ${await res.text()}`);
+        console.warn(`[callGemini] AI Studio API key ${targetModel} failed (${res.status}): ${await res.text()}`);
       }
-    } catch (err) {
-      console.warn(`[callGemini] Error calling Gemini API key endpoint:`, err);
+    } catch (e) {
+      console.warn("[callGemini] AI Studio API key call failed:", e);
     }
   }
-  console.warn("[callGemini] Neither valid GCP Service Account nor Gemini API Key worked, falling back to callQwen");
   return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
 }
 function getTargetModel(model) {

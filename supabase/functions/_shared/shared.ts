@@ -140,102 +140,41 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
-async function getGcpAccessToken(saJsonStr: string): Promise<{ token: string; projectId: string }> {
-  const sa = typeof saJsonStr === "string" ? JSON.parse(saJsonStr) : saJsonStr;
-  const clientEmail = sa.client_email;
-  const privateKeyPem = sa.private_key;
-  const projectId = sa.project_id || "default";
-
-  if (!clientEmail || !privateKeyPem) {
-    throw new Error("Invalid Service Account JSON: client_email and private_key are required");
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = { alg: "RS256", typ: "JWT" };
-  const claimSet = {
-    iss: clientEmail,
-    scope: "https://www.googleapis.com/auth/cloud-platform",
-    aud: "https://oauth2.googleapis.com/token",
-    exp: now + 3600,
-    iat: now
-  };
-
-  const b64Header = btoa(JSON.stringify(header)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const b64Claim = btoa(JSON.stringify(claimSet)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const unsignedToken = `${b64Header}.${b64Claim}`;
-
-  const pemHeader = "-----BEGIN PRIVATE KEY-----";
-  const pemFooter = "-----END PRIVATE KEY-----";
-  const pemContents = privateKeyPem.substring(
-    privateKeyPem.indexOf(pemHeader) + pemHeader.length,
-    privateKeyPem.indexOf(pemFooter)
-  ).replace(/\s/g, "");
-  
-  const binaryDerString = atob(pemContents);
-  const binaryDer = new Uint8Array(binaryDerString.length);
-  for (let i = 0; i < binaryDerString.length; i++) {
-    binaryDer[i] = binaryDerString.charCodeAt(i);
-  }
-
-  const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8",
-    binaryDer.buffer,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const encoder = new TextEncoder();
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    cryptoKey,
-    encoder.encode(unsignedToken)
-  );
-
-  const b64Signature = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-
-  const jwt = `${unsignedToken}.${b64Signature}`;
-
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
-  });
-
-  if (!tokenRes.ok) {
-    throw new Error(`GCP OAuth token request failed: ${await tokenRes.text()}`);
-  }
-
-  const tokenData = await tokenRes.json();
-  return { token: tokenData.access_token, projectId };
-}
-
 export async function callGemini(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gemini-3.6-flash"): Promise<string> {
-  const saJson = typeof Deno !== "undefined" ? Deno.env.get("GCP_SERVICE_ACCOUNT_JSON") : process.env.GCP_SERVICE_ACCOUNT_JSON;
+  const saRaw = typeof Deno !== "undefined" ? Deno.env.get("GCP_SERVICE_ACCOUNT_JSON") : process.env.GCP_SERVICE_ACCOUNT_JSON;
   const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
 
+  const targetModel = model.includes("gemini") ? model : "gemini-3.6-flash";
   const promptText = typeof userMessage === "string" 
     ? userMessage 
     : (Array.isArray(userMessage) ? userMessage.map(m => `${m.role}: ${m.content}`).join("\n") : String(userMessage));
 
-  const targetModel = model.includes("gemini") ? model : "gemini-3.6-flash";
-
-  // 1. Try GCP Vertex AI Service Account JSON if provided
-  if (saJson) {
+  // 1. If GCP Service Account JSON is provided, authenticate via Vertex AI
+  if (saRaw) {
     try {
-      const { token, projectId } = await getGcpAccessToken(saJson);
-      const vertexUrl = `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/${targetModel}:generateContent`;
+      let saJson: any = {};
+      try {
+        saJson = JSON.parse(saRaw);
+      } catch {
+        const decoded = typeof atob !== "undefined" ? atob(saRaw) : Buffer.from(saRaw, "base64").toString("utf-8");
+        saJson = JSON.parse(decoded);
+      }
 
-      const res = await fetch(vertexUrl, {
+      const accessToken = await mintAccessToken(saJson);
+      const projectId = saJson.project_id || "infrastudio";
+      const location = saJson.location || "us-central1";
+
+      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
+
+      const res = await fetch(url, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${token}`,
+          "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
         signal: AbortSignal.timeout(60000),
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
+          contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
           generationConfig: {
             maxOutputTokens: 8192,
             responseMimeType: jsonMode ? "application/json" : "text/plain"
@@ -243,22 +182,22 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
         })
       });
 
-      if (res.ok) {
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[callGemini] Vertex AI ${targetModel} failed (${res.status}): ${errText}`);
+      } else {
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         if (text) return text;
-      } else {
-        console.warn(`[callGemini] Vertex AI returned ${res.status}: ${await res.text()}`);
       }
     } catch (e) {
-      console.warn("[callGemini] Vertex AI Service Account authentication failed:", e);
+      console.warn("[callGemini] Service account auth error, trying API key / fallback:", e);
     }
   }
 
-  // 2. Try GEMINI_API_KEY (Google AI Studio / GCP API Key)
+  // 2. If GEMINI_API_KEY is provided, use Google AI Studio endpoint
   if (geminiKey) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${geminiKey}`;
-
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -278,15 +217,14 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         if (text) return text;
       } else {
-        console.warn(`[callGemini] ${targetModel} API key call failed (${res.status}): ${await res.text()}`);
+        console.warn(`[callGemini] AI Studio API key ${targetModel} failed (${res.status}): ${await res.text()}`);
       }
-    } catch (err) {
-      console.warn(`[callGemini] Error calling Gemini API key endpoint:`, err);
+    } catch (e) {
+      console.warn("[callGemini] AI Studio API key call failed:", e);
     }
   }
 
-  // 3. Fallback to callQwen (qwen3.7-plus)
-  console.warn("[callGemini] Neither valid GCP Service Account nor Gemini API Key worked, falling back to callQwen");
+  // 3. Fallback to callQwen qwen3.7-plus if no GCP/Gemini key is configured or working
   return callQwen(systemPrompt, userMessage, jsonMode, "qwen3.7-plus");
 }
 
