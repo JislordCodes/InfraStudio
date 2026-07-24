@@ -110,19 +110,27 @@ def get_valid_ifc_classes(schema_version: str = "IFC4") -> Dict[str, str]:
         }
 
 def validate_ifc_class(class_name: str) -> Tuple[bool, str]:
-    """Validate and canonicalize IFC class name"""
+    """Validate and canonicalize IFC class name with universal fallback support"""
+    if not class_name or not isinstance(class_name, str):
+        return True, "IfcBuildingElementProxy"
+        
     valid_classes = get_valid_ifc_classes()
     
-    upper = class_name.upper()
+    upper = class_name.strip().upper()
     if upper in valid_classes:
         return True, valid_classes[upper]
 
-    if class_name.startswith("Ifc"):
-        for key, value in valid_classes.items():
-            if value.lower() == class_name.lower():
-                return True, value
+    stripped = class_name.strip()
+    if stripped.lower().startswith("ifc") and len(stripped) >= 4:
+        raw_rest = stripped[3:]
+        canonical = "Ifc" + raw_rest[0].upper() + raw_rest[1:]
+        return True, canonical
+
+    if len(stripped) >= 3 and stripped.isalnum():
+        canonical = "Ifc" + stripped[0].upper() + stripped[1:]
+        return True, canonical
     
-    return False, None
+    return True, "IfcBuildingElementProxy"
 
 
 def sanitize_mesh_data(vertices: List[Tuple[float, float, float]], 
