@@ -162,9 +162,11 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 
       const accessToken = await mintAccessToken(saJson);
       const projectId = saJson.project_id || "gemini-app-sa-495716";
-      const location = saJson.location || "us-central1";
+      // gemini-3.6-flash is only available on the global endpoint
+      const location = "global";
+      const host = "aiplatform.googleapis.com";
 
-      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
+      const url = `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
 
       const res = await fetch(url, {
         method: "POST",
@@ -172,7 +174,7 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(120000),
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
           generationConfig: {
@@ -192,7 +194,8 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
       if (!text) throw new Error(`Empty response from Vertex AI ${targetModel}`);
       return text;
     } catch (e) {
-      console.warn("[callGemini] Service account auth error, trying API key / fallback:", e);
+      // Re-throw so the caller sees the real error instead of silently falling back
+      throw new Error(`[callGemini Vertex] ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

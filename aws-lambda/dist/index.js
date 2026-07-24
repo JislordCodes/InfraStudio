@@ -25227,15 +25227,16 @@ async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = 
       }
       const accessToken = await mintAccessToken(saJson);
       const projectId = saJson.project_id || "gemini-app-sa-495716";
-      const location = saJson.location || "us-central1";
-      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
+      const location = "global";
+      const host = "aiplatform.googleapis.com";
+      const url = `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
       const res = await fetch(url, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json"
         },
-        signal: AbortSignal.timeout(6e4),
+        signal: AbortSignal.timeout(12e4),
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: `${systemPrompt4}
 
@@ -25256,7 +25257,7 @@ ${promptText}` }] }],
       if (!text) throw new Error(`Empty response from Vertex AI ${targetModel}`);
       return text;
     } catch (e) {
-      console.warn("[callGemini] Service account auth error, trying API key / fallback:", e);
+      throw new Error(`[callGemini Vertex] ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   if (geminiKey) {
