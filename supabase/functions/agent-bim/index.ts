@@ -223,8 +223,8 @@ if buildings:
       height: payload.storeyHeight || room.height || 3,
       wall_thickness: room.wall_thickness || 0.2,
       origin: room.origin || [0, 0, 0],
-      floor_slab: true,
-      ceiling_slab: true,
+      floor_slab: room.floor_slab !== undefined ? Boolean(room.floor_slab) : true,
+      ceiling_slab: room.ceiling_slab !== undefined ? Boolean(room.ceiling_slab) : true,
       doors: room.doors || [],
       windows: room.windows || [],
     }, mcpSessionId);
@@ -555,7 +555,19 @@ Rules for Edits:
  4. To add a roof: Call create_roof on the top storey or host walls.
  5. To add stairs: Call create_stairs between storeys.
  6. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
- 7. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
+ 7. To DELETE or REMOVE elements (e.g. remove a door, window, wall, slab, roof, or entire room):
+    Call execute_ifc_code_tool, executing Python code to remove the target IFC entity by GlobalId.
+    Example Python code to delete an entity:
+    """
+    import ifcopenshell
+    ifc_file = get_ifc_file()
+    element = ifc_file.by_guid("TARGET_GLOBAL_ID")
+    if element:
+        ifc_file.remove(element)
+        save_and_load_ifc()
+    """
+    Search the "Current IFC Scene State" for the exact GlobalId of the element to delete.
+ 8. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
 
     const basePlanData = `Instructions: ${JSON.stringify(plan)}
 

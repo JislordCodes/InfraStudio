@@ -15,17 +15,19 @@ ARCHITECTURAL DIVERSITY & FOOTPRINT SELECTION (CRITICAL FOR NEW BUILDINGS):
 SPATIAL AXIOMS & RULES:
  1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (Living Room, Bedrooms, Kitchen, Bathrooms, Hallways, Garages, Balconies, etc.).
  2. FLUSH WALL BOUNDARIES: Adjacent rooms MUST share exact flush boundary coordinates so internal and external walls connect seamlessly.
- 3. DOORS: EVERY room MUST have at least one door connecting to a circulation space (Living Room, Hallway, or Entry). MAIN ENTRY MUST have an exterior door.
- 4. WINDOWS: Windows MUST ONLY be placed on EXTERIOR walls. Provide modern floor-to-ceiling or wide architectural windows on living/bedroom exterior walls.
- 5. ROOF & ARCHITECTURAL STYLE: Choose a roof type ("gable", "flat", "hip", "shed", "butterfly") matching the architecture. Default "flat" or "shed" for modern villas/apartments, "gable" or "hip" for houses.
- 6. MATERIALS: Specify a harmonious material palette (e.g. white render + cedar cladding, exposed concrete + black steel, light timber + slate).
+ 3. DOORS: EVERY room MUST have at least one door connecting to a circulation space (Living Room, Hallway, or Entry) UNLESS the user explicitly requests no doors or elements are omitted.
+    - If the user explicitly asks for NO DOORS, or to omit doors, set "doors": [] explicitly on all rooms AND set "allow_no_doors": true in the root JSON.
+ 4. WINDOWS: Windows MUST ONLY be placed on EXTERIOR walls. If the user asks for NO WINDOWS, set "windows": [] explicitly on all rooms AND set "allow_no_windows": true in the root JSON.
+ 5. FLOOR & CEILING SLABS: Rooms have floor slabs and ceiling slabs by default. If the user asks to omit slabs (e.g. open sky / no ceiling slab, or dirt floor / no floor slab), set "floor_slab": false and/or "ceiling_slab": false on that room.
+ 6. ROOF: Choose a roof type ("gable", "flat", "hip", "shed", "butterfly"). If user wants no roof, set "roof_type": "none".
+ 7. MATERIALS: Specify a harmonious material palette (e.g. white render + cedar cladding, exposed concrete + black steel, light timber + slate).
 
 ITERATIVE EDITS & MODIFICATIONS (WHEN is_edit = true):
  1. When modifying an active existing model (is_edit = true), DO NOT erase or rebuild the building from scratch.
  2. If adding new rooms or storeys (e.g. garage, balcony, 2nd floor, extra bedroom):
     - Output "new_storeys": Array of any new floors/storeys (e.g. [{"name": "First Floor", "elevation": 3.0, "height": 3.0}]).
-    - Output "new_rooms": Array of new room objects with precise origin [x,y,z], width, length, doors, windows, attached to or above the existing structure.
- 3. Output "target_actions": List of concrete edit actions (e.g., add_room, add_window, add_door, add_balcony, change_roof, apply_material).
+    - Output "new_rooms": Array of new room objects with precise origin [x,y,z], width, length, doors, windows, floor_slab, ceiling_slab, attached to or above the existing structure.
+ 3. Output "target_actions": List of concrete edit actions (e.g., add_room, add_window, add_door, add_balcony, change_roof, apply_material, delete_element).
  4. Output "material_palette": Any updated material finishes requested by user.
 
 Strict Restrictions:
@@ -34,8 +36,10 @@ Strict Restrictions:
 Expected JSON Schema:
 {
   "is_edit": boolean,
-  "roof_type": "flat|gable|hip|shed|butterfly",
+  "roof_type": "flat|gable|hip|shed|butterfly|none",
   "has_stairs": boolean,
+  "allow_no_doors": boolean,
+  "allow_no_windows": boolean,
   "material_palette": {
     "wall": "string",
     "floor": "string",
@@ -54,6 +58,8 @@ Expected JSON Schema:
           "width": number,
           "length": number,
           "origin": [number, number, number],
+          "floor_slab": boolean,
+          "ceiling_slab": boolean,
           "doors": [
             {
               "wall": "south|east|north|west",
@@ -88,6 +94,8 @@ Expected JSON Schema:
       "width": number,
       "length": number,
       "origin": [number, number, number],
+      "floor_slab": boolean,
+      "ceiling_slab": boolean,
       "doors": [],
       "windows": []
     }
@@ -154,7 +162,7 @@ Expected JSON Schema:
 }`;
 
 type Opening = { wall?: string; offset?: number; width?: number; height?: number; sill_height?: number; operation_type?: string };
-type Room = { name?: string; width?: number; length?: number; height?: number; origin?: number[]; doors?: Opening[]; windows?: Opening[] };
+type Room = { name?: string; width?: number; length?: number; height?: number; origin?: number[]; floor_slab?: boolean; ceiling_slab?: boolean; doors?: Opening[]; windows?: Opening[] };
 
 const WALLS = ["south", "east", "north", "west"];
 
@@ -276,7 +284,7 @@ function alignFloorplanGrid(rooms: Room[]): void {
   }
 }
 
-function processRooms(rooms: Room[]): void {
+function processRooms(rooms: Room[], allowNoDoors = false): void {
   alignFloorplanGrid(rooms);
   for (const room of rooms) {
     if ((room as any).dimensions && Array.isArray((room as any).dimensions)) {
@@ -287,14 +295,18 @@ function processRooms(rooms: Room[]): void {
     room.length = Math.max(2.2, Number(room.length || 4));
     room.origin = Array.isArray(room.origin) ? room.origin : [0, 0, 0];
 
+    const hasExplicitDoors = room.doors !== undefined && room.doors !== null;
     room.doors = (Array.isArray(room.doors) ? room.doors : []).map((door) => clampOpening(door, room, 0.9));
+    
+    const hasExplicitWindows = room.windows !== undefined && room.windows !== null;
     room.windows = (Array.isArray(room.windows) ? room.windows : [])
       .map((window) => clampOpening(window, room, 1.2))
       .filter((window) => !isInternalWall(room, String(window.wall), rooms));
 
-    if (room.doors!.length === 0) {
+    // ONLY generate a default door if the model didn't explicitly specify doors (even as doors:[])
+    if (!hasExplicitDoors && room.doors.length === 0 && !allowNoDoors) {
       const wall = pickDoorWall(room, rooms);
-      room.doors!.push(clampOpening({ wall, offset: wallLength(room, wall) / 2 - 0.45, width: 0.9, height: 2.1 }, room, 0.9));
+      room.doors.push(clampOpening({ wall, offset: wallLength(room, wall) / 2 - 0.45, width: 0.9, height: 2.1 }, room, 0.9));
     }
 
     room.windows = room.windows.filter((window) => !room.doors!.some((door) => openingsOverlap(window, door)));
@@ -311,9 +323,11 @@ function repairPlan(plan: any): any {
     }
   }
 
+  const allowNoDoors = Boolean(plan.allow_no_doors);
+
   if (plan.is_edit) {
     if (Array.isArray(plan.new_rooms)) {
-      processRooms(plan.new_rooms);
+      processRooms(plan.new_rooms, allowNoDoors);
     }
     return plan;
   }
@@ -338,14 +352,17 @@ function repairPlan(plan: any): any {
     }
 
     const rooms: Room[] = Array.isArray(storey.rooms) ? storey.rooms : [];
-    processRooms(rooms);
+    processRooms(rooms, allowNoDoors);
 
-    const hasExteriorDoor = rooms.some((room) => room.doors?.some((door) => !isInternalWall(room, String(door.wall), rooms)));
-    if (!hasExteriorDoor && rooms.length > 0) {
-      const target = rooms.find((room) => /living|entry|corridor|kitchen/i.test(String(room.name))) || rooms[0];
-      const wall = WALLS.find((candidate) => !isInternalWall(target, candidate, rooms)) || "south";
-      target.doors = target.doors || [];
-      target.doors!.push(clampOpening({ wall, offset: wallLength(target, wall) / 2 - 0.5, width: 1.0, height: 2.1 }, target, 1.0));
+    // ONLY add exterior doors if we don't have explicit instructions to omit doors
+    if (!allowNoDoors) {
+      const hasExteriorDoor = rooms.some((room) => room.doors?.some((door) => !isInternalWall(room, String(door.wall), rooms)));
+      if (!hasExteriorDoor && rooms.length > 0) {
+        const target = rooms.find((room) => /living|entry|corridor|kitchen/i.test(String(room.name))) || rooms[0];
+        const wall = WALLS.find((candidate) => !isInternalWall(target, candidate, rooms)) || "south";
+        target.doors = target.doors || [];
+        target.doors!.push(clampOpening({ wall, offset: wallLength(target, wall) / 2 - 0.5, width: 1.0, height: 2.1 }, target, 1.0));
+      }
     }
   }
 
