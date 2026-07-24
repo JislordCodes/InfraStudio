@@ -233,6 +233,9 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 }
 
 function getTargetModel(model: string): string {
+  if (model === "qwen3.7-plus") {
+    return "qwen3.7-plus-2026-05-26";
+  }
   if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
     return "qwen3.7-max-2026-05-20";
   }

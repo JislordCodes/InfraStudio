@@ -25292,6 +25292,9 @@ ${promptText}` }] }],
   return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
 }
 function getTargetModel(model) {
+  if (model === "qwen3.7-plus") {
+    return "qwen3.7-plus-2026-05-26";
+  }
   if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
     return "qwen3.7-max-2026-05-20";
   }

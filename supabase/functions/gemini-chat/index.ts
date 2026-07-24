@@ -151,11 +151,16 @@ async function callQwen(systemPrompt: string, userMessage: string | any[], jsonM
     msgs.push({ role: "user", content: userMessage });
   }
   
+  let targetModel = model;
+  if (targetModel === "qwen-plus" || targetModel === "qwen3.7-plus") {
+    targetModel = "qwen3.7-plus-2026-05-26";
+  }
+
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: model,
+      model: targetModel,
       messages: msgs,
       temperature: 0.1,
       max_tokens: 2000,
@@ -176,11 +181,16 @@ async function callGLM(systemPrompt: string, userMessage: string, tools?: any[],
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage }
   ];
+  let targetModel = model;
+  if (targetModel === "qwen-plus" || targetModel === "qwen3.7-plus") {
+    targetModel = "qwen3.7-plus-2026-05-26";
+  }
+
   const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: model,
+      model: targetModel,
       messages: msgs,
       temperature: 0.1,
       max_tokens: 2000,
