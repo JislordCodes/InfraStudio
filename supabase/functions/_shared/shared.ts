@@ -158,32 +158,47 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   }
 
   const targetModel = getTargetModel(model);
+  let lastError: any = null;
 
-  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: targetModel,
-      messages: msgs,
-      temperature: 0.1,
-      max_tokens: 16384,
-      response_format: jsonMode ? { type: "json_object" } : undefined
-    })
-  });
-  
-  if (!res.ok) {
-    if (targetModel === "qwen-max") {
-      return await callQwen(systemPrompt, userMessage, jsonMode, "qwen-flash");
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(300000), // 5 minute timeout
+        body: JSON.stringify({
+          model: targetModel,
+          messages: msgs,
+          temperature: 0.1,
+          max_tokens: 16384,
+          response_format: jsonMode ? { type: "json_object" } : undefined
+        })
+      });
+      
+      if (!res.ok) {
+        if (targetModel === "qwen-max") {
+          return await callQwen(systemPrompt, userMessage, jsonMode, "qwen-flash");
+        }
+        const errText = await res.text();
+        throw new Error(`Qwen Error: ${errText}`);
+      }
+      
+      const data = await res.json();
+      const choice = data.choices?.[0];
+      if (choice?.finish_reason === "length") {
+        console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length). Response may be incomplete.`);
+      }
+      return choice?.message?.content || "";
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[callQwen] Attempt ${attempt}/2 for ${targetModel} failed:`, err.message || err);
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
     }
-    throw new Error(`Qwen Error: ${await res.text()}`);
   }
-  
-  const data = await res.json();
-  const choice = data.choices?.[0];
-  if (choice?.finish_reason === "length") {
-    console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length). Response may be incomplete.`);
-  }
-  return choice?.message?.content || "";
+
+  throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 
 export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "glm-5.1"): Promise<any> {

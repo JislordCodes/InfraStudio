@@ -32,19 +32,37 @@ export async function runMultiAgentLoop(
 
   const messages = [...previousMessages, { role: "user", content: userMessage }];
 
-  const callEdge = async (funcName: string, body: any) => {
+  const callEdge = async (funcName: string, body: any, retries = 3): Promise<any> => {
     const url = `${EDGE_PROXY_BASE}/${funcName}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error(`Error from ${funcName}: ${await res.text()}`);
-    return res.json();
+    let lastErr: any = null;
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => res.statusText);
+          throw new Error(`HTTP ${res.status} from ${funcName}: ${errText}`);
+        }
+        return await res.json();
+      } catch (err: any) {
+        lastErr = err;
+        console.warn(`[callEdge] ${funcName} attempt ${attempt}/${retries} failed:`, err.message || err);
+        if (attempt < retries) {
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
+      }
+    }
+
+    throw new Error(`Connection to ${funcName} failed after ${retries} attempts (${lastErr?.message || String(lastErr)})`);
   };
 
   try {

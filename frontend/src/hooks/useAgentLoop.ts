@@ -12,34 +12,47 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 // ══ EDGE FUNCTION PROXY ══
 
-async function proxyRequest(action: string, payload: Record<string, unknown> = {}, clientSessionId: string = ''): Promise<any> {
-  const res = await fetch(EDGE_PROXY_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_ANON_KEY,
-      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`
-    },
-    body: JSON.stringify({
-      action,
-      session_id: clientSessionId,
-      ...payload
-    })
-  });
+async function proxyRequest(action: string, payload: Record<string, unknown> = {}, clientSessionId: string = '', retries = 3): Promise<any> {
+  let lastErr: any = null;
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Edge Proxy Error: ${res.status} - ${text}`);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(EDGE_PROXY_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({
+          action,
+          session_id: clientSessionId,
+          ...payload
+        })
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`Edge Proxy Error: ${res.status} - ${text}`);
+      }
+
+      const data = await res.json();
+      if (data.error) {
+        const errMsg = typeof data.error === 'string' ? data.error : (data.error.message || JSON.stringify(data.error));
+        throw new Error(`Edge Proxy Error: ${errMsg}`);
+      }
+
+      return data;
+    } catch (err: any) {
+      lastErr = err;
+      console.warn(`[proxyRequest] Action '${action}' attempt ${attempt}/${retries} failed:`, err.message || err);
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
   }
 
-  const data = await res.json();
-  
-  if (data.error) {
-    const errMsg = typeof data.error === 'string' ? data.error : (data.error.message || JSON.stringify(data.error));
-    throw new Error(`Edge Proxy Error: ${errMsg}`);
-  }
-
-  return data;
+  throw new Error(`Connection for action '${action}' failed after ${retries} attempts (${lastErr?.message || String(lastErr)})`);
 }
 
 // ══ ARGUMENT SANITIZER ══
