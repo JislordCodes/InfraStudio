@@ -561,12 +561,19 @@ Your sole job is to call real MCP tools to perform the requested edit or creatio
 
 Rules for Edits:
  1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
- 2. To add a door or window: Call create_door or create_window, setting wall_guid to the target wall's GlobalId, and ALWAYS set "create_opening": true.
- 3. To change materials: Call create_surface_style or create_pbr_style, then call apply_style_to_object with the target entity's GlobalId.
- 4. To add a roof: Call create_roof on the top storey or host walls.
- 5. To add stairs: Call create_stairs between storeys.
- 6. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
- 7. To DELETE or REMOVE elements (e.g. remove a door, window, wall, slab, roof, or entire room):
+ 2. To MODIFY or RESIZE an existing element:
+    - For doors: Call update_door(guid, width, height, offset, etc.)
+    - For windows: Call update_window(guid, width, height, offset, etc.)
+    - For walls: Call update_wall(guid, height, thickness, etc.)
+    - For slabs: Call update_slab(guid, thickness, etc.)
+    Always check the target element's GlobalId from "Current IFC Scene State".
+ 3. To add a door or window to an existing wall:
+    Call create_door or create_window, setting wall_guid to the target wall's GlobalId, and ALWAYS set "create_opening": true.
+ 4. To change materials: Call create_surface_style or create_pbr_style, then call apply_style_to_object with the target entity's GlobalId.
+ 5. To add a roof: Call create_roof on the top storey or host walls.
+ 6. To add stairs: Call create_stairs between storeys.
+ 7. To add custom objects or furniture: Call create_trimesh_ifc or build_room.
+ 8. To DELETE or REMOVE elements (e.g. remove a door, window, wall, slab, roof, or entire room):
     Call execute_ifc_code_tool, executing Python code to remove the target IFC entity by GlobalId.
     Example Python code to delete an entity:
     """
@@ -577,8 +584,11 @@ Rules for Edits:
         ifc_file.remove(element)
         save_and_load_ifc()
     """
-    Search the "Current IFC Scene State" for the exact GlobalId of the element to delete.
- 8. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
+    Always search the "Current IFC Scene State" for the correct GlobalId of the element to delete.
+ 9. For ADVANCED EDITS (e.g. moving a room, shifting a wall, renaming a storey, copying elements, or custom structural changes):
+    Call execute_ifc_code_tool, writing Python code using the ifcopenshell library to modify the coordinates or attributes of the target entities.
+    Remember to call save_and_load_ifc() at the end of your Python code to save changes back to the active model.
+ 10. Output ONLY tool calls. Do not return empty tool calls. At least one mutation tool must be called.`;
 
     const basePlanData = `Instructions: ${JSON.stringify(plan)}
 
