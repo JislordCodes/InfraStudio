@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X } from 'lucide-react';
+import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download } from 'lucide-react';
 import { runMultiAgentLoop } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 
@@ -305,6 +305,19 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                   <span className="text-[11px] text-neutral-500 truncate max-w-[160px] font-medium">
                     {activeSession.title}
                   </span>
+                )}
+                {activeSession?.last_ifc_url && (
+                  <a
+                    href={activeSession.last_ifc_url}
+                    download={`model-${activeSession.title.toLowerCase().replace(/\s+/g, '-')}.ifc`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-blue-600/35 hover:bg-blue-600/55 text-blue-200 text-[10px] font-bold transition-all border border-blue-400/25 shadow-sm"
+                    title="Download current IFC Model"
+                  >
+                    <Download className="w-3 h-3" />
+                    Download Model
+                  </a>
                 )}
               </div>
               <button onClick={() => setExpanded(false)} className="p-1 text-neutral-500 hover:text-white transition-colors">
