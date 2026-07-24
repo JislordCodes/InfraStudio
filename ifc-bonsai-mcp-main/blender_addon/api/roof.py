@@ -57,6 +57,44 @@ class RoofProperties:
     overhang: float = 0.0  # meters
 
 
+def _combine_meshes(verts1, faces1, verts2, faces2):
+    offset = len(verts1)
+    combined_verts = list(verts1) + list(verts2)
+    combined_faces = list(faces1) + [[idx + offset for idx in face] for face in faces2]
+    return combined_verts, combined_faces
+
+
+def _generate_end_wall_mesh(profile_2d, min_ext, max_ext, axis='X'):
+    n = len(profile_2d)
+    verts = []
+    for u, v in profile_2d:
+        if axis == 'X':
+            verts.append((float(min_ext), float(u), float(v)))
+        else:
+            verts.append((float(u), float(min_ext), float(v)))
+    for u, v in profile_2d:
+        if axis == 'X':
+            verts.append((float(max_ext), float(u), float(v)))
+        else:
+            verts.append((float(u), float(max_ext), float(v)))
+            
+    faces = []
+    if axis == 'X':
+        faces.append(list(range(n)))
+        faces.append(list(range(2 * n - 1, n - 1, -1)))
+        for i in range(n):
+            next_i = (i + 1) % n
+            faces.append([i, i + n, next_i + n, next_i])
+    else:
+        faces.append(list(range(n - 1, -1, -1)))
+        faces.append(list(range(n, 2 * n)))
+        for i in range(n):
+            next_i = (i + 1) % n
+            faces.append([i, next_i, next_i + n, i + n])
+            
+    return verts, faces
+
+
 def _extrude_profile(profile_2d, min_extrude, max_extrude, axis='X'):
     """Extrudes a 2D profile into 3D vertices and faces."""
     n = len(profile_2d)
@@ -245,7 +283,43 @@ def generate_roof_geometry(
             (min_u, base_z)
         ]
         
-    return _extrude_profile(profile, min_extrude, max_extrude, axis)
+    # Extrude main roof shell
+    verts, faces = _extrude_profile(profile, min_extrude, max_extrude, axis)
+
+    # Generate vertical end cap walls to seal the openings for pitched roof types
+    wall_thickness = 0.2
+    
+    if roof_type_upper in ["GABLE_ROOF", "GABLE", "PITCHED", "PITCHED_ROOF"]:
+        ridge_height = run * math.tan(math.radians(angle))
+        end_profile = [
+            (min_u, base_z),
+            (center_u, base_z + ridge_height),
+            (max_u, base_z)
+        ]
+        # Back end wall
+        w_verts1, w_faces1 = _generate_end_wall_mesh(end_profile, min_extrude, min_extrude + wall_thickness, axis)
+        verts, faces = _combine_meshes(verts, faces, w_verts1, w_faces1)
+        
+        # Front end wall
+        w_verts2, w_faces2 = _generate_end_wall_mesh(end_profile, max_extrude - wall_thickness, max_extrude, axis)
+        verts, faces = _combine_meshes(verts, faces, w_verts2, w_faces2)
+
+    elif roof_type_upper in ["SHED_ROOF", "SHED", "SKILLION", "LEAN_TO"]:
+        total_rise = span * math.tan(math.radians(angle))
+        end_profile = [
+            (min_u, base_z),
+            (max_u, base_z),
+            (max_u, base_z + total_rise)
+        ]
+        # Back end wall
+        w_verts1, w_faces1 = _generate_end_wall_mesh(end_profile, min_extrude, min_extrude + wall_thickness, axis)
+        verts, faces = _combine_meshes(verts, faces, w_verts1, w_faces1)
+        
+        # Front end wall
+        w_verts2, w_faces2 = _generate_end_wall_mesh(end_profile, max_extrude - wall_thickness, max_extrude, axis)
+        verts, faces = _combine_meshes(verts, faces, w_verts2, w_faces2)
+
+    return verts, faces
 
 
 @register_command('get_roof_types', description="Get all supported roof types")
