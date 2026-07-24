@@ -164,35 +164,33 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
       const projectId = saJson.project_id || "gemini-app-sa-495716";
       const location = saJson.location || "us-central1";
 
-      const vertexModels = [targetModel, "gemini-2.5-flash", "gemini-2.0-flash"];
-      for (const m of vertexModels) {
-        const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${m}:generateContent`;
+      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
 
-        const res = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          },
-          signal: AbortSignal.timeout(60000),
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
-            generationConfig: {
-              maxOutputTokens: 8192,
-              responseMimeType: jsonMode ? "application/json" : "text/plain"
-            }
-          })
-        });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: `${systemPrompt}\n\nUSER REQUEST:\n${promptText}` }] }],
+          generationConfig: {
+            maxOutputTokens: 8192,
+            responseMimeType: jsonMode ? "application/json" : "text/plain"
+          }
+        })
+      });
 
-        if (res.ok) {
-          const data = await res.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          if (text) return text;
-        } else {
-          const errText = await res.text();
-          console.warn(`[callGemini] Vertex AI ${m} failed (${res.status}): ${errText}`);
-        }
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`[Vertex AI ${targetModel} Error ${res.status}]: ${errText}`);
       }
+
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (!text) throw new Error(`Empty response from Vertex AI ${targetModel}`);
+      return text;
     } catch (e) {
       console.warn("[callGemini] Service account auth error, trying API key / fallback:", e);
     }

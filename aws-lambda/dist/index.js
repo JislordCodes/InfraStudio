@@ -25228,36 +25228,33 @@ async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = 
       const accessToken = await mintAccessToken(saJson);
       const projectId = saJson.project_id || "gemini-app-sa-495716";
       const location = saJson.location || "us-central1";
-      const vertexModels = [targetModel, "gemini-2.5-flash", "gemini-2.0-flash"];
-      for (const m of vertexModels) {
-        const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${m}:generateContent`;
-        const res = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${accessToken}`,
-            "Content-Type": "application/json"
-          },
-          signal: AbortSignal.timeout(6e4),
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: `${systemPrompt4}
+      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        signal: AbortSignal.timeout(6e4),
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: `${systemPrompt4}
 
 USER REQUEST:
 ${promptText}` }] }],
-            generationConfig: {
-              maxOutputTokens: 8192,
-              responseMimeType: jsonMode ? "application/json" : "text/plain"
-            }
-          })
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          if (text) return text;
-        } else {
-          const errText = await res.text();
-          console.warn(`[callGemini] Vertex AI ${m} failed (${res.status}): ${errText}`);
-        }
+          generationConfig: {
+            maxOutputTokens: 8192,
+            responseMimeType: jsonMode ? "application/json" : "text/plain"
+          }
+        })
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`[Vertex AI ${targetModel} Error ${res.status}]: ${errText}`);
       }
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (!text) throw new Error(`Empty response from Vertex AI ${targetModel}`);
+      return text;
     } catch (e) {
       console.warn("[callGemini] Service account auth error, trying API key / fallback:", e);
     }
@@ -25807,43 +25804,18 @@ async function handleArchitect(brief) {
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  try {
-    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
-    if (geminiRes && geminiRes.trim().length >= 5) {
-      const parsed = cleanJsonResponse(geminiRes);
-      if (isBuilding) return repairPlan(parsed);
-      parsed.structure_category = category;
-      parsed.is_edit = false;
-      return parsed;
-    }
-  } catch (e) {
-    console.warn("[architect] Gemini Flash attempt failed, trying fallback models:", e);
+  const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
+  if (!geminiRes || geminiRes.trim().length < 5) {
+    throw new Error("Gemini 3.6 Flash returned an empty or invalid response.");
   }
-  const models = ["qwen3.7-plus", "glm-5.2"];
-  let lastError = null;
-  for (let attempt = 0; attempt < models.length; attempt++) {
-    const model = models[attempt];
-    try {
-      const res = await callQwen(prompt, promptStr, true, model);
-      if (!res || res.trim().length < 5) {
-        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty response, retrying...`);
-        lastError = new Error(`Empty response from ${model}`);
-        continue;
-      }
-      const parsed = cleanJsonResponse(res);
-      if (isBuilding) {
-        return repairPlan(parsed);
-      } else {
-        parsed.structure_category = category;
-        parsed.is_edit = false;
-        return parsed;
-      }
-    } catch (err) {
-      lastError = err;
-      console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}) failed: ${err.message}`);
-    }
+  const parsed = cleanJsonResponse(geminiRes);
+  if (isBuilding) {
+    return repairPlan(parsed);
+  } else {
+    parsed.structure_category = category;
+    parsed.is_edit = false;
+    return parsed;
   }
-  throw new Error(`All architect attempts failed. Last error: ${lastError?.message || lastError}`);
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
   Deno.serve(async (req) => {

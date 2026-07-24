@@ -328,48 +328,20 @@ export async function handleArchitect(brief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  // 1. Try Gemini 3.6 Flash (fastest, ~1.5s)
-  try {
-    const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
-    if (geminiRes && geminiRes.trim().length >= 5) {
-      const parsed = cleanJsonResponse(geminiRes);
-      if (isBuilding) return repairPlan(parsed);
-      parsed.structure_category = category;
-      parsed.is_edit = false;
-      return parsed;
-    }
-  } catch (e) {
-    console.warn("[architect] Gemini Flash attempt failed, trying fallback models:", e);
+  // EXCLUSIVELY use Gemini 3.6 Flash (Strict, zero fallbacks)
+  const geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
+  if (!geminiRes || geminiRes.trim().length < 5) {
+    throw new Error("Gemini 3.6 Flash returned an empty or invalid response.");
   }
 
-  // 2. Fallback to qwen3.7-plus / glm-5.2
-  const models = ["qwen3.7-plus", "glm-5.2"];
-  let lastError: any = null;
-
-  for (let attempt = 0; attempt < models.length; attempt++) {
-    const model = models[attempt];
-    try {
-      const res = await callQwen(prompt, promptStr, true, model);
-      if (!res || res.trim().length < 5) {
-        console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}): empty response, retrying...`);
-        lastError = new Error(`Empty response from ${model}`);
-        continue;
-      }
-      const parsed = cleanJsonResponse(res);
-      if (isBuilding) {
-        return repairPlan(parsed);
-      } else {
-        parsed.structure_category = category;
-        parsed.is_edit = false;
-        return parsed;
-      }
-    } catch (err: any) {
-      lastError = err;
-      console.error(`[architect] Attempt ${attempt + 1}/${models.length} (${model}) failed: ${err.message}`);
-    }
+  const parsed = cleanJsonResponse(geminiRes);
+  if (isBuilding) {
+    return repairPlan(parsed);
+  } else {
+    parsed.structure_category = category;
+    parsed.is_edit = false;
+    return parsed;
   }
-
-  throw new Error(`All architect attempts failed. Last error: ${lastError?.message || lastError}`);
 }
 
 if (typeof Deno !== "undefined" && Deno.serve) {
