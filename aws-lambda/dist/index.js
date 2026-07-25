@@ -25292,10 +25292,13 @@ ${promptText}` }] }],
   return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
 }
 function getTargetModel(model) {
+  if (model === "kimi-k2.7-code") {
+    return "kimi-k2.7-code";
+  }
   if (model === "qwen3.7-plus") {
     return "qwen3.7-plus-2026-05-26";
   }
-  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo" || model === "kimi-k2.7-code") {
+  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
     return "qwen3.7-max-2026-05-20";
   }
   return model;
@@ -25349,7 +25352,7 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
   }
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
-async function callGLM(systemPrompt4, userMessage, tools, model = "glm-5.1") {
+async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k2.7-code") {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   const msgs = [
@@ -25370,15 +25373,6 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "glm-5.1") {
   });
   if (!res.ok) {
     const errText = await res.text();
-    console.warn(`[callGLM] Model ${targetModel} failed (${res.status}): ${errText}`);
-    if (targetModel !== "qwen3.7-max-2026-05-20") {
-      console.warn(`[callGLM] Retrying with qwen3.7-max-2026-05-20...`);
-      return await callGLM(systemPrompt4, userMessage, tools, "qwen3.7-max-2026-05-20");
-    }
-    if (targetModel !== "qwen3.7-plus-2026-05-26") {
-      console.warn(`[callGLM] Retrying with qwen3.7-plus-2026-05-26...`);
-      return await callGLM(systemPrompt4, userMessage, tools, "qwen3.7-plus-2026-05-26");
-    }
     throw new Error(`BIM Model Error (${targetModel}): ${errText}`);
   }
   const data = await res.json();
