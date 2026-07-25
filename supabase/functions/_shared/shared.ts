@@ -236,7 +236,7 @@ function getTargetModel(model: string): string {
   if (model === "qwen3.7-plus") {
     return "qwen3.7-plus-2026-05-26";
   }
-  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
+  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo" || model === "kimi-k2.7-code") {
     return "qwen3.7-max-2026-05-20";
   }
   return model;
@@ -319,10 +319,17 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
   });
   
   if (!res.ok) {
-    if (targetModel === "qwen-max") {
-      return await callGLM(systemPrompt, userMessage, tools, "qwen-flash");
+    const errText = await res.text();
+    console.warn(`[callGLM] Model ${targetModel} failed (${res.status}): ${errText}`);
+    if (targetModel !== "qwen3.7-max-2026-05-20") {
+      console.warn(`[callGLM] Retrying with qwen3.7-max-2026-05-20...`);
+      return await callGLM(systemPrompt, userMessage, tools, "qwen3.7-max-2026-05-20");
     }
-    throw new Error(`GLM Error: ${await res.text()}`);
+    if (targetModel !== "qwen3.7-plus-2026-05-26") {
+      console.warn(`[callGLM] Retrying with qwen3.7-plus-2026-05-26...`);
+      return await callGLM(systemPrompt, userMessage, tools, "qwen3.7-plus-2026-05-26");
+    }
+    throw new Error(`BIM Model Error (${targetModel}): ${errText}`);
   }
   
   const data = await res.json();
