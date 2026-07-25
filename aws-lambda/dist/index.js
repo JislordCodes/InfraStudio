@@ -25466,16 +25466,16 @@ Your sole responsibility is to convert natural-language user intent into a compl
 
 Core Directives:
  1. STRUCTURE CATEGORY (CRITICAL): Classify the user request into ONE of these categories:
+    - "infrastructure" \u2014 structural frames, column grids, beam/column networks, pad bases, footings, foundations, bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
     - "building" \u2014 houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
-    - "infrastructure" \u2014 bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
     - "mep" \u2014 pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
     - "custom" \u2014 furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
  2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
     - If ACTIVE_SESSION_EXISTS is true or history contains previous turns:
-      Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure (e.g. "add a balcony", "make it 2 storeys", "add a window", "change roof to gable", "add a garage", "paint walls blue", "add a bedroom").
-      ONLY set "is_edit": false if the user explicitly requests to "create a new building from scratch", "start over", "clear all", or "replace this model".
+      Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure.
+      ONLY set "is_edit": false if the user explicitly requests to "create a new building/frame from scratch", "start over", "clear all", or "replace this model".
  3. FOR BUILDINGS: Extract rooms, storeys, special features, materials, and edit instructions.
- 4. FOR NON-BUILDINGS: Extract component_requirements \u2014 a list of named structural components with descriptions, approximate dimensions, and positions.
+ 4. FOR NON-BUILDINGS / STRUCTURAL FRAMES: Extract component_requirements \u2014 a list of named structural components (columns, beams, pad bases, slabs) with descriptions, grid spacing, dimensions, and positions.
 
 Strict Restrictions:
  * You MUST NOT generate geometry or invoke BIM/MCP tools.
@@ -25514,7 +25514,10 @@ Task: Parse the LATEST user message in context of conversation history. If the u
     result.structure_category = "building";
   }
   if (hasHistory && result.is_edit === void 0) {
-    result.is_edit = true;
+    const lastUserMsg = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+    if (!/new building|new project|start over|clear|reset/i.test(lastUserMsg)) {
+      result.is_edit = true;
+    }
   }
   return result;
 }
@@ -25642,25 +25645,35 @@ Expected JSON Schema:
   ],
   "structural_notes": ["string"]
 }`;
-var infrastructurePrompt = `You are the Structural Design Agent for InfraStudio.
-Your mission is to transform a structured design brief into a precise component-based construction plan for NON-BUILDING structures (bridges, tunnels, towers, MEP systems, custom geometry).
+var infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
+Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
 
-You must output a JSON plan with components, each specifying:
-- name: descriptive name
-- ifc_class: the IFC class to use (IfcBeam, IfcColumn, IfcSlab, IfcMember, IfcFooting, IfcBuildingElementProxy, IfcPipeSegment, IfcDuctSegment, etc.)
-- geometry_type: "box" | "cylinder" | "sphere" | "custom_trimesh"
-- dimensions: { length, width, height } for box, { radius, height } for cylinder, { radius } for sphere
-- position: [x, y, z] center position in meters
-- rotation: [rx, ry, rz] rotation in degrees (optional, default [0,0,0])
-- material: material description string
-- trimesh_code: (only for geometry_type="custom_trimesh") Python trimesh code. MUST assign result variable. Available: trimesh.primitives.Box, Cylinder, Sphere, Extrusion. Boolean: .union(), .difference(), .intersection(). Transform: .apply_translation([x,y,z]), .apply_transform(matrix).
+STRUCTURAL FRAMES & COLUMN GRIDS (CRITICAL MATHEMATICAL RULES):
+ 1. CENTER POSITIONING RULES (trimesh Box extents=[length, width, height] is centered at position [x,y,z]):
+    - For vertical columns of height H starting at elevation Z_start:
+      Position Z_center = Z_start + H / 2.
+    - For pad bases/footings (IfcFooting) under columns at ground level (Z=0):
+      Dimensions e.g. { length: 1.5, width: 1.5, height: 0.6 }.
+      Position Z_center = 0.3m (or -0.3m if below ground).
+    - For longitudinal beams along X (length L = spacing along X, e.g. 5m):
+      Position X_center = X_start + L / 2.
+    - For transverse beams along Y (width W = spacing along Y, e.g. 5m):
+      Position Y_center = Y_start + W / 2.
 
-Spatial Rules:
- 1. Use a RIGHT-HANDED coordinate system: X=length, Y=width, Z=up.
- 2. Position components so they connect properly (e.g. bridge piers touch the underside of the deck).
- 3. Use realistic engineering dimensions (bridge deck thickness ~0.8-1.5m, pier diameter ~1-2m, etc.).
- 4. For bridges: deck at top, piers below connecting deck to ground (z=0).
- 5. For MEP: pipes and ducts should connect end-to-end with realistic diameters.
+ 2. GRID COMPUTATION EXAMPLE (e.g. 4 columns in X row x 5 columns in Y col, 3 storeys):
+    - Grid X coordinates: [0, 5, 10, 15] (4 columns = 3 bays of 5m = 15m span).
+    - Grid Y coordinates: [0, 5, 10, 15, 20] (5 columns = 4 bays of 5m = 20m span).
+    - Storey heights: 3m per storey (Storey 1: Z=0 to 3m; Storey 2: Z=3 to 6m; Storey 3: Z=6 to 9m).
+    - Step 1: Create Pad Bases (IfcFooting) at Z=0.3m under each grid intersection (X, Y).
+    - Step 2: Create Columns (IfcColumn) per storey:
+      * Storey 1 columns at Z_center = 1.5m (from 0 to 3m).
+      * Storey 2 columns at Z_center = 4.5m (from 3 to 6m).
+      * Storey 3 columns at Z_center = 7.5m (from 6 to 9m).
+    - Step 3: Create Beams (IfcBeam) connecting columns at each storey top (Z=3m, Z=6m, Z=9m):
+      * X-Beams: length=5m, centered at (X + 2.5, Y, Z_level).
+      * Y-Beams: width=5m, centered at (X, Y + 2.5, Z_level).
+
+ 3. DO NOT OMIT COMPONENTS: Generate EVERY single column, beam, and footing required to form a fully connected, complete structural frame.
 
 Strict Restrictions:
  * Return ONLY raw JSON.
@@ -25675,19 +25688,18 @@ Expected JSON Schema:
   "components": [
     {
       "name": "string",
-      "ifc_class": "string",
+      "ifc_class": "IfcColumn | IfcBeam | IfcFooting | IfcSlab | IfcMember | IfcBuildingElementProxy",
       "geometry_type": "box | cylinder | sphere | custom_trimesh",
-      "dimensions": {},
+      "dimensions": { "length": number, "width": number, "height": number },
       "position": [number, number, number],
       "rotation": [number, number, number],
-      "material": "string",
-      "trimesh_code": "string (optional)"
+      "material": "string"
     }
   ],
   "material_palette": {
-    "primary": "string",
-    "secondary": "string",
-    "accent": "string"
+    "primary": "reinforced structural concrete",
+    "secondary": "structural steel S355",
+    "accent": "galvanized steel"
   },
   "structural_notes": ["string"]
 }`;

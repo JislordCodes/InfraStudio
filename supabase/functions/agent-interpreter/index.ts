@@ -5,16 +5,16 @@ Your sole responsibility is to convert natural-language user intent into a compl
 
 Core Directives:
  1. STRUCTURE CATEGORY (CRITICAL): Classify the user request into ONE of these categories:
+    - "infrastructure" — structural frames, column grids, beam/column networks, pad bases, footings, foundations, bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
     - "building" — houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
-    - "infrastructure" — bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
     - "mep" — pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
     - "custom" — furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
  2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
     - If ACTIVE_SESSION_EXISTS is true or history contains previous turns:
-      Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure (e.g. "add a balcony", "make it 2 storeys", "add a window", "change roof to gable", "add a garage", "paint walls blue", "add a bedroom").
-      ONLY set "is_edit": false if the user explicitly requests to "create a new building from scratch", "start over", "clear all", or "replace this model".
+      Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure.
+      ONLY set "is_edit": false if the user explicitly requests to "create a new building/frame from scratch", "start over", "clear all", or "replace this model".
  3. FOR BUILDINGS: Extract rooms, storeys, special features, materials, and edit instructions.
- 4. FOR NON-BUILDINGS: Extract component_requirements — a list of named structural components with descriptions, approximate dimensions, and positions.
+ 4. FOR NON-BUILDINGS / STRUCTURAL FRAMES: Extract component_requirements — a list of named structural components (columns, beams, pad bases, slabs) with descriptions, grid spacing, dimensions, and positions.
 
 Strict Restrictions:
  * You MUST NOT generate geometry or invoke BIM/MCP tools.
@@ -58,7 +58,10 @@ export async function handleInterpreter(payload: any): Promise<any> {
 
   // Force is_edit: true if session/history exists and user isn't asking to clear/reset
   if (hasHistory && result.is_edit === undefined) {
-    result.is_edit = true;
+    const lastUserMsg = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+    if (!/new building|new project|start over|clear|reset/i.test(lastUserMsg)) {
+      result.is_edit = true;
+    }
   }
 
   return result;
