@@ -25360,23 +25360,35 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k2.7-cod
     { role: "user", content: userMessage }
   ];
   const targetModel = getTargetModel(model);
-  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: targetModel,
-      messages: msgs,
-      tools: tools && tools.length > 0 ? tools : void 0,
-      temperature: 0.1,
-      max_tokens: 16384
-    })
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`BIM Model Error (${targetModel}): ${errText}`);
+  const endpoints = [
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+  ];
+  let lastErrText = "";
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: msgs,
+          tools: tools && tools.length > 0 ? tools : void 0,
+          temperature: 0.1,
+          max_tokens: 16384
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices[0].message;
+      }
+      lastErrText = await res.text();
+      console.warn(`[callGLM] ${endpoint} returned (${res.status}): ${lastErrText}`);
+    } catch (e) {
+      lastErrText = e.message || String(e);
+    }
   }
-  const data = await res.json();
-  return data.choices[0].message;
+  throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
 }
 function autoRepairTruncatedJson(jsonStr) {
   let str = jsonStr.trim();
