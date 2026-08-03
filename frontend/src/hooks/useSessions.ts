@@ -23,13 +23,11 @@ const ACTIVE_SESSION_KEY = 'infrastudio_active_session';
 export function useSessions() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionIdState] = useState<string | null>(() => {
-    // Restore from localStorage on mount
     return localStorage.getItem(ACTIVE_SESSION_KEY);
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // Persist activeSessionId to localStorage
   const setActiveSessionId = useCallback((id: string | null) => {
     setActiveSessionIdState(id);
     if (id) {
@@ -39,12 +37,10 @@ export function useSessions() {
     }
   }, []);
 
-  // Load session list on mount
   useEffect(() => {
     loadSessions();
   }, []);
 
-  // Load messages whenever active session changes
   useEffect(() => {
     if (!activeSessionId) {
       setMessages([]);
@@ -62,11 +58,17 @@ export function useSessions() {
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
-          console.error('Error loading messages:', error);
+          console.warn('Error loading messages from DB:', error);
           setMessages([]);
         } else {
           setMessages(data || []);
         }
+        setLoadingMessages(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn('DB load error (fallback empty messages):', err);
+        setMessages([]);
         setLoadingMessages(false);
       });
 
@@ -74,53 +76,70 @@ export function useSessions() {
   }, [activeSessionId]);
 
   async function loadSessions() {
-    const { data, error } = await supabase
-      .from('ifc_sessions')
-      .select('*')
-      .order('created_at', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('ifc_sessions')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error loading sessions:', error);
-      return;
-    }
-    if (data) {
-      setSessions(data);
-      // If we have an activeSessionId from localStorage, verify it still exists
-      const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
-      if (stored && !data.find(s => s.id === stored)) {
-        // Session was deleted, clear it
-        setActiveSessionId(null);
+      if (error) {
+        console.warn('Error loading sessions:', error);
+        return;
       }
+      if (data) {
+        setSessions(data);
+        const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
+        if (stored && !data.find(s => s.id === stored)) {
+          setActiveSessionId(null);
+        }
+      }
+    } catch (e) {
+      console.warn('loadSessions DB error:', e);
     }
   }
 
   async function createSession(title: string = 'New Session'): Promise<ChatSession> {
-    const { data, error } = await supabase
-      .from('ifc_sessions')
-      .insert({ title, mcp_session_id: '' })
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('ifc_sessions')
+        .insert({ title, mcp_session_id: '' })
+        .select()
+        .single();
 
-    if (error) {
-      console.error('Error creating session:', error);
-      throw error;
+      if (!error && data) {
+        setSessions(prev => [data, ...prev]);
+        setActiveSessionId(data.id);
+        setMessages([]);
+        return data;
+      }
+    } catch (err) {
+      console.warn('Supabase createSession error, using local session fallback:', err);
     }
-    setSessions(prev => [data, ...prev]);
-    setActiveSessionId(data.id);
+
+    // Fallback local session if Supabase is offline/unreachable
+    const localSession: ChatSession = {
+      id: 'session_' + Date.now(),
+      title,
+      mcp_session_id: '',
+      last_ifc_url: null,
+      created_at: new Date().toISOString()
+    };
+    setSessions(prev => [localSession, ...prev]);
+    setActiveSessionId(localSession.id);
     setMessages([]);
-    return data;
+    return localSession;
   }
 
   async function deleteSession(sessionId: string) {
-    // Messages cascade-delete automatically via FK
-    const { error } = await supabase
-      .from('ifc_sessions')
-      .delete()
-      .eq('id', sessionId);
+    try {
+      const { error } = await supabase
+        .from('ifc_sessions')
+        .delete()
+        .eq('id', sessionId);
 
-    if (error) {
-      console.error('Error deleting session:', error);
-      return;
+      if (error) console.warn('Error deleting session in DB:', error);
+    } catch (e) {
+      console.warn('deleteSession DB error:', e);
     }
     setSessions(prev => prev.filter(s => s.id !== sessionId));
     if (activeSessionId === sessionId) {
@@ -129,18 +148,21 @@ export function useSessions() {
     }
   }
 
-  // Persist a message to DB. Awaitable so caller can guarantee it saved before refresh.
   const saveMessage = useCallback(async (sessionId: string, msg: ChatMessage) => {
-    const { role, content, tool_calls, tool_call_id, reasoning_details } = msg;
-    const { error } = await supabase.from('ifc_messages').insert({
-      session_id: sessionId,
-      role,
-      content: content || '',
-      tool_calls: tool_calls || null,
-      tool_call_id: tool_call_id || null,
-      reasoning_details: reasoning_details || null,
-    });
-    if (error) console.warn('Error saving message:', error);
+    try {
+      const { role, content, tool_calls, tool_call_id, reasoning_details } = msg;
+      const { error } = await supabase.from('ifc_messages').insert({
+        session_id: sessionId,
+        role,
+        content: content || '',
+        tool_calls: tool_calls || null,
+        tool_call_id: tool_call_id || null,
+        reasoning_details: reasoning_details || null,
+      });
+      if (error) console.warn('Error saving message to DB:', error);
+    } catch (e) {
+      console.warn('saveMessage DB insert error (non-fatal):', e);
+    }
   }, []);
 
   async function updateSessionData(sessionId: string, mcpSessionId?: string, lastIfcUrl?: string) {
@@ -150,17 +172,19 @@ export function useSessions() {
 
     if (Object.keys(updates).length === 0) return;
 
-    const { error } = await supabase
-      .from('ifc_sessions')
-      .update(updates)
-      .eq('id', sessionId);
+    setSessions(prev =>
+      prev.map(s => (s.id === sessionId ? { ...s, ...updates } : s))
+    );
 
-    if (error) {
-      console.error('Error updating session:', error);
-    } else {
-      setSessions(prev =>
-        prev.map(s => (s.id === sessionId ? { ...s, ...updates } : s))
-      );
+    try {
+      const { error } = await supabase
+        .from('ifc_sessions')
+        .update(updates)
+        .eq('id', sessionId);
+
+      if (error) console.warn('Error updating session in DB:', error);
+    } catch (e) {
+      console.warn('updateSessionData DB error (non-fatal):', e);
     }
   }
 

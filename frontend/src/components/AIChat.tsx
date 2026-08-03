@@ -89,51 +89,51 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    let sid = activeSessionId;
-
-    // Auto-create session on first message
-    if (!sid) {
-      try {
-        const s = await createSession(input.trim().slice(0, 40) || 'New Design');
-        sid = s.id;
-      } catch {
-        return;
-      }
-    }
-
     const userContent = input.trim();
     const userMsg: ChatMessage = { role: 'user', content: userContent };
 
-    // Optimistic UI update
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
     setIsLoading(true);
     setExpanded(true);
-    setCurrentSteps([]);
+    setInput('');
+    setCurrentSteps(['🚀 Initializing session...']);
 
-    // Save user message — await so it's persisted before any refresh
-    await saveMessage(sid, userMsg);
+    let sid = activeSessionId;
 
     try {
+      // Auto-create session on first message if none exists
+      if (!sid) {
+        try {
+          const s = await createSession(userContent.slice(0, 40) || 'New Design');
+          sid = s.id;
+        } catch {
+          sid = 'session_' + Date.now();
+          setActiveSessionId(sid);
+        }
+      }
+
+      // Optimistic UI update
+      setMessages(prev => [...prev, userMsg]);
+
+      // Save user message (non-blocking)
+      saveMessage(sid, userMsg).catch(err => console.warn('saveMessage non-fatal:', err));
+
       setCurrentSteps(['🤖 Agent starting...']);
 
       const sessionObj = sessions.find(s => s.id === sid);
       const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
 
-      // Build history for LLM context — include tool call results so LLM knows existing GUIDs
+      // Build history for LLM context
       const history: any[] = [];
       for (const m of messages) {
         if (m.role === 'user') {
           history.push({ role: 'user', content: m.content });
         } else if (m.role === 'assistant') {
           if (m.tool_calls) {
-            // Include assistant messages with tool calls so LLM knows what was executed
             history.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls });
           } else if (m.content && m.content.trim()) {
             history.push({ role: 'assistant', content: m.content });
           }
         } else if (m.role === 'tool' && m.tool_call_id) {
-          // Include tool results — these contain the GUIDs the LLM needs for editing
           history.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
         }
       }
@@ -144,7 +144,6 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
         clientMcpId,
         (step) => setCurrentSteps(prev => [...prev.slice(-12), step]),
         async (assistantObj: any) => {
-          // Save intermediate assistant messages (tool-call thoughts) silently
           await saveMessage(sid!, {
             role: 'assistant',
             content: assistantObj.content || '',
@@ -152,7 +151,6 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
           });
         },
         async (toolMsg: any) => {
-          // Save tool results silently
           await saveMessage(sid!, {
             role: 'tool',
             content: toolMsg.content || '',
@@ -187,7 +185,9 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       const detail = err instanceof Error ? err.message : String(err);
       const errMsg: ChatMessage = { role: 'assistant', content: `⚠️ Agent failed: ${detail.slice(0, 300)}` };
       setMessages(prev => [...prev, errMsg]);
-      await saveMessage(sid, errMsg);
+      if (sid) {
+        await saveMessage(sid, errMsg);
+      }
       setCurrentSteps([]);
     } finally {
       setIsLoading(false);
