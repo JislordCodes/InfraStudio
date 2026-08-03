@@ -25176,17 +25176,14 @@ async function fetchMcpTools(clientSessionId) {
   };
 }
 function getTargetModel(model) {
-  if (model === "qwen3.8-max") {
-    return "qwen3.8-max";
+  if (model === "qwen3.8-max" || model === "qwen-max" || !model || model === "glm-5.1") {
+    return "qwen-max";
   }
   if (model === "kimi-k2.7-code") {
-    return "kimi-k2.7-code";
+    return "qwen-max";
   }
-  if (model === "qwen3.7-plus") {
-    return "qwen3.7-plus-2026-05-26";
-  }
-  if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
-    return "qwen3.8-max";
+  if (model === "qwen3.7-plus" || model === "qwen-plus") {
+    return "qwen-plus";
   }
   return model;
 }
@@ -25201,40 +25198,41 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
   }
   const targetModel = getTargetModel(model);
   let lastError = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  const endpoints = [
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+  ];
+  for (const endpoint of endpoints) {
     try {
-      const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+      console.log(`[callQwen] Invoking ${targetModel} via ${endpoint}...`);
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(3e5),
-        // 5 minute timeout
+        signal: AbortSignal.timeout(6e4),
+        // 60s timeout per attempt
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
           temperature: 0.1,
-          max_tokens: 16384,
+          max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : void 0
         })
       });
       if (!res.ok) {
-        if (targetModel === "qwen-max") {
-          return await callQwen(systemPrompt4, userMessage, jsonMode, "qwen-flash");
-        }
         const errText = await res.text();
-        throw new Error(`Qwen Error: ${errText}`);
+        console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
+        lastError = new Error(`Qwen Error (${res.status}): ${errText}`);
+        continue;
       }
       const data = await res.json();
       const choice = data.choices?.[0];
       if (choice?.finish_reason === "length") {
-        console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length). Response may be incomplete.`);
+        console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length).`);
       }
       return choice?.message?.content || "";
     } catch (err) {
       lastError = err;
-      console.warn(`[callQwen] Attempt ${attempt}/2 for ${targetModel} failed:`, err.message || err);
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 2e3));
-      }
+      console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
     }
   }
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
@@ -25262,7 +25260,7 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "qwen3.8-max")
           messages: msgs,
           tools: tools && tools.length > 0 ? tools : void 0,
           temperature: 0.1,
-          max_tokens: 16384
+          max_tokens: 8192
         })
       });
       if (res.ok) {

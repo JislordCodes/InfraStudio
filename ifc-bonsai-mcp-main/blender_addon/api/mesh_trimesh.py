@@ -83,6 +83,12 @@ def execute_trimesh_code(code: str,
 
         captured_output = io.StringIO()
 
+        try:
+            if not hasattr(np.ndarray, 'is_empty'):
+                setattr(np.ndarray, 'is_empty', property(lambda self: self.size == 0))
+        except Exception:
+            pass
+
         namespace = {
             'trimesh': trimesh,
             'np': np,
