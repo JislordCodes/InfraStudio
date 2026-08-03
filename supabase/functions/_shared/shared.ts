@@ -233,6 +233,9 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 }
 
 function getTargetModel(model: string): string {
+  if (model === "qwen3.8-max") {
+    return "qwen3.8-max";
+  }
   if (model === "kimi-k2.7-code") {
     return "kimi-k2.7-code";
   }
@@ -240,7 +243,7 @@ function getTargetModel(model: string): string {
     return "qwen3.7-plus-2026-05-26";
   }
   if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
-    return "qwen3.7-max-2026-05-20";
+    return "qwen3.8-max";
   }
   return model;
 }
@@ -299,7 +302,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "kimi-k2.7-code"): Promise<any> {
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "qwen3.8-max"): Promise<any> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   const msgs = [

@@ -396,23 +396,23 @@ export async function handleArchitect(brief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  // EXCLUSIVELY use Gemini 3.6 Flash (Strict, zero fallbacks)
-  let geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
-  if (!geminiRes || geminiRes.trim().length < 5) {
-    throw new Error("Gemini 3.6 Flash returned an empty or invalid response.");
+  // Use qwen3.8-max for Architect Agent
+  let res = await callQwen(prompt, promptStr, true, "qwen3.8-max");
+  if (!res || res.trim().length < 5) {
+    throw new Error("qwen3.8-max returned an empty or invalid response.");
   }
 
-  // Attempt JSON parse — retry once if it fails (Gemini occasionally adds commentary)
+  // Attempt JSON parse — retry once if it fails
   let parsed: any;
   try {
-    parsed = cleanJsonResponse(geminiRes);
+    parsed = cleanJsonResponse(res);
   } catch (firstErr) {
     console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
     const retryPrompt = `You are an architect AI. Return ONLY valid JSON — no markdown, no text, no thinking.
 The user wants: ${brief.project_type || "a building"} with these rooms: ${(brief.room_requirements || []).map((r: any) => r.name).join(", ")}.
 Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_palette, storey_plans(array of floors with rooms having name/width/length/origin[x,y,z]/doors[]/windows[]), special_elements, structural_notes.`;
-    geminiRes = await callGemini(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "gemini-3.6-flash");
-    parsed = cleanJsonResponse(geminiRes);
+    res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "qwen3.8-max");
+    parsed = cleanJsonResponse(res);
   }
 
   if (isBuilding) {

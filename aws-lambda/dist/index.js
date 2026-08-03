@@ -25175,123 +25175,10 @@ async function fetchMcpTools(clientSessionId) {
     session: res.session
   };
 }
-function base64UrlEncode(input) {
-  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function pemToArrayBuffer(pem) {
-  const b64 = pem.replace(/-----BEGIN PRIVATE KEY-----/, "").replace(/-----END PRIVATE KEY-----/, "").replace(/\s+/g, "");
-  const binary = atob(b64);
-  const buf = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
-  return buf.buffer;
-}
-var cachedToken = null;
-async function mintAccessToken(saJson) {
-  const now = Math.floor(Date.now() / 1e3);
-  if (cachedToken && cachedToken.expiresAt > now + 60) return cachedToken.token;
-  const tokenUri = saJson.token_uri || "https://oauth2.googleapis.com/token";
-  const header = { alg: "RS256", typ: "JWT" };
-  const claim = { iss: saJson.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: tokenUri, exp: now + 3600, iat: now };
-  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claim))}`;
-  const rawKey = saJson.private_key || "";
-  const privateKey = rawKey.split("\\n").join("\n");
-  const key = await crypto.subtle.importKey("pkcs8", pemToArrayBuffer(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
-  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
-  const jwt = `${unsigned}.${base64UrlEncode(new Uint8Array(sig))}`;
-  const resp = await fetch(tokenUri, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt })
-  });
-  if (!resp.ok) throw new Error(`Failed to mint GCP access token: ${await resp.text()}`);
-  const data = await resp.json();
-  cachedToken = { token: data.access_token, expiresAt: now + data.expires_in };
-  return data.access_token;
-}
-async function callGemini(systemPrompt4, userMessage, jsonMode = false, model = "gemini-3.6-flash") {
-  const saRaw = typeof Deno !== "undefined" ? Deno.env.get("GCP_SERVICE_ACCOUNT_JSON") : process.env.GCP_SERVICE_ACCOUNT_JSON;
-  const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
-  const targetModel = model.includes("gemini") ? model : "gemini-3.6-flash";
-  const promptText = typeof userMessage === "string" ? userMessage : Array.isArray(userMessage) ? userMessage.map((m) => `${m.role}: ${m.content}`).join("\n") : String(userMessage);
-  if (saRaw) {
-    try {
-      let saJson = {};
-      try {
-        saJson = JSON.parse(saRaw);
-      } catch {
-        const decoded = typeof atob !== "undefined" ? atob(saRaw) : Buffer.from(saRaw, "base64").toString("utf-8");
-        saJson = JSON.parse(decoded);
-      }
-      const accessToken = await mintAccessToken(saJson);
-      const projectId = saJson.project_id || "gemini-app-sa-495716";
-      const location = "global";
-      const host = "aiplatform.googleapis.com";
-      const url = `https://${host}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${targetModel}:generateContent`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
-        },
-        signal: AbortSignal.timeout(12e4),
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: `${systemPrompt4}
-
-USER REQUEST:
-${promptText}` }] }],
-          generationConfig: {
-            maxOutputTokens: 16384,
-            responseMimeType: jsonMode ? "application/json" : "text/plain"
-          }
-        })
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`[Vertex AI ${targetModel} Error ${res.status}]: ${errText}`);
-      }
-      const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      if (!text) throw new Error(`Empty response from Vertex AI ${targetModel}`);
-      return text;
-    } catch (e) {
-      throw new Error(`[callGemini Vertex] ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  if (geminiKey) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${geminiKey}`;
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(6e4),
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `${systemPrompt4}
-
-USER REQUEST:
-${promptText}` }] }],
-          generationConfig: {
-            maxOutputTokens: 8192,
-            responseMimeType: jsonMode ? "application/json" : "text/plain"
-          }
-        })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (text) return text;
-      } else {
-        console.warn(`[callGemini] AI Studio API key ${targetModel} failed (${res.status}): ${await res.text()}`);
-      }
-    } catch (e) {
-      console.warn("[callGemini] AI Studio API key call failed:", e);
-    }
-  }
-  return callQwen(systemPrompt4, userMessage, jsonMode, "qwen3.7-plus");
-}
 function getTargetModel(model) {
+  if (model === "qwen3.8-max") {
+    return "qwen3.8-max";
+  }
   if (model === "kimi-k2.7-code") {
     return "kimi-k2.7-code";
   }
@@ -25299,7 +25186,7 @@ function getTargetModel(model) {
     return "qwen3.7-plus-2026-05-26";
   }
   if (!model || model === "glm-5.1" || model === "qwen-plus" || model === "qwen-turbo") {
-    return "qwen3.7-max-2026-05-20";
+    return "qwen3.8-max";
   }
   return model;
 }
@@ -25352,7 +25239,7 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
   }
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
-async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k2.7-code") {
+async function callGLM(systemPrompt4, userMessage, tools, model = "qwen3.8-max") {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   if (!qwenKey) throw new Error("QWEN_API_KEY missing");
   const msgs = [
@@ -25899,20 +25786,20 @@ async function handleArchitect(brief) {
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  let geminiRes = await callGemini(prompt, promptStr, true, "gemini-3.6-flash");
-  if (!geminiRes || geminiRes.trim().length < 5) {
-    throw new Error("Gemini 3.6 Flash returned an empty or invalid response.");
+  let res = await callQwen(prompt, promptStr, true, "qwen3.8-max");
+  if (!res || res.trim().length < 5) {
+    throw new Error("qwen3.8-max returned an empty or invalid response.");
   }
   let parsed;
   try {
-    parsed = cleanJsonResponse(geminiRes);
+    parsed = cleanJsonResponse(res);
   } catch (firstErr) {
     console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
     const retryPrompt = `You are an architect AI. Return ONLY valid JSON \u2014 no markdown, no text, no thinking.
 The user wants: ${brief.project_type || "a building"} with these rooms: ${(brief.room_requirements || []).map((r) => r.name).join(", ")}.
 Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_palette, storey_plans(array of floors with rooms having name/width/length/origin[x,y,z]/doors[]/windows[]), special_elements, structural_notes.`;
-    geminiRes = await callGemini(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "gemini-3.6-flash");
-    parsed = cleanJsonResponse(geminiRes);
+    res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "qwen3.8-max");
+    parsed = cleanJsonResponse(res);
   }
   if (isBuilding) {
     return repairPlan(parsed);
@@ -26410,7 +26297,7 @@ ${executionError}
 Fix the issues and try again with correct tool calls.`;
         executionError = "";
       }
-      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "kimi-k2.7-code");
+      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
@@ -26519,7 +26406,7 @@ ${executionError}
 Retry with concrete mutation tool calls.`;
         executionError = "";
       }
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "kimi-k2.7-code");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.8-max");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

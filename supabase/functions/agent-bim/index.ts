@@ -493,7 +493,7 @@ ${trimeshExamples}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "kimi-k2.7-code");
+      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
@@ -612,7 +612,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "kimi-k2.7-code");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.8-max");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";
