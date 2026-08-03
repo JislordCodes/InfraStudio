@@ -81,6 +81,9 @@ def execute_trimesh_code(code: str,
         import io
         import contextlib
 
+        if isinstance(code, str):
+            code = code.replace('.is_empty', '.size == 0')
+
         captured_output = io.StringIO()
 
         try:

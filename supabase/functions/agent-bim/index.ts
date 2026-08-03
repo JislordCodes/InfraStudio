@@ -174,8 +174,14 @@ async function applyDefaultMaterials(mcpSessionId: string): Promise<{ session: s
 }
 
 async function exportWithMaterials(mcpSessionId: string): Promise<{ ifc_url: string; mcpSessionId: string; materialResult: unknown; rawData: unknown }> {
-  const materialResult = await applyDefaultMaterials(mcpSessionId);
-  let session = materialResult.session;
+  let materialResult: any = null;
+  let session = mcpSessionId;
+  try {
+    materialResult = await applyDefaultMaterials(session);
+    session = materialResult.session;
+  } catch (mErr) {
+    console.warn("[exportWithMaterials] Non-fatal material styling error:", mErr);
+  }
   const exportRes = await mcpCallTool("export_ifc", {}, session);
   session = exportRes.session;
   const exportData = parseJson(exportRes.resultText) || {};
@@ -455,6 +461,8 @@ CRITICAL RULES for trimesh code:
 - NEVER use print() statements
 - Import nothing — trimesh, np, and math are pre-imported
 - Translate objects BEFORE combining with .union()
+- For curved or ascending bridge decks: combine multiple box segments positioned along an arc or parabola using math.cos(t), math.sin(t), and elevation z(t).
+- NEVER call .is_empty on numpy arrays.
 
 For standard structural elements, you can also use:
 - create_slab (rectangular slabs/decks)
@@ -506,12 +514,20 @@ ${trimeshExamples}`;
           const toolName = call.function.name;
           const args = JSON.parse(call.function.arguments || "{}");
           console.log(`[build_freeform] Executing tool: ${toolName}`);
-          const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
-          mcpSessionId = toolRes.session;
-          executedTools.push(toolName);
-
-          if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
-            executedMutation = true;
+          try {
+            const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
+            mcpSessionId = toolRes.session;
+            executedTools.push(toolName);
+            if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
+              executedMutation = true;
+            }
+          } catch (tErr: any) {
+            console.warn(`[build_freeform] Tool ${toolName} threw warning:`, tErr.message || tErr);
+            if (toolName.includes("style") || toolName.includes("material")) {
+              // Styling error non-fatal, skip to preserve created geometry
+              continue;
+            }
+            throw tErr;
           }
         }
 
