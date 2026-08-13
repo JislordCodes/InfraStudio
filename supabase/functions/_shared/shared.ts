@@ -56,7 +56,26 @@ export async function mcpInit(clientSessionId: string): Promise<string> {
   return newSession;
 }
 
+export function sanitizePythonCode(code: string): string {
+  if (!code || typeof code !== 'string') return code;
+  const safeHeader = `import math\nimport numpy as np\nNaN = float('nan')\nnan = float('nan')\nnull = None\ntrue = True\nfalse = False\nInfinity = float('inf')\ninf = float('inf')\n`;
+  const sanitized = code.replace(/\.is_empty/g, '.size == 0');
+  return safeHeader + '\n' + sanitized;
+}
+
 export async function mcpCallTool(name: string, args: Record<string, unknown>, clientSessionId: string): Promise<{ resultText: string, session: string }> {
+  if (args) {
+    if (typeof args.trimesh_code === 'string') {
+      args.trimesh_code = sanitizePythonCode(args.trimesh_code);
+    }
+    if (typeof args.code_str === 'string') {
+      args.code_str = sanitizePythonCode(args.code_str);
+    }
+    if (typeof args.code === 'string' && (name.includes('code') || name.includes('ifc'))) {
+      args.code = sanitizePythonCode(args.code);
+    }
+  }
+
   const res = await mcpPost({
     jsonrpc: "2.0", id: Date.now(), method: "tools/call",
     params: { name, arguments: args }

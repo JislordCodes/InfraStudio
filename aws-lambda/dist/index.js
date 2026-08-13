@@ -25132,7 +25132,33 @@ async function mcpInit(clientSessionId) {
   });
   return newSession;
 }
+function sanitizePythonCode(code) {
+  if (!code || typeof code !== "string") return code;
+  const safeHeader = `import math
+import numpy as np
+NaN = float('nan')
+nan = float('nan')
+null = None
+true = True
+false = False
+Infinity = float('inf')
+inf = float('inf')
+`;
+  const sanitized = code.replace(/\.is_empty/g, ".size == 0");
+  return safeHeader + "\n" + sanitized;
+}
 async function mcpCallTool(name, args, clientSessionId) {
+  if (args) {
+    if (typeof args.trimesh_code === "string") {
+      args.trimesh_code = sanitizePythonCode(args.trimesh_code);
+    }
+    if (typeof args.code_str === "string") {
+      args.code_str = sanitizePythonCode(args.code_str);
+    }
+    if (typeof args.code === "string" && (name.includes("code") || name.includes("ifc"))) {
+      args.code = sanitizePythonCode(args.code);
+    }
+  }
   const res = await mcpPost({
     jsonrpc: "2.0",
     id: Date.now(),
