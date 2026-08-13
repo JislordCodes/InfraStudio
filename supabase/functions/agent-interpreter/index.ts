@@ -48,7 +48,7 @@ export async function handleInterpreter(payload: any): Promise<any> {
     formattedPrompt = `ACTIVE_SESSION_EXISTS: ${hasHistory}.\nFull Conversation History:\n${historyText}\n\nTask: Parse the LATEST user message in context of conversation history. If the user wants to add to, modify, paint, adjust, or edit the existing model, set "is_edit": true.`;
   }
 
-  const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.7-max-2026-05-20");
+  const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
 
   // Default structure_category to "building" if not set

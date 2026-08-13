@@ -25406,7 +25406,7 @@ ${historyText}
 
 Task: Parse the LATEST user message in context of conversation history. If the user wants to add to, modify, paint, adjust, or edit the existing model, set "is_edit": true.`;
   }
-  const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.7-max-2026-05-20");
+  const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
   if (!result.structure_category) {
     result.structure_category = "building";
@@ -25845,7 +25845,7 @@ async function handleReviewer(payload) {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "qwen3.7-plus");
+  const res = await callQwen(systemPrompt3, JSON.stringify(sceneInfo.resultText), true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
   result.mcpSessionId = mcpSessionId;
   return result;
