@@ -57,10 +57,14 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     // ── 4. Stats panel ───────────────────────────────────────────────────────
     const stats = new Stats();
     stats.showPanel(0);
-    stats.dom.style.position = 'absolute';
-    stats.dom.style.top = '16px';
-    stats.dom.style.left = '16px';
-    container.appendChild(stats.dom);
+    if (window.innerWidth < 640) {
+      stats.dom.style.display = 'none';
+    } else {
+      stats.dom.style.position = 'absolute';
+      stats.dom.style.top = '16px';
+      stats.dom.style.left = '16px';
+      container.appendChild(stats.dom);
+    }
 
     world.renderer.onBeforeUpdate.add(() => stats.begin());
     world.renderer.onAfterUpdate.add(() => stats.end());
@@ -238,7 +242,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       </div>
 
       {/* Action Toolbar - Vertical, right side */}
-      <div className="absolute top-1/2 right-3 -translate-y-1/2 z-50 flex flex-col items-center gap-1.5 px-1.5 py-2.5 bg-neutral-900/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.5)] pointer-events-auto">
+      <div className="absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 bg-neutral-900/90 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/10 shadow-lg pointer-events-auto">
         <button 
           onClick={() => cameraRef.current?.controls.dolly(5, true)}
           className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"

@@ -16,27 +16,30 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col w-screen h-screen overflow-hidden bg-neutral-900">
+    <div className="flex flex-col w-full h-[100dvh] overflow-hidden bg-neutral-950">
 
-      {/* Header bar */}
-      <div className="flex shrink-0 items-center justify-between px-6 py-3 bg-neutral-950 border-b border-neutral-800 z-30">
-        <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-          <div className="w-5 h-5 bg-blue-600 rounded-sm" />
-          BIM<span className="text-neutral-500 font-light">Viewer</span>
+      {/* Header bar — mobile-ready with safe margins */}
+      <header className="flex shrink-0 items-center justify-between px-3 sm:px-6 py-2.5 sm:py-3 bg-neutral-950/95 border-b border-neutral-800/80 z-30 backdrop-blur-md">
+        <h1 className="text-base sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+          <div className="w-4 h-4 sm:w-5 sm:h-5 bg-blue-600 rounded-sm shadow-sm shrink-0" />
+          InfraStudio<span className="text-neutral-500 font-light hidden xs:inline text-xs sm:text-base">BIM</span>
         </h1>
-        <button onClick={() => handleLoadIfcUrl('/test.ifc')} className="bg-red-500 text-white px-4 py-2 font-bold z-50 rounded">TEST LOAD</button>
-        <Uploader onFileUpload={handleFileUpload} />
-      </div>
+        <div className="flex items-center gap-2">
+          <Uploader onFileUpload={handleFileUpload} />
+        </div>
+      </header>
 
-      {/* Full-screen 3D viewer with floating chat overlay */}
-      <div className="flex-1 relative overflow-hidden">
+      {/* Full-screen 3D viewer container */}
+      <main className="flex-1 relative w-full h-full overflow-hidden">
         <IfcViewer ref={viewerRef} />
 
-        {/* Floating chat — bottom-center, small message-box style */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-xl z-20 px-4">
-          <AIChat onLoadIfcUrl={handleLoadIfcUrl} />
+        {/* Floating chat — responsive bottom overlay with safe-area spacing */}
+        <div className="absolute bottom-2 sm:bottom-6 left-1/2 -translate-x-1/2 w-[95%] sm:w-full max-w-xl z-20 px-0 sm:px-4 pb-safe pointer-events-none">
+          <div className="pointer-events-auto">
+            <AIChat onLoadIfcUrl={handleLoadIfcUrl} />
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
