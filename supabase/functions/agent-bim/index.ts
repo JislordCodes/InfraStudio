@@ -463,6 +463,8 @@ CRITICAL RULES for trimesh code:
 - Translate objects BEFORE combining with .union()
 - For curved or ascending bridge decks: combine multiple box segments positioned along an arc or parabola using math.cos(t), math.sin(t), and elevation z(t).
 - NEVER call .is_empty on numpy arrays.
+- NEVER write 'NaN' or undefined variable identifiers in Python code (always use valid numbers e.g. 0.0).
+- All coordinates, extents, and dimensions must be real finite numbers.
 
 For standard structural elements, you can also use:
 - create_slab (rectangular slabs/decks)

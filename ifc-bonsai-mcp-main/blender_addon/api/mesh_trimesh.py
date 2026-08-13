@@ -98,6 +98,13 @@ def execute_trimesh_code(code: str,
             'numpy': np,
             '__builtins__': __builtins__,
             'math': __import__('math'),
+            'NaN': float('nan'),
+            'nan': float('nan'),
+            'null': None,
+            'true': True,
+            'false': False,
+            'Infinity': float('inf'),
+            'inf': float('inf'),
         }
 
         if parameters:

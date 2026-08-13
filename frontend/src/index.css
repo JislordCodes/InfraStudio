@@ -35,6 +35,16 @@
   }
 }
 
+/* Text selection and highlight styling */
+::selection {
+  background-color: rgba(37, 99, 235, 0.7);
+  color: #ffffff;
+}
+::-moz-selection {
+  background-color: rgba(37, 99, 235, 0.7);
+  color: #ffffff;
+}
+
 /* Mobile safe area padding utilities */
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 12px);

@@ -337,7 +337,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
             </div>
 
             {/* Messages Scroll Area */}
-            <div className="overflow-y-auto px-3 py-2.5 space-y-2.5 max-h-[35vh] sm:max-h-[280px]">
+            <div className="overflow-y-auto px-3 py-2.5 space-y-2.5 max-h-[35vh] sm:max-h-[280px] select-text">
               {loadingMessages ? (
                 <div className="flex items-center justify-center gap-2 h-20">
                   <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
@@ -355,20 +355,22 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                         <Bot className="w-3 h-3 text-white" />
                       </div>
                     )}
-                    <div className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-3.5 py-2 text-xs sm:text-sm leading-relaxed ${
+                    <div className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-3.5 py-2 text-xs sm:text-sm leading-relaxed select-text cursor-text ${
                       msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-xs' : 'bg-white/10 text-neutral-100 rounded-bl-xs border border-white/5'
                     }`}>
                       {msg.role === 'assistant' ? (
-                        <div className="space-y-1">
+                        <div className="space-y-1 select-text cursor-text">
                           {(msg.content || '').split('\n').map((line, i) => {
                             if (!line.trim()) return null;
-                            if (line.startsWith('✓')) return <div key={i} className="text-emerald-400 text-xs font-mono">{line}</div>;
-                            if (line.startsWith('⚠')) return <div key={i} className="text-amber-400 text-xs font-mono">{line}</div>;
-                            if (line.startsWith('✗')) return <div key={i} className="text-red-400 text-xs font-mono">{line}</div>;
-                            return <div key={i}>{line}</div>;
+                            if (line.startsWith('✓')) return <div key={i} className="text-emerald-400 text-xs font-mono select-text">{line}</div>;
+                            if (line.startsWith('⚠')) return <div key={i} className="text-amber-400 text-xs font-mono select-text">{line}</div>;
+                            if (line.startsWith('✗')) return <div key={i} className="text-red-400 text-xs font-mono select-text">{line}</div>;
+                            return <div key={i} className="select-text">{line}</div>;
                           })}
                         </div>
-                      ) : msg.content}
+                      ) : (
+                        <span className="select-text cursor-text">{msg.content}</span>
+                      )}
                     </div>
                   </div>
                 ))
@@ -379,9 +381,9 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                   <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0 mb-0.5">
                     <Bot className="w-3 h-3 text-white" />
                   </div>
-                  <div className="bg-white/10 rounded-2xl rounded-bl-xs px-3.5 py-2.5 flex flex-col gap-1.5 max-w-[85%] sm:max-w-[78%] border border-white/5">
+                  <div className="bg-white/10 rounded-2xl rounded-bl-xs px-3.5 py-2.5 flex flex-col gap-1.5 max-w-[85%] sm:max-w-[78%] border border-white/5 select-text cursor-text">
                     {currentSteps.slice(-4).map((line, i) => (
-                      <div key={i} className="text-xs text-neutral-200 font-mono leading-tight">{line}</div>
+                      <div key={i} className="text-xs text-neutral-200 font-mono leading-tight select-text">{line}</div>
                     ))}
                     <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin mt-1" />
                   </div>
