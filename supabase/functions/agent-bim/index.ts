@@ -496,51 +496,109 @@ ${trimeshExamples}`;
     const executedTools: string[] = [];
     let executionError = "";
 
-    for (let tryNum = 1; tryNum <= 3; tryNum++) {
-      let currentPlan = planDescription;
-      if (executionError) {
-        currentPlan += `\n\nPREVIOUS ATTEMPT FAILED:\n${executionError}\nFix the issues and try again with correct tool calls.`;
-        executionError = "";
-      }
+    const rawComponents = payload.plan?.components || [];
+    if (Array.isArray(rawComponents) && rawComponents.length > 0) {
+      console.log(`[build_freeform] Executing ${rawComponents.length} components from architect plan...`);
+      for (const comp of rawComponents) {
+        const ifcClass = comp.ifc_class || "IfcBuildingElementProxy";
+        const geomType = String(comp.geometry_type || "box").toLowerCase();
+        let code = "";
 
-      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
-      const toolCalls = glmMsg.tool_calls || [];
-      if (toolCalls.length === 0) {
-        executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
-        if (tryNum === 3) throw new Error(executionError);
-        continue;
-      }
+        if (comp.trimesh_code && typeof comp.trimesh_code === "string" && comp.trimesh_code.trim().length > 10) {
+          code = comp.trimesh_code;
+        } else if (geomType === "cylinder" || ifcClass === "IfcReinforcingBar" || /rebar|pipe|column/i.test(comp.name)) {
+          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.015));
+          const height = Number(dims.height || dims.length || 3.0);
+          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
+          code = `
+result = trimesh.primitives.Cylinder(radius=${radius}, height=${height})
+result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
+`;
+        } else if (geomType === "sphere") {
+          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+          const radius = Number(dims.radius || 1.0);
+          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, radius];
+          code = `
+result = trimesh.primitives.Sphere(radius=${radius})
+result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
+`;
+        } else {
+          // Default: Box primitive
+          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+          const length = Number(dims.length || 1.0);
+          const width = Number(dims.width || 1.0);
+          const height = Number(dims.height || 1.0);
+          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
+          code = `
+result = trimesh.primitives.Box(extents=[${length}, ${width}, ${height}])
+result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
+`;
+        }
 
-      try {
-        for (const call of toolCalls) {
-          const toolName = call.function.name;
-          const args = JSON.parse(call.function.arguments || "{}");
-          console.log(`[build_freeform] Executing tool: ${toolName}`);
-          try {
-            const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
-            mcpSessionId = toolRes.session;
-            executedTools.push(toolName);
-            if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
-              executedMutation = true;
+        try {
+          console.log(`[build_freeform] Creating component: ${comp.name} (${ifcClass})`);
+          const toolRes = await mcpCallTool("create_trimesh_ifc", {
+            trimesh_code: code,
+            ifc_class: ifcClass,
+            name: comp.name || `${ifcClass}_Component`
+          }, mcpSessionId);
+          mcpSessionId = toolRes.session;
+          executedTools.push("create_trimesh_ifc");
+          executedMutation = true;
+        } catch (cErr: any) {
+          console.warn(`[build_freeform] Non-fatal component creation error for ${comp.name}:`, cErr.message || cErr);
+        }
+      }
+    }
+
+    // If components were executed directly, we can skip callGLM retry loop
+    if (!executedMutation) {
+      for (let tryNum = 1; tryNum <= 3; tryNum++) {
+        let currentPlan = planDescription;
+        if (executionError) {
+          currentPlan += `\n\nPREVIOUS ATTEMPT FAILED:\n${executionError}\nFix the issues and try again with correct tool calls.`;
+          executionError = "";
+        }
+
+        const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
+        const toolCalls = glmMsg.tool_calls || [];
+        if (toolCalls.length === 0) {
+          executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
+          if (tryNum === 3) throw new Error(executionError);
+          continue;
+        }
+
+        try {
+          for (const call of toolCalls) {
+            const toolName = call.function.name;
+            const args = JSON.parse(call.function.arguments || "{}");
+            console.log(`[build_freeform] Executing tool: ${toolName}`);
+            try {
+              const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
+              mcpSessionId = toolRes.session;
+              executedTools.push(toolName);
+              if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
+                executedMutation = true;
+              }
+            } catch (tErr: any) {
+              console.warn(`[build_freeform] Tool ${toolName} threw warning:`, tErr.message || tErr);
+              if (toolName.includes("style") || toolName.includes("material")) {
+                continue;
+              }
+              throw tErr;
             }
-          } catch (tErr: any) {
-            console.warn(`[build_freeform] Tool ${toolName} threw warning:`, tErr.message || tErr);
-            if (toolName.includes("style") || toolName.includes("material")) {
-              // Styling error non-fatal, skip to preserve created geometry
-              continue;
-            }
-            throw tErr;
           }
-        }
 
-        if (!executedMutation) {
-          throw new Error("No geometry was created. You must call create_trimesh_ifc or similar tools.");
+          if (!executedMutation) {
+            throw new Error("No geometry was created. You must call create_trimesh_ifc or similar tools.");
+          }
+          break;
+        } catch (err: any) {
+          executionError = err.message || String(err);
+          console.error(`[build_freeform] Attempt ${tryNum} failed: ${executionError}`);
+          if (tryNum === 3) throw err;
         }
-        break;
-      } catch (err: any) {
-        executionError = err.message || String(err);
-        console.error(`[build_freeform] Attempt ${tryNum} failed: ${executionError}`);
-        if (tryNum === 3) throw err;
       }
     }
 

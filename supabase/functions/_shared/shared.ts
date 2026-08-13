@@ -328,7 +328,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(60000), // 60s timeout per attempt
+        signal: AbortSignal.timeout(120000), // 120s timeout per attempt
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,

@@ -25265,8 +25265,8 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(6e4),
-        // 60s timeout per attempt
+        signal: AbortSignal.timeout(12e4),
+        // 120s timeout per attempt
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
@@ -25778,13 +25778,11 @@ function processRooms(rooms, allowNoDoors = false) {
     room.windows = room.windows.filter((window) => !room.doors.some((door) => openingsOverlap(window, door)));
   }
 }
-function repairPlan(plan) {
-  if (!plan) return {};
-  if (typeof plan === "object") {
-    for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
-      if (plan[key] && typeof plan[key] === "object") {
-        plan = { ...plan[key], ...plan };
-      }
+function repairPlan(plan, brief) {
+  if (!plan || typeof plan !== "object") plan = {};
+  for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
+    if (plan[key] && typeof plan[key] === "object") {
+      plan = { ...plan[key], ...plan };
     }
   }
   const allowNoDoors = Boolean(plan.allow_no_doors);
@@ -25807,11 +25805,34 @@ function repairPlan(plan) {
   for (const storey of plan.storey_plans) {
     if (!storey.name && storey.storey_name) storey.name = storey.storey_name;
     storey.height = Number(storey.height || 3);
-    if (!Array.isArray(storey.rooms) && Array.isArray(plan.rooms)) {
-      storey.rooms = plan.rooms;
+    let rooms = [];
+    if (Array.isArray(storey.rooms)) {
+      rooms = storey.rooms;
+    } else if (Array.isArray(plan.rooms)) {
+      rooms = plan.rooms;
+    } else if (Array.isArray(plan.new_rooms)) {
+      rooms = plan.new_rooms;
     }
-    const rooms = Array.isArray(storey.rooms) ? storey.rooms : [];
+    if (rooms.length === 0 && Array.isArray(brief?.room_requirements) && brief.room_requirements.length > 0) {
+      let curX = 0;
+      for (const req of brief.room_requirements) {
+        const area = Number(req.suggested_area || 16);
+        const side = Math.max(3.5, Math.round(Math.sqrt(area)));
+        rooms.push({
+          name: req.name || "Room",
+          width: side,
+          length: side,
+          origin: [curX, 0, 0],
+          floor_slab: true,
+          ceiling_slab: true,
+          doors: [{ wall: "south", offset: side / 2 - 0.45, width: 0.9, height: 2.1 }],
+          windows: [{ wall: "north", offset: side / 2 - 0.6, width: 1.2, height: 1.4, sill_height: 0.9 }]
+        });
+        curX += side;
+      }
+    }
     processRooms(rooms, allowNoDoors);
+    storey.rooms = rooms;
     if (!allowNoDoors) {
       const hasExteriorDoor = rooms.some((room) => room.doors?.some((door) => !isInternalWall(room, String(door.wall), rooms)));
       if (!hasExteriorDoor && rooms.length > 0) {
@@ -25857,7 +25878,7 @@ Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_
     parsed = cleanJsonResponse(res);
   }
   if (isBuilding) {
-    return repairPlan(parsed);
+    return repairPlan(parsed, brief);
   } else {
     parsed.structure_category = category;
     parsed.is_edit = false;
@@ -26352,51 +26373,105 @@ ${trimeshExamples}`;
     let executedMutation = false;
     const executedTools = [];
     let executionError = "";
-    for (let tryNum = 1; tryNum <= 3; tryNum++) {
-      let currentPlan = planDescription;
-      if (executionError) {
-        currentPlan += `
+    const rawComponents = payload.plan?.components || [];
+    if (Array.isArray(rawComponents) && rawComponents.length > 0) {
+      console.log(`[build_freeform] Executing ${rawComponents.length} components from architect plan...`);
+      for (const comp of rawComponents) {
+        const ifcClass = comp.ifc_class || "IfcBuildingElementProxy";
+        const geomType = String(comp.geometry_type || "box").toLowerCase();
+        let code = "";
+        if (comp.trimesh_code && typeof comp.trimesh_code === "string" && comp.trimesh_code.trim().length > 10) {
+          code = comp.trimesh_code;
+        } else if (geomType === "cylinder" || ifcClass === "IfcReinforcingBar" || /rebar|pipe|column/i.test(comp.name)) {
+          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.015));
+          const height = Number(dims.height || dims.length || 3);
+          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
+          code = `
+result = trimesh.primitives.Cylinder(radius=${radius}, height=${height})
+result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
+`;
+        } else if (geomType === "sphere") {
+          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+          const radius = Number(dims.radius || 1);
+          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, radius];
+          code = `
+result = trimesh.primitives.Sphere(radius=${radius})
+result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
+`;
+        } else {
+          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+          const length = Number(dims.length || 1);
+          const width = Number(dims.width || 1);
+          const height = Number(dims.height || 1);
+          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
+          code = `
+result = trimesh.primitives.Box(extents=[${length}, ${width}, ${height}])
+result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
+`;
+        }
+        try {
+          console.log(`[build_freeform] Creating component: ${comp.name} (${ifcClass})`);
+          const toolRes = await mcpCallTool("create_trimesh_ifc", {
+            trimesh_code: code,
+            ifc_class: ifcClass,
+            name: comp.name || `${ifcClass}_Component`
+          }, mcpSessionId);
+          mcpSessionId = toolRes.session;
+          executedTools.push("create_trimesh_ifc");
+          executedMutation = true;
+        } catch (cErr) {
+          console.warn(`[build_freeform] Non-fatal component creation error for ${comp.name}:`, cErr.message || cErr);
+        }
+      }
+    }
+    if (!executedMutation) {
+      for (let tryNum = 1; tryNum <= 3; tryNum++) {
+        let currentPlan = planDescription;
+        if (executionError) {
+          currentPlan += `
 
 PREVIOUS ATTEMPT FAILED:
 ${executionError}
 Fix the issues and try again with correct tool calls.`;
-        executionError = "";
-      }
-      const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
-      const toolCalls = glmMsg.tool_calls || [];
-      if (toolCalls.length === 0) {
-        executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
-        if (tryNum === 3) throw new Error(executionError);
-        continue;
-      }
-      try {
-        for (const call of toolCalls) {
-          const toolName = call.function.name;
-          const args = JSON.parse(call.function.arguments || "{}");
-          console.log(`[build_freeform] Executing tool: ${toolName}`);
-          try {
-            const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
-            mcpSessionId = toolRes.session;
-            executedTools.push(toolName);
-            if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
-              executedMutation = true;
+          executionError = "";
+        }
+        const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
+        const toolCalls = glmMsg.tool_calls || [];
+        if (toolCalls.length === 0) {
+          executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
+          if (tryNum === 3) throw new Error(executionError);
+          continue;
+        }
+        try {
+          for (const call of toolCalls) {
+            const toolName = call.function.name;
+            const args = JSON.parse(call.function.arguments || "{}");
+            console.log(`[build_freeform] Executing tool: ${toolName}`);
+            try {
+              const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
+              mcpSessionId = toolRes.session;
+              executedTools.push(toolName);
+              if (MUTATION_TOOLS.has(toolName) && toolName !== "export_ifc") {
+                executedMutation = true;
+              }
+            } catch (tErr) {
+              console.warn(`[build_freeform] Tool ${toolName} threw warning:`, tErr.message || tErr);
+              if (toolName.includes("style") || toolName.includes("material")) {
+                continue;
+              }
+              throw tErr;
             }
-          } catch (tErr) {
-            console.warn(`[build_freeform] Tool ${toolName} threw warning:`, tErr.message || tErr);
-            if (toolName.includes("style") || toolName.includes("material")) {
-              continue;
-            }
-            throw tErr;
           }
+          if (!executedMutation) {
+            throw new Error("No geometry was created. You must call create_trimesh_ifc or similar tools.");
+          }
+          break;
+        } catch (err) {
+          executionError = err.message || String(err);
+          console.error(`[build_freeform] Attempt ${tryNum} failed: ${executionError}`);
+          if (tryNum === 3) throw err;
         }
-        if (!executedMutation) {
-          throw new Error("No geometry was created. You must call create_trimesh_ifc or similar tools.");
-        }
-        break;
-      } catch (err) {
-        executionError = err.message || String(err);
-        console.error(`[build_freeform] Attempt ${tryNum} failed: ${executionError}`);
-        if (tryNum === 3) throw err;
       }
     }
     const exported = await exportWithMaterials(mcpSessionId);

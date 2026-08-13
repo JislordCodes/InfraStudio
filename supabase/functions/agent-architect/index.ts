@@ -322,13 +322,11 @@ function processRooms(rooms: Room[], allowNoDoors = false): void {
   }
 }
 
-function repairPlan(plan: any): any {
-  if (!plan) return {};
-  if (typeof plan === "object") {
-    for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
-      if (plan[key] && typeof plan[key] === "object") {
-        plan = { ...plan[key], ...plan };
-      }
+function repairPlan(plan: any, brief?: any): any {
+  if (!plan || typeof plan !== "object") plan = {};
+  for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
+    if (plan[key] && typeof plan[key] === "object") {
+      plan = { ...plan[key], ...plan };
     }
   }
 
@@ -356,12 +354,37 @@ function repairPlan(plan: any): any {
     if (!storey.name && storey.storey_name) storey.name = storey.storey_name;
     storey.height = Number(storey.height || 3);
 
-    if (!Array.isArray(storey.rooms) && Array.isArray(plan.rooms)) {
-      storey.rooms = plan.rooms;
+    let rooms: Room[] = [];
+    if (Array.isArray(storey.rooms)) {
+      rooms = storey.rooms;
+    } else if (Array.isArray(plan.rooms)) {
+      rooms = plan.rooms;
+    } else if (Array.isArray(plan.new_rooms)) {
+      rooms = plan.new_rooms;
     }
 
-    const rooms: Room[] = Array.isArray(storey.rooms) ? storey.rooms : [];
+    // Fallback: If rooms is empty but brief has room_requirements, construct clean rooms
+    if (rooms.length === 0 && Array.isArray(brief?.room_requirements) && brief.room_requirements.length > 0) {
+      let curX = 0;
+      for (const req of brief.room_requirements) {
+        const area = Number(req.suggested_area || 16);
+        const side = Math.max(3.5, Math.round(Math.sqrt(area)));
+        rooms.push({
+          name: req.name || "Room",
+          width: side,
+          length: side,
+          origin: [curX, 0, 0],
+          floor_slab: true,
+          ceiling_slab: true,
+          doors: [{ wall: "south", offset: side / 2 - 0.45, width: 0.9, height: 2.1 }],
+          windows: [{ wall: "north", offset: side / 2 - 0.6, width: 1.2, height: 1.4, sill_height: 0.9 }]
+        });
+        curX += side;
+      }
+    }
+
     processRooms(rooms, allowNoDoors);
+    storey.rooms = rooms;
 
     // ONLY add exterior doors if we don't have explicit instructions to omit doors
     if (!allowNoDoors) {
@@ -416,7 +439,7 @@ Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_
   }
 
   if (isBuilding) {
-    return repairPlan(parsed);
+    return repairPlan(parsed, brief);
   } else {
     parsed.structure_category = category;
     parsed.is_edit = false;
