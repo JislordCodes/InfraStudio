@@ -58,7 +58,47 @@ export async function mcpInit(clientSessionId: string): Promise<string> {
 
 export function sanitizePythonCode(code: string): string {
   if (!code || typeof code !== 'string') return code;
-  const safeHeader = `import math\nimport numpy as np\nNaN = float('nan')\nnan = float('nan')\nnull = None\ntrue = True\nfalse = False\nInfinity = float('inf')\ninf = float('inf')\n`;
+  const safeHeader = `
+import math
+import numpy as np
+import trimesh
+
+NaN = float('nan')
+nan = float('nan')
+null = None
+true = True
+false = False
+Infinity = float('inf')
+inf = float('inf')
+
+try:
+    _orig_apply_transform = trimesh.primitives.Primitive.apply_transform
+    def _safe_apply_transform(self, matrix):
+        try:
+            return _orig_apply_transform(self, matrix)
+        except Exception:
+            mesh = self.to_mesh()
+            mesh.apply_transform(matrix)
+            return mesh
+    trimesh.primitives.Primitive.apply_transform = _safe_apply_transform
+except Exception:
+    pass
+
+try:
+    _orig_creation_cylinder = trimesh.creation.cylinder
+    def _safe_creation_cylinder(radius, height=None, sections=32, segment=None, transform=None):
+        try:
+            return _orig_creation_cylinder(radius=radius, height=height, sections=sections, segment=segment, transform=transform)
+        except Exception:
+            h = height if height is not None else 1.0
+            mesh = trimesh.primitives.Cylinder(radius=radius, height=h, sections=sections).to_mesh()
+            if transform is not None:
+                mesh.apply_transform(transform)
+            return mesh
+    trimesh.creation.cylinder = _safe_creation_cylinder
+except Exception:
+    pass
+`;
   const sanitized = code.replace(/\.is_empty/g, '.size == 0');
   return safeHeader + '\n' + sanitized;
 }
