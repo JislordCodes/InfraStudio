@@ -33,12 +33,19 @@ Expected JSON Schema:
   "material_requirements": ["string"],
   "style_preferences": ["string"],
   "constraints": ["string"],
+  "needs_clarification": boolean,
+  "clarifying_question": "string",
   "confidence_score": number
 }`;
 
 export async function handleInterpreter(payload: any): Promise<any> {
   const messages = payload.messages || [];
-  const hasHistory = messages.length > 1 || Boolean(payload.sessionId);
+  // A transport/MCP session ID exists before the first model is created.  It
+  // must not be mistaken for design history, otherwise every fresh request is
+  // routed as an edit and the new-building pipeline is skipped.
+  const hasHistory = Array.isArray(messages)
+    ? messages.slice(0, -1).some((message: any) => message?.role === "user" || message?.role === "assistant")
+    : false;
 
   let formattedPrompt: any = messages;
   if (hasHistory) {
@@ -62,6 +69,17 @@ export async function handleInterpreter(payload: any): Promise<any> {
     if (!/new building|new project|start over|clear|reset/i.test(lastUserMsg)) {
       result.is_edit = true;
     }
+  }
+
+  // Do not turn an underspecified request into an arbitrary cube.  A useful
+  // BIM model needs at least a type, scale, or programme; ask once when none
+  // was supplied and preserve the session for the user's answer.
+  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+  const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
+  const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
+  if (isVagueNewBuild) {
+    result.needs_clarification = true;
+    result.clarifying_question = "What should I design: a house, apartment building, bridge, railway, or another structure? Include approximate size, floors/spans, and key rooms or features.";
   }
 
   return result;

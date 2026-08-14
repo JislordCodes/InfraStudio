@@ -175,6 +175,114 @@ type Room = { name?: string; width?: number; length?: number; height?: number; o
 
 const WALLS = ["south", "east", "north", "west"];
 
+/*
+ * The LLM is a planner, not the source of truth for minimum model content.  A
+ * short or truncated JSON response used to pass straight through to the BIM
+ * agent, which is why a request for an apartment could become one box.  These
+ * program templates are deliberately conventional and give the executor a
+ * complete, connected baseline whenever the proposed plan is incomplete.
+ */
+function requestedText(brief: any): string {
+  return [
+    brief?.project_type,
+    ...(brief?.special_features || []),
+    ...(brief?.constraints || []),
+    ...(brief?.room_requirements || []).map((room: any) => room.name)
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function room(name: string, width: number, length: number, x: number, y: number, z: number): Room {
+  return {
+    name, width, length, origin: [x, y, z], floor_slab: true, ceiling_slab: true,
+    doors: [], windows: []
+  };
+}
+
+function apartmentProgram(brief: any): any[] {
+  const requestedStoreys = Math.max(2, Math.min(12, Number(brief?.storeys?.length || 4)));
+  const plans: any[] = [];
+  for (let floor = 0; floor < requestedStoreys; floor++) {
+    const z = floor * 3.2;
+    const rooms: Room[] = floor === 0
+      ? [
+          room("Entrance Lobby", 5, 4, 0, 0, z), room("Reception", 4, 4, 5, 0, z),
+          room("Stair and Lift Core", 4, 5, 0, 4, z), room("Ground Floor Corridor", 10, 2, 4, 4, z),
+          room("Service Room", 4, 3, 10, 0, z), room("Accessible Apartment", 7, 7, 10, 3, z)
+        ]
+      : [
+          room("Stair and Lift Core", 4, 5, 0, 0, z), room("Central Corridor", 14, 2, 4, 3, z),
+          room(`Apartment ${floor}A Living Kitchen`, 7, 5, 4, 0, z), room(`Apartment ${floor}A Bedroom`, 5, 4, 11, 0, z),
+          room(`Apartment ${floor}A Bathroom`, 3, 3, 16, 0, z), room(`Apartment ${floor}B Living Kitchen`, 7, 5, 4, 5, z),
+          room(`Apartment ${floor}B Bedroom`, 5, 4, 11, 5, z), room(`Apartment ${floor}B Bathroom`, 3, 3, 16, 5, z)
+        ];
+    plans.push({ name: floor === 0 ? "Ground Floor" : `Level ${floor}`, elevation: z, height: 3.2, rooms });
+  }
+  return plans;
+}
+
+function minimumBuildingPlan(brief: any): any[] {
+  const text = requestedText(brief);
+  if (/apartment|residential block|multi.?family|flats?/.test(text)) return apartmentProgram(brief);
+
+  const requirements = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
+  const rooms: Room[] = [];
+  const source = requirements.length ? requirements : [
+    { name: "Entrance Hall", suggested_area: 10 }, { name: "Living Room", suggested_area: 28 },
+    { name: "Kitchen", suggested_area: 16 }, { name: "Bedroom", suggested_area: 16 }, { name: "Bathroom", suggested_area: 7 }
+  ];
+  let x = 0, y = 0;
+  source.forEach((requirement: any, index: number) => {
+    const area = Math.max(7, Number(requirement.suggested_area || 16));
+    const width = Math.max(2.8, Math.round(Math.sqrt(area) * 10) / 10);
+    const length = Math.max(2.8, Math.round((area / width) * 10) / 10);
+    rooms.push(room(requirement.name || `Room ${index + 1}`, width, length, x, y, 0));
+    if (index % 2 === 0) x += width; else { y += length; x = 0; }
+  });
+  return [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms }];
+}
+
+function bridgeProgram(name: string): any[] {
+  const components: any[] = [];
+  const span = 48, deckWidth = 12, deckZ = 9;
+  components.push({ name: "Bridge deck slab", ifc_class: "IfcSlab", geometry_type: "box", dimensions: { length: span, width: deckWidth, height: 0.8 }, position: [span / 2, 0, deckZ], material: "reinforced concrete" });
+  components.push({ name: "West abutment", ifc_class: "IfcFooting", geometry_type: "box", dimensions: { length: 2.5, width: deckWidth + 2, height: 7 }, position: [0, 0, 3.5], material: "reinforced concrete" });
+  components.push({ name: "East abutment", ifc_class: "IfcFooting", geometry_type: "box", dimensions: { length: 2.5, width: deckWidth + 2, height: 7 }, position: [span, 0, 3.5], material: "reinforced concrete" });
+  [16, 32].forEach((x, i) => {
+    components.push({ name: `Pier ${i + 1} footing`, ifc_class: "IfcFooting", geometry_type: "box", dimensions: { length: 5, width: 5, height: 1.2 }, position: [x, 0, 0.6], material: "reinforced concrete" });
+    components.push({ name: `Pier ${i + 1}`, ifc_class: "IfcColumn", geometry_type: "box", dimensions: { length: 3, width: 4, height: 7.2 }, position: [x, 0, 4.2], material: "reinforced concrete" });
+  });
+  [-4.5, 4.5].forEach((y, i) => components.push({ name: `Main steel girder ${i + 1}`, ifc_class: "IfcBeam", geometry_type: "box", dimensions: { length: span, width: 0.7, height: 1.6 }, position: [span / 2, y, deckZ - 1.1], material: "structural steel" }));
+  [-6, 6].forEach((y, i) => components.push({ name: `Safety parapet ${i + 1}`, ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: span, width: 0.15, height: 1.3 }, position: [span / 2, y, deckZ + 1], material: "galvanized steel" }));
+  return components;
+}
+
+function railwayProgram(): any[] {
+  const components: any[] = [
+    { name: "Railway ballast bed", ifc_class: "IfcSlab", geometry_type: "box", dimensions: { length: 80, width: 6, height: 0.5 }, position: [40, 0, 0], material: "crushed stone ballast" },
+    { name: "Left rail", ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 80, width: 0.15, height: 0.18 }, position: [40, -0.75, 0.55], material: "steel rail" },
+    { name: "Right rail", ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 80, width: 0.15, height: 0.18 }, position: [40, 0.75, 0.55], material: "steel rail" }
+  ];
+  for (let x = 0; x <= 80; x += 1) components.push({ name: `Sleeper ${x + 1}`, ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 0.25, width: 2.8, height: 0.2 }, position: [x, 0, 0.35], material: "precast concrete" });
+  return components;
+}
+
+function ensureInfrastructurePlan(plan: any, brief: any): any {
+  const text = requestedText(brief);
+  // Bridge and rail systems are safety-critical, repeatable assemblies.  Do
+  // not let a plausible-looking list of arbitrary cubes override the known
+  // load path / track template merely because it contains enough items.
+  if (/bridge/.test(text)) {
+    return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Bridge", components: bridgeProgram(brief?.project_type || "Bridge"), quality_requirements: { minimum_components: 8, required_element_types: ["IfcSlab", "IfcColumn", "IfcBeam", "IfcFooting"] } };
+  }
+  if (/rail|railway|track/.test(text)) {
+    return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Railway", components: railwayProgram(), quality_requirements: { minimum_components: 30, required_element_types: ["IfcSlab", "IfcMember"] } };
+  }
+  const minimum = /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
+  if (Array.isArray(plan?.components) && plan.components.length >= minimum) return plan;
+  const components = plan?.components || [];
+  return { ...plan, structure_category: brief?.structure_category || "infrastructure", is_edit: false, structure_name: brief?.project_type || "InfraStudio Infrastructure", components, quality_requirements: { minimum_components: minimum } };
+}
+
 function wallLength(room: Room, wall: string): number {
   return wall === "south" || wall === "north" ? Number(room.width || 4) : Number(room.length || 4);
 }
@@ -340,14 +448,18 @@ function repairPlan(plan: any, brief?: any): any {
   }
 
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
-    plan.storey_plans = [
-      {
-        name: "Ground Floor",
-        elevation: 0,
-        height: 3,
-        rooms: Array.isArray(plan.rooms) ? plan.rooms : []
-      }
-    ];
+    plan.storey_plans = Array.isArray(plan.rooms) && plan.rooms.length
+      ? [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: plan.rooms }]
+      : minimumBuildingPlan(brief);
+  }
+
+  const expectedRooms = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
+  const proposedRooms = plan.storey_plans.reduce((total: number, storey: any) => total + (Array.isArray(storey.rooms) ? storey.rooms.length : 0), 0);
+  // Multi-unit requests must never degrade into a one-room model, even when a
+  // model response was syntactically valid but semantically incomplete.
+  if ((/apartment|residential block|multi.?family|flats?/.test(requestedText(brief)) && proposedRooms < 10) ||
+      (expectedRooms > 0 && proposedRooms < expectedRooms)) {
+    plan.storey_plans = minimumBuildingPlan(brief);
   }
 
   for (const storey of plan.storey_plans) {
@@ -406,6 +518,13 @@ function repairPlan(plan: any, brief?: any): any {
     roof_or_ceiling: "white gypsum ceiling"
   };
 
+  const roomCount = plan.storey_plans.reduce((total: number, storey: any) => total + (storey.rooms?.length || 0), 0);
+  plan.quality_requirements = {
+    minimum_rooms: roomCount,
+    minimum_storeys: plan.storey_plans.length,
+    required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
+  };
+
   return plan;
 }
 
@@ -441,9 +560,7 @@ Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_
   if (isBuilding) {
     return repairPlan(parsed, brief);
   } else {
-    parsed.structure_category = category;
-    parsed.is_edit = false;
-    return parsed;
+    return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
   }
 }
 

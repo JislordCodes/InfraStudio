@@ -64,8 +64,7 @@ export function useSessions() {
           setMessages(data || []);
         }
         setLoadingMessages(false);
-      })
-      .catch((err) => {
+      }, (err: unknown) => {
         if (cancelled) return;
         console.warn('DB load error (fallback empty messages):', err);
         setMessages([]);

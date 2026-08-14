@@ -51,6 +51,12 @@ export async function runMultiAgentLoop(
     // 1. Interpreter
     pushStep("Interpreter Agent: Processing request...");
     const brief = await callEdge('agent-interpreter', { messages, sessionId });
+    if (brief.needs_clarification) {
+      const question = brief.clarifying_question || "Please describe the building or infrastructure you want, including scale and key spaces.";
+      pushStep("Interpreter Agent: More design information is needed before modelling.");
+      if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: question });
+      return { reply: question, steps, mcp_session_id: sessionId };
+    }
     const structureCategory = brief.structure_category || "building";
     const isEdit = Boolean(brief.is_edit);
     pushStep(`Interpreter Agent: Classified as '${structureCategory}' structure (is_edit: ${isEdit}).`);
@@ -315,7 +321,7 @@ export async function runMultiAgentLoop(
 
     // 4. Quality Reviewer
     pushStep("Reviewer Agent: Validating model quality...");
-    const review = await callEdge('agent-reviewer', { mcpSessionId: sessionId });
+    const review = await callEdge('agent-reviewer', { mcpSessionId: sessionId, qualityRequirements: plan.quality_requirements, structureCategory });
     
     if (review.status === "PASS") {
       pushStep("✅ Model passed quality review.");
@@ -323,7 +329,9 @@ export async function runMultiAgentLoop(
       pushStep(`❌ Quality Review Issues: ${review.issues?.join(', ')}`);
     }
 
-    finalReply = "Multi-Agent Generation Complete. The final model is ready.";
+    finalReply = review.status === "PASS"
+      ? "Multi-Agent Generation Complete. The final model is ready."
+      : `Model generated, but it did not pass quality review: ${(review.issues || ["unknown issue"]).join("; ")}.`;
     if (onAssistantMessage) {
       onAssistantMessage({ role: "assistant", content: finalReply });
     }

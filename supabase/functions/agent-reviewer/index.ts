@@ -5,8 +5,9 @@ const systemPrompt = `You are the Quality Review Agent for InfraStudio.
 Your role is to inspect the generated IFC model state, validate semantic topologies, and act as the final quality gatekeeper.
 
 Validation Criteria:
- 1. Standard BIM Topology: Ensure key structural elements exist (IfcWall > 0, IfcSlab > 0, IfcDoor > 0, IfcWindow > 0). If all key element types exist and building geometry is generated, mark "status": "PASS".
- 2. Failure Threshold: Mark "status": "FAIL" ONLY if critical structural components are completely missing (e.g. walls exist but zero doors or zero slabs were built) or geometry is severely malformed.
+ 1. Standard BIM Topology: Ensure key structural elements exist (IfcWall > 0, IfcSlab > 0, IfcDoor > 0, IfcWindow > 0).
+ 2. Requirements are supplied with every review. Mark FAIL if the scene does not prove it meets every minimum count or required IFC class. A single proxy, cube, or disconnected element is NEVER a valid building, bridge, or railway model.
+ 3. For buildings, check that the requested number of rooms/storeys is represented by meaningful walls, slabs, doors and windows. For infrastructure, check that supports and primary members form a connected structure—not merely one deck or box.
 
 Correction Loop Enforcement:
 If you detect a critical failure, set "status": "FAIL" and "retry_required": true with step-by-step fix recommendations.
@@ -26,7 +27,12 @@ export async function handleReviewer(payload: any): Promise<any> {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
-  const res = await callQwen(systemPrompt, JSON.stringify(sceneInfo.resultText), true, "qwen3.8-max");
+  const reviewContext = {
+    structure_category: payload.structureCategory || "building",
+    quality_requirements: payload.qualityRequirements || {},
+    scene_overview: sceneInfo.resultText
+  };
+  const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
   result.mcpSessionId = mcpSessionId;
   return result;
