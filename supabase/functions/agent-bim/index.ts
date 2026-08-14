@@ -72,6 +72,69 @@ const CORE_EDIT_TOOLS = new Set([
   "execute_ifc_code_tool",
 ]);
 
+type ToolAuditEntry = {
+  tool: string;
+  allowed: boolean;
+  reason: string;
+  semantic_alternative?: string;
+};
+
+const SEMANTIC_TOOL_OPTIONS: Record<string, string[]> = {
+  wall: ["build_room", "build_wall_assembly", "create_wall", "create_two_point_wall", "create_polyline_walls"],
+  slab: ["create_slab", "create_polyline_slab", "create_circular_slab"],
+  door: ["create_door"],
+  window: ["create_window"],
+  roof: ["create_roof"],
+  stair: ["create_stairs"],
+};
+
+const GENERIC_GEOMETRY_TOOLS = new Set(["create_trimesh_ifc", "create_mesh_ifc"]);
+
+function semanticIntent(args: Record<string, any>, context: unknown = ""): string | undefined {
+  const directText = [args?.name, args?.ifc_class, args?.description]
+    .filter(Boolean).join(" ").toLowerCase();
+  // Call arguments win over a broad project brief. This keeps a furniture
+  // request from being blocked merely because the same edit also mentions a wall.
+  const text = directText || String(context || "").toLowerCase();
+  if (/\bwall\b/.test(text)) return "wall";
+  if (/\b(slab|floor|deck)\b/.test(text)) return "slab";
+  if (/\bdoor\b/.test(text)) return "door";
+  if (/\bwindow\b/.test(text)) return "window";
+  if (/\broof\b/.test(text)) return "roof";
+  if (/\b(stair|staircase|steps)\b/.test(text)) return "stair";
+  return undefined;
+}
+
+function evaluateToolSelection(tool: string, args: Record<string, any>, availableTools: any[], context: unknown = ""): ToolAuditEntry {
+  const available = new Set(availableTools.map((item: any) => item?.function?.name || item?.name).filter(Boolean));
+  if (available.size > 0 && !available.has(tool)) {
+    return { tool, allowed: false, reason: "The tool was not advertised by the active MCP session." };
+  }
+
+  const intent = semanticIntent(args, context);
+  const semanticAlternative = intent ? SEMANTIC_TOOL_OPTIONS[intent]?.find((candidate) => available.has(candidate)) : undefined;
+  const requestedClass = String(args?.ifc_class || "");
+  const isGenericProxy = !requestedClass || requestedClass === "IfcBuildingElementProxy";
+
+  if (GENERIC_GEOMETRY_TOOLS.has(tool) && isGenericProxy && semanticAlternative) {
+    return {
+      tool,
+      allowed: false,
+      reason: `Generic mesh/proxy creation is not permitted for a ${intent} while a semantic IFC tool is available.`,
+      semantic_alternative: semanticAlternative,
+    };
+  }
+
+  return {
+    tool,
+    allowed: true,
+    reason: semanticAlternative && GENERIC_GEOMETRY_TOOLS.has(tool)
+      ? `Allowed because the request explicitly supplies semantic IFC class ${requestedClass}.`
+      : "Tool is compatible with the requested BIM intent.",
+    semantic_alternative: semanticAlternative,
+  };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -384,6 +447,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
 
   if (payload.action === "build_component") {
     const comp = payload.component || {};
+    const toolAudit: ToolAuditEntry[] = [];
     let args: any = {};
 
     if (comp.trimesh_code) {
@@ -420,9 +484,15 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       };
     }
 
+    const gate = evaluateToolSelection("create_trimesh_ifc", args, [...CORE_EDIT_TOOLS].map((name) => ({ name })), comp);
+    toolAudit.push(gate);
+    if (!gate.allowed) {
+      throw new Error(`${gate.reason} Use ${gate.semantic_alternative} instead.`);
+    }
+
     const res = await mcpCallTool("create_trimesh_ifc", args, mcpSessionId);
     mcpSessionId = res.session;
-    return { status: "success", result: res.resultText, mcpSessionId };
+    return { status: "success", result: res.resultText, mcpSessionId, toolAudit };
   }
 
   if (payload.action === "build_freeform") {
@@ -494,6 +564,7 @@ ${trimeshExamples}`;
 
     let executedMutation = false;
     const executedTools: string[] = [];
+    const toolAudit: ToolAuditEntry[] = [];
     let executionError = "";
 
     const rawComponents = payload.plan?.components || [];
@@ -538,6 +609,12 @@ result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
 
         try {
           console.log(`[build_freeform] Creating component: ${comp.name} (${ifcClass})`);
+          const gate = evaluateToolSelection("create_trimesh_ifc", {
+            ifc_class: ifcClass,
+            name: comp.name || `${ifcClass}_Component`
+          }, allTools, comp);
+          toolAudit.push(gate);
+          if (!gate.allowed) throw new Error(`${gate.reason} Use ${gate.semantic_alternative} instead.`);
           const toolRes = await mcpCallTool("create_trimesh_ifc", {
             trimesh_code: code,
             ifc_class: ifcClass,
@@ -575,6 +652,9 @@ result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
             const args = JSON.parse(call.function.arguments || "{}");
             console.log(`[build_freeform] Executing tool: ${toolName}`);
             try {
+              const gate = evaluateToolSelection(toolName, args, allTools, payload.plan);
+              toolAudit.push(gate);
+              if (!gate.allowed) throw new Error(`${gate.reason}${gate.semantic_alternative ? ` Use ${gate.semantic_alternative} instead.` : ""}`);
               const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
               mcpSessionId = toolRes.session;
               executedTools.push(toolName);
@@ -609,6 +689,7 @@ result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
       ifc_url: exported.ifc_url,
       mcpSessionId: exported.mcpSessionId,
       executedTools,
+      toolAudit,
       materialResult: exported.materialResult,
     };
   }
@@ -680,6 +761,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
     let executionError = "";
     let executedMutation = false;
     const executedTools: string[] = [];
+    const toolAudit: ToolAuditEntry[] = [];
 
     for (let tryNum = 1; tryNum <= 3; tryNum++) {
       let currentPlanData = basePlanData;
@@ -700,6 +782,9 @@ ${overviewRes?.resultText || "Unavailable"}`;
         for (const call of toolCalls) {
           const toolName = call.function.name;
           const args = JSON.parse(call.function.arguments || "{}");
+          const gate = evaluateToolSelection(toolName, args, routedTools, plan);
+          toolAudit.push(gate);
+          if (!gate.allowed) throw new Error(`${gate.reason}${gate.semantic_alternative ? ` Use ${gate.semantic_alternative} instead.` : ""}`);
           const toolRes = await mcpCallTool(toolName, args, mcpSessionId);
           mcpSessionId = toolRes.session;
           executedTools.push(toolName);
@@ -728,6 +813,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
       ifc_url,
       mcpSessionId,
       executedTools,
+      toolAudit,
       materialResult: exported.materialResult,
     };
   }
