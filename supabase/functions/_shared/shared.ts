@@ -293,7 +293,9 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 
 function getTargetModel(model: string): string {
   if (model === "qwen3.8-max" || model === "qwen3.8-max-preview") {
-    return "qwen3.8-max-preview";
+    // The current Model Studio quota is attached to qwen3.8-max. The preview
+    // alias can be entitlement/plan-specific and is not interchangeable.
+    return "qwen3.8-max";
   }
   if (model === "qwen-max" || !model || model === "glm-5.1") {
     return "qwen-max";
@@ -305,6 +307,18 @@ function getTargetModel(model: string): string {
     return "qwen-plus";
   }
   return model;
+}
+
+function getQwenEndpoints(): string[] {
+  const configured = typeof Deno !== "undefined"
+    ? Deno.env.get("QWEN_BASE_URL")
+    : process.env.QWEN_BASE_URL;
+  const base = configured?.trim().replace(/\/+$/, "");
+  if (base) return [`${base}/chat/completions`];
+  return [
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+  ];
 }
 
 export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "glm-5.1"): Promise<string> {
@@ -320,10 +334,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   const targetModel = getTargetModel(model);
   let lastError: any = null;
 
-  const endpoints = [
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-  ];
+  const endpoints = getQwenEndpoints();
 
   for (const endpoint of endpoints) {
     try {
@@ -337,8 +348,8 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
           messages: msgs,
           // Qwen3.8 Max is a thinking model; DashScope documents 0.6 as its
           // minimum temperature and xhigh as the maximum reasoning effort.
-          temperature: targetModel === "qwen3.8-max-preview" ? 0.6 : 0.1,
-          reasoning_effort: targetModel === "qwen3.8-max-preview" ? "xhigh" : undefined,
+          temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
+          reasoning_effort: targetModel === "qwen3.8-max" ? "xhigh" : undefined,
           max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
@@ -350,10 +361,6 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         // Qwen3.8 Max Preview requires a separate DashScope Token Plan. Keep
         // it as the preferred model, but do not take production generation
         // down when the account has not been granted that entitlement yet.
-        if (targetModel === "qwen3.8-max-preview" && res.status === 403 && /access_denied/i.test(errText)) {
-          console.warn("[callQwen] Qwen3.8 Max Preview is not enabled for this account; falling back to qwen-max.");
-          return callQwen(systemPrompt, userMessage, jsonMode, "qwen-max");
-        }
         lastError = new Error(`Qwen Error (${res.status}): ${errText}`);
         continue;
       }
@@ -382,10 +389,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
   ];
 
   const targetModel = getTargetModel(model);
-  const endpoints = [
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-  ];
+  const endpoints = getQwenEndpoints();
 
   let lastErrText = "";
   for (const endpoint of endpoints) {
@@ -397,8 +401,8 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
           model: targetModel,
           messages: msgs,
           tools: (tools && tools.length > 0) ? tools : undefined,
-          temperature: targetModel === "qwen3.8-max-preview" ? 0.6 : 0.1,
-          reasoning_effort: targetModel === "qwen3.8-max-preview" ? "xhigh" : undefined,
+          temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
+          reasoning_effort: targetModel === "qwen3.8-max" ? "xhigh" : undefined,
           max_tokens: 8192
         })
       });
@@ -410,10 +414,6 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 
       lastErrText = await res.text();
       console.warn(`[callGLM] ${endpoint} returned (${res.status}): ${lastErrText}`);
-      if (targetModel === "qwen3.8-max-preview" && res.status === 403 && /access_denied/i.test(lastErrText)) {
-        console.warn("[callGLM] Qwen3.8 Max Preview is not enabled for this account; falling back to qwen-max.");
-        return callGLM(systemPrompt, userMessage, tools, "qwen-max");
-      }
     } catch (e: any) {
       lastErrText = e.message || String(e);
     }
@@ -430,7 +430,7 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
     { role: "user", content: userMessage }
   ];
   const targetModel = getTargetModel(model);
-  const res = await fetch("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", {
+  const res = await fetch(getQwenEndpoints()[0], {
     method: "POST",
     headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
