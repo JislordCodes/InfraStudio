@@ -78,6 +78,13 @@ export async function runMultiAgentLoop(
       sessionId = '';
     }
 
+    if (isBuildingNew && plan.layout_validation?.status !== 'PASS') {
+      throw new Error('BIM generation blocked: the spatial layout did not pass clash validation.');
+    }
+    if (isBuildingNew && plan.layout_validation?.repairs?.length) {
+      pushStep(`Architectural Agent: Spatial layout repaired — ${plan.layout_validation.repairs.join(' ')}`);
+    }
+
     if (isBuildingNew) {
       // ═══ NEW BUILDING MODE: Room-by-room pipeline from scratch ═══
       pushStep(`BIM Agent: Building mode — ${plan.storey_plans.length} storeys. Beginning chunked execution...`);
@@ -137,7 +144,7 @@ export async function runMultiAgentLoop(
         pushStep(`BIM Agent: Creating ${roofTypeRequested} roof...`);
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxHeight = 3;
         for (const storey of plan.storey_plans || []) {
-          maxHeight = Math.max(maxHeight, storey.height || 3);
+          maxHeight = Math.max(maxHeight, Number(storey.elevation || 0) + Number(storey.height || 3));
           for (const r of storey.rooms || []) {
             const [ox, oy] = r.origin || [0, 0, 0];
             const w = r.width || 4;

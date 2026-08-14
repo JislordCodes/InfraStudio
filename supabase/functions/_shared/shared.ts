@@ -292,7 +292,10 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 }
 
 function getTargetModel(model: string): string {
-  if (model === "qwen3.8-max" || model === "qwen-max" || !model || model === "glm-5.1") {
+  if (model === "qwen3.8-max" || model === "qwen3.8-max-preview") {
+    return "qwen3.8-max-preview";
+  }
+  if (model === "qwen-max" || !model || model === "glm-5.1") {
     return "qwen-max";
   }
   if (model === "kimi-k2.7-code") {
@@ -332,7 +335,10 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          temperature: 0.1,
+          // Qwen3.8 Max is a thinking model; DashScope documents 0.6 as its
+          // minimum temperature and xhigh as the maximum reasoning effort.
+          temperature: targetModel === "qwen3.8-max-preview" ? 0.6 : 0.1,
+          reasoning_effort: targetModel === "qwen3.8-max-preview" ? "xhigh" : undefined,
           max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
@@ -384,7 +390,8 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
           model: targetModel,
           messages: msgs,
           tools: (tools && tools.length > 0) ? tools : undefined,
-          temperature: 0.1,
+          temperature: targetModel === "qwen3.8-max-preview" ? 0.6 : 0.1,
+          reasoning_effort: targetModel === "qwen3.8-max-preview" ? "xhigh" : undefined,
           max_tokens: 8192
         })
       });

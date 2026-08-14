@@ -25233,7 +25233,10 @@ async function fetchMcpTools(clientSessionId) {
   };
 }
 function getTargetModel(model) {
-  if (model === "qwen3.8-max" || model === "qwen-max" || !model || model === "glm-5.1") {
+  if (model === "qwen3.8-max" || model === "qwen3.8-max-preview") {
+    return "qwen3.8-max-preview";
+  }
+  if (model === "qwen-max" || !model || model === "glm-5.1") {
     return "qwen-max";
   }
   if (model === "kimi-k2.7-code") {
@@ -25270,7 +25273,10 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          temperature: 0.1,
+          // Qwen3.8 Max is a thinking model; DashScope documents 0.6 as its
+          // minimum temperature and xhigh as the maximum reasoning effort.
+          temperature: targetModel === "qwen3.8-max-preview" ? 0.6 : 0.1,
+          reasoning_effort: targetModel === "qwen3.8-max-preview" ? "xhigh" : void 0,
           max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : void 0
         })
@@ -25316,7 +25322,8 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "qwen3.8-max")
           model: targetModel,
           messages: msgs,
           tools: tools && tools.length > 0 ? tools : void 0,
-          temperature: 0.1,
+          temperature: targetModel === "qwen3.8-max-preview" ? 0.6 : 0.1,
+          reasoning_effort: targetModel === "qwen3.8-max-preview" ? "xhigh" : void 0,
           max_tokens: 8192
         })
       });
@@ -25873,7 +25880,7 @@ function alignFloorplanGrid(rooms) {
   }
   xCoords.sort((a, b) => a - b);
   yCoords.sort((a, b) => a - b);
-  const clusterMap = (coords, tolerance = 1.2) => {
+  const clusterMap = (coords, tolerance = 0.05) => {
     const map = /* @__PURE__ */ new Map();
     for (const c of coords) {
       let matchedTarget = null;
@@ -25906,6 +25913,63 @@ function alignFloorplanGrid(rooms) {
     r.length = Math.max(2.2, Number((snappedTopY - snappedY).toFixed(2)));
   }
 }
+function roomBounds(room2) {
+  const [x, y] = room2.origin || [0, 0, 0];
+  return { x0: Number(x), y0: Number(y), x1: Number(x) + Number(room2.width || 4), y1: Number(y) + Number(room2.length || 4) };
+}
+function roomsOverlap(a, b) {
+  const A = roomBounds(a), B = roomBounds(b);
+  return Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0) > 0.05 && Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.05;
+}
+function roomsTouch(a, b) {
+  const A = roomBounds(a), B = roomBounds(b);
+  const xOverlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+  const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+  return (Math.abs(A.x1 - B.x0) < 0.06 || Math.abs(B.x1 - A.x0) < 0.06) && yOverlap > 0.4 || (Math.abs(A.y1 - B.y0) < 0.06 || Math.abs(B.y1 - A.y0) < 0.06) && xOverlap > 0.4;
+}
+function layoutIsConnected(rooms) {
+  if (rooms.length < 2) return true;
+  const seen = /* @__PURE__ */ new Set([0]);
+  const queue = [0];
+  while (queue.length) {
+    const current = queue.shift();
+    rooms.forEach((room2, index) => {
+      if (!seen.has(index) && roomsTouch(rooms[current], room2)) {
+        seen.add(index);
+        queue.push(index);
+      }
+    });
+  }
+  return seen.size === rooms.length;
+}
+function reflowConnectedLayout(rooms) {
+  const rowLimit = 14;
+  let x = 0, y = 0, rowDepth = 0;
+  for (const room2 of rooms) {
+    const width = Number(room2.width || 4), length = Number(room2.length || 4);
+    if (x > 0 && x + width > rowLimit) {
+      x = 0;
+      y += rowDepth;
+      rowDepth = 0;
+    }
+    const z = Number(room2.origin?.[2] || 0);
+    room2.origin = [x, y, z];
+    x += width;
+    rowDepth = Math.max(rowDepth, length);
+  }
+}
+function validateAndRepairLayout(rooms) {
+  const repairs = [];
+  const overlaps = rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other)));
+  if (overlaps || !layoutIsConnected(rooms)) {
+    reflowConnectedLayout(rooms);
+    repairs.push(overlaps ? "Reflowed overlapping room footprints into a connected plan." : "Reflowed disconnected room footprints into a connected plan.");
+  }
+  if (rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other))) || !layoutIsConnected(rooms)) {
+    throw new Error("Spatial layout validation failed: rooms remain overlapping or disconnected after repair.");
+  }
+  return { status: "PASS", repairs };
+}
 function processRooms(rooms, allowNoDoors = false) {
   alignFloorplanGrid(rooms);
   for (const room2 of rooms) {
@@ -25916,6 +25980,9 @@ function processRooms(rooms, allowNoDoors = false) {
     room2.width = Math.max(2.2, Number(room2.width || 4));
     room2.length = Math.max(2.2, Number(room2.length || 4));
     room2.origin = Array.isArray(room2.origin) ? room2.origin : [0, 0, 0];
+    if (!room2.origin.every((coordinate) => Number.isFinite(Number(coordinate)))) {
+      throw new Error(`Spatial layout validation failed: ${room2.name || "room"} has a non-finite coordinate.`);
+    }
     const hasExplicitDoors = room2.doors !== void 0 && room2.doors !== null;
     room2.doors = (Array.isArray(room2.doors) ? room2.doors : []).map((door) => clampOpening(door, room2, 0.9));
     const hasExplicitWindows = room2.windows !== void 0 && room2.windows !== null;
@@ -25941,10 +26008,13 @@ function repairPlan(plan, brief) {
     }
   }
   const allowNoDoors = Boolean(plan.allow_no_doors);
+  const layoutRepairs = [];
   if (plan.is_edit) {
     if (Array.isArray(plan.new_rooms)) {
       processRooms(plan.new_rooms, allowNoDoors);
+      layoutRepairs.push(...validateAndRepairLayout(plan.new_rooms).repairs);
     }
+    plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
     return plan;
   }
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
@@ -25985,6 +26055,7 @@ function repairPlan(plan, brief) {
       }
     }
     processRooms(rooms, allowNoDoors);
+    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
     storey.rooms = rooms;
     if (!allowNoDoors) {
       const hasExteriorDoor = rooms.some((room2) => room2.doors?.some((door) => !isInternalWall(room2, String(door.wall), rooms)));
@@ -26009,6 +26080,7 @@ function repairPlan(plan, brief) {
     minimum_storeys: plan.storey_plans.length,
     required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
   };
+  plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
   return plan;
 }
 async function handleArchitect(brief) {

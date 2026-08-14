@@ -387,7 +387,9 @@ function alignFloorplanGrid(rooms: Room[]): void {
   xCoords.sort((a, b) => a - b);
   yCoords.sort((a, b) => a - b);
 
-  const clusterMap = (coords: number[], tolerance = 1.2) => {
+  // Only snap near-identical coordinates. The former 1.2m tolerance could
+  // silently shrink rooms and turn an intended layout into overlapping boxes.
+  const clusterMap = (coords: number[], tolerance = 0.05) => {
     const map = new Map<number, number>();
     for (const c of coords) {
       let matchedTarget: number | null = null;
@@ -425,6 +427,63 @@ function alignFloorplanGrid(rooms: Room[]): void {
   }
 }
 
+function roomBounds(room: Room) {
+  const [x, y] = room.origin || [0, 0, 0];
+  return { x0: Number(x), y0: Number(y), x1: Number(x) + Number(room.width || 4), y1: Number(y) + Number(room.length || 4) };
+}
+
+function roomsOverlap(a: Room, b: Room): boolean {
+  const A = roomBounds(a), B = roomBounds(b);
+  return Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0) > 0.05 && Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.05;
+}
+
+function roomsTouch(a: Room, b: Room): boolean {
+  const A = roomBounds(a), B = roomBounds(b);
+  const xOverlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+  const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+  return (Math.abs(A.x1 - B.x0) < 0.06 || Math.abs(B.x1 - A.x0) < 0.06) && yOverlap > 0.4 ||
+    (Math.abs(A.y1 - B.y0) < 0.06 || Math.abs(B.y1 - A.y0) < 0.06) && xOverlap > 0.4;
+}
+
+function layoutIsConnected(rooms: Room[]): boolean {
+  if (rooms.length < 2) return true;
+  const seen = new Set<number>([0]);
+  const queue = [0];
+  while (queue.length) {
+    const current = queue.shift()!;
+    rooms.forEach((room, index) => {
+      if (!seen.has(index) && roomsTouch(rooms[current], room)) { seen.add(index); queue.push(index); }
+    });
+  }
+  return seen.size === rooms.length;
+}
+
+function reflowConnectedLayout(rooms: Room[]): void {
+  const rowLimit = 14;
+  let x = 0, y = 0, rowDepth = 0;
+  for (const room of rooms) {
+    const width = Number(room.width || 4), length = Number(room.length || 4);
+    if (x > 0 && x + width > rowLimit) { x = 0; y += rowDepth; rowDepth = 0; }
+    const z = Number(room.origin?.[2] || 0);
+    room.origin = [x, y, z];
+    x += width;
+    rowDepth = Math.max(rowDepth, length);
+  }
+}
+
+function validateAndRepairLayout(rooms: Room[]): { status: "PASS"; repairs: string[] } {
+  const repairs: string[] = [];
+  const overlaps = rooms.some((room, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room, other)));
+  if (overlaps || !layoutIsConnected(rooms)) {
+    reflowConnectedLayout(rooms);
+    repairs.push(overlaps ? "Reflowed overlapping room footprints into a connected plan." : "Reflowed disconnected room footprints into a connected plan.");
+  }
+  if (rooms.some((room, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room, other))) || !layoutIsConnected(rooms)) {
+    throw new Error("Spatial layout validation failed: rooms remain overlapping or disconnected after repair.");
+  }
+  return { status: "PASS", repairs };
+}
+
 function processRooms(rooms: Room[], allowNoDoors = false): void {
   alignFloorplanGrid(rooms);
   for (const room of rooms) {
@@ -435,6 +494,10 @@ function processRooms(rooms: Room[], allowNoDoors = false): void {
     room.width = Math.max(2.2, Number(room.width || 4));
     room.length = Math.max(2.2, Number(room.length || 4));
     room.origin = Array.isArray(room.origin) ? room.origin : [0, 0, 0];
+
+    if (!room.origin.every((coordinate) => Number.isFinite(Number(coordinate)))) {
+      throw new Error(`Spatial layout validation failed: ${room.name || "room"} has a non-finite coordinate.`);
+    }
 
     const hasExplicitDoors = room.doors !== undefined && room.doors !== null;
     room.doors = (Array.isArray(room.doors) ? room.doors : []).map((door) => clampOpening(door, room, 0.9));
@@ -469,11 +532,14 @@ function repairPlan(plan: any, brief?: any): any {
   }
 
   const allowNoDoors = Boolean(plan.allow_no_doors);
+  const layoutRepairs: string[] = [];
 
   if (plan.is_edit) {
     if (Array.isArray(plan.new_rooms)) {
       processRooms(plan.new_rooms, allowNoDoors);
+      layoutRepairs.push(...validateAndRepairLayout(plan.new_rooms).repairs);
     }
+    plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
     return plan;
   }
 
@@ -526,6 +592,7 @@ function repairPlan(plan: any, brief?: any): any {
     }
 
     processRooms(rooms, allowNoDoors);
+    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
     storey.rooms = rooms;
 
     // ONLY add exterior doors if we don't have explicit instructions to omit doors
@@ -554,6 +621,7 @@ function repairPlan(plan: any, brief?: any): any {
     minimum_storeys: plan.storey_plans.length,
     required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
   };
+  plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
 
   return plan;
 }
