@@ -72,6 +72,12 @@ export async function runMultiAgentLoop(
     const isBuildingNew = structureCategory === "building" && !plan.is_edit && plan.storey_plans;
     const isInfrastructureNew = !plan.is_edit && (structureCategory !== "building" || plan.components);
 
+    // A new design must get a new MCP model. Reusing a session that previously
+    // held a railway or another project mixes its geometry into the new IFC.
+    if (isBuildingNew || isInfrastructureNew) {
+      sessionId = '';
+    }
+
     if (isBuildingNew) {
       // ═══ NEW BUILDING MODE: Room-by-room pipeline from scratch ═══
       pushStep(`BIM Agent: Building mode — ${plan.storey_plans.length} storeys. Beginning chunked execution...`);

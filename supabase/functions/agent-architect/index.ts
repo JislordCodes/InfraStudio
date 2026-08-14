@@ -220,9 +220,33 @@ function apartmentProgram(brief: any): any[] {
   return plans;
 }
 
+function apartmentUnitProgram(brief: any): any[] {
+  const requested = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
+  const requestedNames = requested.map((item: any) => String(item.name || "").toLowerCase()).join(" ");
+  const bedrooms = Math.max(1, Math.min(3, (requestedNames.match(/bed(room)?/g) || []).length || (/two|2/.test(requestedText(brief)) ? 2 : 1)));
+  const rooms: Room[] = [
+    room("Parlour / Living Room", 6, 5, 0, 0, 0),
+    room("Kitchen", 3, 5, 6, 0, 0)
+  ];
+  for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+    const y = 5 + bedroom * 4;
+    rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
+    rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
+  }
+  // Provide actual external windows. build_room only creates openings supplied
+  // in the plan, so relying on the model to remember them caused failed reviews.
+  rooms[0].windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
+  rooms[1].windows = [{ wall: "east", offset: 1.8, width: 1.2, height: 1.2, sill_height: 1.0 }];
+  rooms.filter((item) => /^Bedroom \d+$/.test(String(item.name))).forEach((item) => {
+    item.windows = [{ wall: "west", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9 }];
+  });
+  return [{ name: "Ground Floor Apartment", elevation: 0, height: 3.2, rooms }];
+}
+
 function minimumBuildingPlan(brief: any): any[] {
   const text = requestedText(brief);
-  if (/apartment|residential block|multi.?family|flats?/.test(text)) return apartmentProgram(brief);
+  if (/residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text)) return apartmentProgram(brief);
+  if (/apartment/.test(text)) return apartmentUnitProgram(brief);
 
   const requirements = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
   const rooms: Room[] = [];
@@ -427,6 +451,12 @@ function processRooms(rooms: Room[], allowNoDoors = false): void {
     }
 
     room.windows = room.windows.filter((window) => !room.doors!.some((door) => openingsOverlap(window, door)));
+    if (!hasExplicitWindows && room.windows.length === 0 && !Boolean((room as any).allow_no_windows)) {
+      const exteriorWall = WALLS.find((wall) => !isInternalWall(room, wall, rooms));
+      if (exteriorWall) {
+        room.windows.push(clampOpening({ wall: exteriorWall, offset: wallLength(room, exteriorWall) / 2 - 0.6, width: 1.2, height: 1.3, sill_height: 0.9 }, room, 1.2));
+      }
+    }
   }
 }
 

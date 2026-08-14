@@ -25425,10 +25425,11 @@ Core Directives:
     - "building" \u2014 houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
     - "mep" \u2014 pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
     - "custom" \u2014 furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
- 2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
+  2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
     - If ACTIVE_SESSION_EXISTS is true or history contains previous turns:
       Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure.
       ONLY set "is_edit": false if the user explicitly requests to "create a new building/frame from scratch", "start over", "clear all", or "replace this model".
+    - If an assistant previously asked a clarifying question and the latest user message supplies rooms, dimensions, materials, or features, it is the continuation of a NEW design. Set "is_edit": false.
  3. FOR BUILDINGS: Extract rooms, storeys, special features, materials, and edit instructions.
  4. FOR NON-BUILDINGS / STRUCTURAL FRAMES: Extract component_requirements \u2014 a list of named structural components (columns, beams, pad bases, slabs) with descriptions, grid spacing, dimensions, and positions.
 
@@ -25467,6 +25468,14 @@ Task: Parse the LATEST user message in context of conversation history. If the u
   }
   const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
+  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+  const priorAssistantText = Array.isArray(messages) ? messages.slice(0, -1).filter((message) => message?.role === "assistant").map((message) => String(message.content || "")).join(" ").toLowerCase() : "";
+  const followsClarification = /could you provide more details|please describe|what should i design|clarifying|layout.*additional rooms/i.test(priorAssistantText);
+  const startsNewDesign = /\b(create|build|design|make)\b.*\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText));
+  if (followsClarification || startsNewDesign) {
+    result.is_edit = false;
+    result.needs_clarification = false;
+  }
   if (!result.structure_category) {
     result.structure_category = "building";
   }
@@ -25476,12 +25485,14 @@ Task: Parse the LATEST user message in context of conversation history. If the u
       result.is_edit = true;
     }
   }
-  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
   const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
   const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
   if (isVagueNewBuild) {
     result.needs_clarification = true;
     result.clarifying_question = "What should I design: a house, apartment building, bridge, railway, or another structure? Include approximate size, floors/spans, and key rooms or features.";
+  }
+  if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
+    result.needs_clarification = false;
   }
   return result;
 }
@@ -25714,9 +25725,30 @@ function apartmentProgram(brief) {
   }
   return plans;
 }
+function apartmentUnitProgram(brief) {
+  const requested = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
+  const requestedNames = requested.map((item) => String(item.name || "").toLowerCase()).join(" ");
+  const bedrooms = Math.max(1, Math.min(3, (requestedNames.match(/bed(room)?/g) || []).length || (/two|2/.test(requestedText(brief)) ? 2 : 1)));
+  const rooms = [
+    room("Parlour / Living Room", 6, 5, 0, 0, 0),
+    room("Kitchen", 3, 5, 6, 0, 0)
+  ];
+  for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+    const y = 5 + bedroom * 4;
+    rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
+    rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
+  }
+  rooms[0].windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
+  rooms[1].windows = [{ wall: "east", offset: 1.8, width: 1.2, height: 1.2, sill_height: 1 }];
+  rooms.filter((item) => /^Bedroom \d+$/.test(String(item.name))).forEach((item) => {
+    item.windows = [{ wall: "west", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9 }];
+  });
+  return [{ name: "Ground Floor Apartment", elevation: 0, height: 3.2, rooms }];
+}
 function minimumBuildingPlan(brief) {
   const text = requestedText(brief);
-  if (/apartment|residential block|multi.?family|flats?/.test(text)) return apartmentProgram(brief);
+  if (/residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text)) return apartmentProgram(brief);
+  if (/apartment/.test(text)) return apartmentUnitProgram(brief);
   const requirements = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
   const rooms = [];
   const source = requirements.length ? requirements : [
@@ -25893,6 +25925,12 @@ function processRooms(rooms, allowNoDoors = false) {
       room2.doors.push(clampOpening({ wall, offset: wallLength(room2, wall) / 2 - 0.45, width: 0.9, height: 2.1 }, room2, 0.9));
     }
     room2.windows = room2.windows.filter((window) => !room2.doors.some((door) => openingsOverlap(window, door)));
+    if (!hasExplicitWindows && room2.windows.length === 0 && !Boolean(room2.allow_no_windows)) {
+      const exteriorWall = WALLS.find((wall) => !isInternalWall(room2, wall, rooms));
+      if (exteriorWall) {
+        room2.windows.push(clampOpening({ wall: exteriorWall, offset: wallLength(room2, exteriorWall) / 2 - 0.6, width: 1.2, height: 1.3, sill_height: 0.9 }, room2, 1.2));
+      }
+    }
   }
 }
 function repairPlan(plan, brief) {
@@ -26025,6 +26063,7 @@ Validation Criteria:
  1. Standard BIM Topology: Ensure key structural elements exist (IfcWall > 0, IfcSlab > 0, IfcDoor > 0, IfcWindow > 0).
  2. Requirements are supplied with every review. Mark FAIL if the scene does not prove it meets every minimum count or required IFC class. A single proxy, cube, or disconnected element is NEVER a valid building, bridge, or railway model.
  3. For buildings, check that the requested number of rooms/storeys is represented by meaningful walls, slabs, doors and windows. For infrastructure, check that supports and primary members form a connected structure\u2014not merely one deck or box.
+ 4. Do NOT fail a model solely because IfcSpace entities are absent: the current room builder produces physical IFC elements, not IfcSpace. Do not compare the project name to a category; assess actual model elements instead.
 
 Correction Loop Enforcement:
 If you detect a critical failure, set "status": "FAIL" and "retry_required": true with step-by-step fix recommendations.

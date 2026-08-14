@@ -8,6 +8,7 @@ Validation Criteria:
  1. Standard BIM Topology: Ensure key structural elements exist (IfcWall > 0, IfcSlab > 0, IfcDoor > 0, IfcWindow > 0).
  2. Requirements are supplied with every review. Mark FAIL if the scene does not prove it meets every minimum count or required IFC class. A single proxy, cube, or disconnected element is NEVER a valid building, bridge, or railway model.
  3. For buildings, check that the requested number of rooms/storeys is represented by meaningful walls, slabs, doors and windows. For infrastructure, check that supports and primary members form a connected structure—not merely one deck or box.
+ 4. Do NOT fail a model solely because IfcSpace entities are absent: the current room builder produces physical IFC elements, not IfcSpace. Do not compare the project name to a category; assess actual model elements instead.
 
 Correction Loop Enforcement:
 If you detect a critical failure, set "status": "FAIL" and "retry_required": true with step-by-step fix recommendations.

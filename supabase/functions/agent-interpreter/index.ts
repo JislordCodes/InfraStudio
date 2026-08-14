@@ -9,10 +9,11 @@ Core Directives:
     - "building" — houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
     - "mep" — pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
     - "custom" — furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
- 2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
+  2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
     - If ACTIVE_SESSION_EXISTS is true or history contains previous turns:
       Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure.
       ONLY set "is_edit": false if the user explicitly requests to "create a new building/frame from scratch", "start over", "clear all", or "replace this model".
+    - If an assistant previously asked a clarifying question and the latest user message supplies rooms, dimensions, materials, or features, it is the continuation of a NEW design. Set "is_edit": false.
  3. FOR BUILDINGS: Extract rooms, storeys, special features, materials, and edit instructions.
  4. FOR NON-BUILDINGS / STRUCTURAL FRAMES: Extract component_requirements — a list of named structural components (columns, beams, pad bases, slabs) with descriptions, grid spacing, dimensions, and positions.
 
@@ -58,6 +59,17 @@ export async function handleInterpreter(payload: any): Promise<any> {
   const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
 
+  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+  const priorAssistantText = Array.isArray(messages)
+    ? messages.slice(0, -1).filter((message: any) => message?.role === "assistant").map((message: any) => String(message.content || "")).join(" ").toLowerCase()
+    : "";
+  const followsClarification = /could you provide more details|please describe|what should i design|clarifying|layout.*additional rooms/i.test(priorAssistantText);
+  const startsNewDesign = /\b(create|build|design|make)\b.*\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText));
+  if (followsClarification || startsNewDesign) {
+    result.is_edit = false;
+    result.needs_clarification = false;
+  }
+
   // Default structure_category to "building" if not set
   if (!result.structure_category) {
     result.structure_category = "building";
@@ -74,12 +86,17 @@ export async function handleInterpreter(payload: any): Promise<any> {
   // Do not turn an underspecified request into an arbitrary cube.  A useful
   // BIM model needs at least a type, scale, or programme; ask once when none
   // was supplied and preserve the session for the user's answer.
-  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
   const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
   const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
   if (isVagueNewBuild) {
     result.needs_clarification = true;
     result.clarifying_question = "What should I design: a house, apartment building, bridge, railway, or another structure? Include approximate size, floors/spans, and key rooms or features.";
+  }
+
+  // An explicit project type such as "two-bed apartment" is already enough
+  // to generate a useful baseline; never let an LLM ask a redundant question.
+  if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
+    result.needs_clarification = false;
   }
 
   return result;
