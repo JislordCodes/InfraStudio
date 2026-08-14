@@ -90,6 +90,11 @@ const SEMANTIC_TOOL_OPTIONS: Record<string, string[]> = {
 
 const GENERIC_GEOMETRY_TOOLS = new Set(["create_trimesh_ifc", "create_mesh_ifc"]);
 
+function recordToolDecision(decision: ToolAuditEntry): ToolAuditEntry {
+  console.info("[tool-selection-gate]", JSON.stringify(decision));
+  return decision;
+}
+
 function semanticIntent(args: Record<string, any>, context: unknown = ""): string | undefined {
   const directText = [args?.name, args?.ifc_class, args?.description]
     .filter(Boolean).join(" ").toLowerCase();
@@ -108,7 +113,7 @@ function semanticIntent(args: Record<string, any>, context: unknown = ""): strin
 function evaluateToolSelection(tool: string, args: Record<string, any>, availableTools: any[], context: unknown = ""): ToolAuditEntry {
   const available = new Set(availableTools.map((item: any) => item?.function?.name || item?.name).filter(Boolean));
   if (available.size > 0 && !available.has(tool)) {
-    return { tool, allowed: false, reason: "The tool was not advertised by the active MCP session." };
+    return recordToolDecision({ tool, allowed: false, reason: "The tool was not advertised by the active MCP session." });
   }
 
   const intent = semanticIntent(args, context);
@@ -117,22 +122,22 @@ function evaluateToolSelection(tool: string, args: Record<string, any>, availabl
   const isGenericProxy = !requestedClass || requestedClass === "IfcBuildingElementProxy";
 
   if (GENERIC_GEOMETRY_TOOLS.has(tool) && isGenericProxy && semanticAlternative) {
-    return {
+    return recordToolDecision({
       tool,
       allowed: false,
       reason: `Generic mesh/proxy creation is not permitted for a ${intent} while a semantic IFC tool is available.`,
       semantic_alternative: semanticAlternative,
-    };
+    });
   }
 
-  return {
+  return recordToolDecision({
     tool,
     allowed: true,
     reason: semanticAlternative && GENERIC_GEOMETRY_TOOLS.has(tool)
       ? `Allowed because the request explicitly supplies semantic IFC class ${requestedClass}.`
       : "Tool is compatible with the requested BIM intent.",
     semantic_alternative: semanticAlternative,
-  };
+  });
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

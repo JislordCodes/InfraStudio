@@ -26183,6 +26183,10 @@ var SEMANTIC_TOOL_OPTIONS = {
   stair: ["create_stairs"]
 };
 var GENERIC_GEOMETRY_TOOLS = /* @__PURE__ */ new Set(["create_trimesh_ifc", "create_mesh_ifc"]);
+function recordToolDecision(decision) {
+  console.info("[tool-selection-gate]", JSON.stringify(decision));
+  return decision;
+}
 function semanticIntent(args, context = "") {
   const directText = [args?.name, args?.ifc_class, args?.description].filter(Boolean).join(" ").toLowerCase();
   const text = directText || String(context || "").toLowerCase();
@@ -26197,26 +26201,26 @@ function semanticIntent(args, context = "") {
 function evaluateToolSelection(tool, args, availableTools, context = "") {
   const available = new Set(availableTools.map((item) => item?.function?.name || item?.name).filter(Boolean));
   if (available.size > 0 && !available.has(tool)) {
-    return { tool, allowed: false, reason: "The tool was not advertised by the active MCP session." };
+    return recordToolDecision({ tool, allowed: false, reason: "The tool was not advertised by the active MCP session." });
   }
   const intent = semanticIntent(args, context);
   const semanticAlternative = intent ? SEMANTIC_TOOL_OPTIONS[intent]?.find((candidate) => available.has(candidate)) : void 0;
   const requestedClass = String(args?.ifc_class || "");
   const isGenericProxy = !requestedClass || requestedClass === "IfcBuildingElementProxy";
   if (GENERIC_GEOMETRY_TOOLS.has(tool) && isGenericProxy && semanticAlternative) {
-    return {
+    return recordToolDecision({
       tool,
       allowed: false,
       reason: `Generic mesh/proxy creation is not permitted for a ${intent} while a semantic IFC tool is available.`,
       semantic_alternative: semanticAlternative
-    };
+    });
   }
-  return {
+  return recordToolDecision({
     tool,
     allowed: true,
     reason: semanticAlternative && GENERIC_GEOMETRY_TOOLS.has(tool) ? `Allowed because the request explicitly supplies semantic IFC class ${requestedClass}.` : "Tool is compatible with the requested BIM intent.",
     semantic_alternative: semanticAlternative
-  };
+  });
 }
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
