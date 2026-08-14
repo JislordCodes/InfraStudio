@@ -20,7 +20,10 @@ Deno.serve(async (req: Request) => {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
+      // Supabase Edge Functions have a roughly 150s wall-clock limit. Leave
+      // a small margin for response serialization while allowing architect
+      // prompts enough time to finish Qwen3.8 reasoning.
+      signal: AbortSignal.timeout(145000),
     });
     const text = await upstream.text();
     return new Response(text, { status: upstream.status, headers: { ...cors, "Content-Type": "application/json" } });

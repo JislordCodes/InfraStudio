@@ -25278,8 +25278,8 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
       const res = await fetch(endpoint, {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(12e4),
-        // 120s timeout per attempt
+        signal: AbortSignal.timeout(14e4),
+        // stay below the Supabase proxy wall-clock limit
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,

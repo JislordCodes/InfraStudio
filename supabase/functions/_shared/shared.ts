@@ -348,7 +348,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(120000), // 120s timeout per attempt
+        signal: AbortSignal.timeout(140000), // stay below the Supabase proxy wall-clock limit
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
