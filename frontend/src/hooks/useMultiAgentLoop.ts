@@ -161,6 +161,7 @@ export async function runMultiAgentLoop(
           action: 'create_roof',
           roof_type: roofTypeRequested,
           bbox: { minX, minY, maxX, maxY, height: maxHeight },
+          footprint: plan.roof_footprint,
           mcpSessionId: sessionId
         });
         if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
@@ -334,7 +335,24 @@ export async function runMultiAgentLoop(
 
     // 4. Quality Reviewer
     pushStep("Reviewer Agent: Validating model quality...");
-    const review = await callEdge('agent-reviewer', { mcpSessionId: sessionId, qualityRequirements: plan.quality_requirements, structureCategory });
+    let review = await callEdge('agent-reviewer', { mcpSessionId: sessionId, qualityRequirements: plan.quality_requirements, structureCategory });
+    if (review.status !== 'PASS' && review.retry_required) {
+      pushStep('Reviewer Agent: Applying the required quality corrections...');
+      const remediation = await callEdge('agent-bim', {
+        action: 'dynamic_edit',
+        mcpSessionId: sessionId,
+        plan: {
+          ...plan,
+          review_required: true,
+          review_issues: review.issues || [],
+          target_actions: (review.fix_recommendations || []).map((instruction: string) => ({ action: 'quality_remediation', target: 'model', parameters: { instruction } }))
+        }
+      });
+      sessionId = remediation.mcpSessionId || sessionId;
+      if (remediation.ifc_url) ifc_url = remediation.ifc_url;
+      pushStep('Reviewer Agent: Re-validating corrected model...');
+      review = await callEdge('agent-reviewer', { mcpSessionId: sessionId, qualityRequirements: plan.quality_requirements, structureCategory });
+    }
     
     if (review.status === "PASS") {
       pushStep("✅ Model passed quality review.");

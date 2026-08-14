@@ -83,14 +83,19 @@ export async function handleInterpreter(payload: any): Promise<any> {
     }
   }
 
-  // Do not turn an underspecified request into an arbitrary cube.  A useful
-  // BIM model needs at least a type, scale, or programme; ask once when none
-  // was supplied and preserve the session for the user's answer.
+  // For an intentionally open-ended request, generate a complete but varied
+  // architect-designed house instead of either asking a redundant question or
+  // producing an arbitrary cube. Explicit programmes always take precedence.
   const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
   const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
   if (isVagueNewBuild) {
-    result.needs_clarification = true;
-    result.clarifying_question = "What should I design: a house, apartment building, bridge, railway, or another structure? Include approximate size, floors/spans, and key rooms or features.";
+    result.is_edit = false;
+    result.structure_category = "building";
+    result.project_type = "architect-designed house";
+    result.autonomous_design = true;
+    result.needs_clarification = false;
+    result.room_requirements = [];
+    result.special_features = result.special_features || ["varied footprint", "daylight", "entry sequence"];
   }
 
   // An explicit project type such as "two-bed apartment" is already enough

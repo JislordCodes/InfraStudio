@@ -24,17 +24,79 @@ Expected JSON Schema:
   "retry_required": boolean
 }`;
 
+function parseScene(text: string): any {
+  try { return JSON.parse(text); } catch { return {}; }
+}
+
+function boundsOf(object: any): { min: number[]; max: number[] } | null {
+  const bbox = object?.bbox || object?.bounding_box || object?.bounds;
+  if (Array.isArray(bbox) && bbox.length >= 6) return { min: bbox.slice(0, 3).map(Number), max: bbox.slice(3, 6).map(Number) };
+  if (bbox?.min && bbox?.max) return { min: bbox.min.map(Number), max: bbox.max.map(Number) };
+  return null;
+}
+
+function deterministicReview(scene: any, requirements: any, category: string) {
+  const objects = Array.isArray(scene?.objects) ? scene.objects : [];
+  const classes = objects.reduce((counts: Record<string, number>, object: any) => {
+    const name = String(object?.ifc_class || object?.type || "");
+    counts[name] = (counts[name] || 0) + 1;
+    return counts;
+  }, {});
+  const issues: string[] = [];
+  const fixes: string[] = [];
+  const required = requirements?.required_element_types || (category === "building" ? ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"] : []);
+  for (const requiredClass of required) {
+    if (!classes[requiredClass]) {
+      issues.push(`Missing required ${requiredClass} elements.`);
+      fixes.push(`Create semantic ${requiredClass} elements using the appropriate MCP tool.`);
+    }
+  }
+  if (category === "building" && Number(requirements?.minimum_rooms || 0) > 0 && (classes.IfcWall || 0) < Number(requirements.minimum_rooms) * 4) {
+    issues.push("The wall count is too low for the requested room programme.");
+    fixes.push("Build each missing room with build_room using the validated floor plan.");
+  }
+
+  const solids = objects.filter((object: any) => {
+    const cls = String(object?.ifc_class || object?.type || "");
+    return !/IfcDoor|IfcWindow|IfcOpeningElement/.test(cls) && boundsOf(object);
+  });
+  for (let i = 0; i < solids.length; i++) {
+    for (let j = i + 1; j < solids.length; j++) {
+      const a = boundsOf(solids[i])!, b = boundsOf(solids[j])!;
+      const overlap = [0, 1, 2].map((axis) => Math.max(0, Math.min(a.max[axis], b.max[axis]) - Math.max(a.min[axis], b.min[axis])));
+      const overlapVolume = overlap[0] * overlap[1] * overlap[2];
+      const aVolume = (a.max[0] - a.min[0]) * (a.max[1] - a.min[1]) * (a.max[2] - a.min[2]);
+      const bVolume = (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
+      if (overlapVolume > 0.1 && overlapVolume / Math.max(0.001, Math.min(aVolume, bVolume)) > 0.35) {
+        issues.push(`Geometry clash detected between ${solids[i].name || solids[i].guid || "element"} and ${solids[j].name || solids[j].guid || "element"}.`);
+        fixes.push("Use the recorded GlobalIds and adjust or remove the overlapping element before export.");
+      }
+    }
+  }
+  return { issues: [...new Set(issues)], fixes: [...new Set(fixes)], classes };
+}
+
 export async function handleReviewer(payload: any): Promise<any> {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
-  const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
+  const sceneInfo = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: true, include_transform: true }, mcpSessionId);
+  const scene = parseScene(sceneInfo.resultText);
+  const deterministic = deterministicReview(scene, payload.qualityRequirements || {}, payload.structureCategory || "building");
   const reviewContext = {
     structure_category: payload.structureCategory || "building",
     quality_requirements: payload.qualityRequirements || {},
-    scene_overview: sceneInfo.resultText
+    scene_overview: sceneInfo.resultText,
+    deterministic_findings: deterministic
   };
   const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
+  result.issues = [...new Set([...(deterministic.issues || []), ...(result.issues || [])])];
+  result.fix_recommendations = [...new Set([...(deterministic.fixes || []), ...(result.fix_recommendations || [])])];
+  if (deterministic.issues.length) {
+    result.status = "FAIL";
+    result.retry_required = true;
+  }
+  result.element_counts = deterministic.classes;
   result.mcpSessionId = mcpSessionId;
   return result;
 }

@@ -430,12 +430,13 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     const y1 = Number(bbox.maxY) + overhang;
     const z = Number(bbox.height || 3);
 
-    const polyline = [
-      [x0, y0, z],
-      [x1, y0, z],
-      [x1, y1, z],
-      [x0, y1, z]
-    ];
+    const suppliedFootprint = Array.isArray(payload.footprint) ? payload.footprint : [];
+    const validFootprint = suppliedFootprint.length >= 3 && suppliedFootprint.every((point: any) =>
+      Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]))
+    );
+    const polyline = validFootprint
+      ? suppliedFootprint.map((point: any) => [Number(point[0]), Number(point[1]), z])
+      : [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]];
 
     const buildRes = await mcpCallTool("create_roof", {
       polyline,
@@ -722,6 +723,7 @@ result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
 Your sole job is to call real MCP tools to perform the requested edit or creation on the active IFC model.
 
 Rules for Edits:
+ 0. If "review_required" is true, resolve EVERY review issue before making optional design changes. Use the supplied GlobalIds and semantic tools; do not create generic proxy geometry as a workaround.
  1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
  2. To MODIFY or RESIZE an existing element:
     - For doors: Call update_door(guid, width, height, offset, etc.)

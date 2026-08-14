@@ -243,8 +243,41 @@ function apartmentUnitProgram(brief: any): any[] {
   return [{ name: "Ground Floor Apartment", elevation: 0, height: 3.2, rooms }];
 }
 
+function creativeHouseProgram(seed: number): { storeys: any[]; footprint: number[][]; roof: string } {
+  const variant = Math.abs(seed) % 3;
+  if (variant === 0) {
+    return {
+      roof: "hip",
+      footprint: [[0, 0], [10, 0], [10, 5], [6, 5], [6, 9], [0, 9]],
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
+        room("Living Room", 6, 5, 0, 0, 0), room("Kitchen Dining", 4, 3, 6, 0, 0),
+        room("Primary Bedroom", 4, 4, 0, 5, 0), room("Bathroom", 2, 2.5, 4, 5, 0), room("Study", 4, 2, 6, 3, 0)
+      ] }]
+    };
+  }
+  if (variant === 1) {
+    return {
+      roof: "gable",
+      footprint: [[0, 0], [12, 0], [12, 4], [8, 4], [8, 8], [4, 8], [4, 4], [0, 4]],
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
+        room("Living Room", 4, 4, 4, 0, 0), room("Kitchen Dining", 4, 4, 8, 0, 0), room("Entry Hall", 4, 4, 0, 0, 0),
+        room("Primary Bedroom", 4, 4, 4, 4, 0), room("Bathroom", 2, 4, 2, 4, 0)
+      ] }]
+    };
+  }
+  return {
+    roof: "shed",
+    footprint: [[0, 0], [12, 0], [12, 9], [8, 9], [8, 5], [4, 5], [4, 9], [0, 9]],
+    storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
+      room("Living Room", 4, 5, 4, 0, 0), room("Kitchen Dining", 4, 5, 8, 0, 0), room("Entry Hall", 4, 5, 0, 0, 0),
+      room("Primary Bedroom", 4, 4, 0, 5, 0), room("Bathroom", 4, 4, 8, 5, 0)
+    ] }]
+  };
+}
+
 function minimumBuildingPlan(brief: any): any[] {
   const text = requestedText(brief);
+  if (brief?.autonomous_design) return creativeHouseProgram(Number(brief?.design_seed || Date.now())).storeys;
   if (/residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text)) return apartmentProgram(brief);
   if (/apartment/.test(text)) return apartmentUnitProgram(brief);
 
@@ -533,6 +566,14 @@ function repairPlan(plan: any, brief?: any): any {
 
   const allowNoDoors = Boolean(plan.allow_no_doors);
   const layoutRepairs: string[] = [];
+
+  if (brief?.autonomous_design && !plan.is_edit) {
+    const generated = creativeHouseProgram(Number(brief?.design_seed || Date.now()));
+    plan.storey_plans = generated.storeys;
+    plan.roof_footprint = generated.footprint;
+    plan.roof_type = generated.roof;
+    plan.design_seed = brief?.design_seed || Date.now();
+  }
 
   if (plan.is_edit) {
     if (Array.isArray(plan.new_rooms)) {

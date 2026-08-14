@@ -25503,8 +25503,13 @@ Task: Parse the LATEST user message in context of conversation history. If the u
   const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
   const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
   if (isVagueNewBuild) {
-    result.needs_clarification = true;
-    result.clarifying_question = "What should I design: a house, apartment building, bridge, railway, or another structure? Include approximate size, floors/spans, and key rooms or features.";
+    result.is_edit = false;
+    result.structure_category = "building";
+    result.project_type = "architect-designed house";
+    result.autonomous_design = true;
+    result.needs_clarification = false;
+    result.room_requirements = [];
+    result.special_features = result.special_features || ["varied footprint", "daylight", "entry sequence"];
   }
   if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
     result.needs_clarification = false;
@@ -25760,8 +25765,49 @@ function apartmentUnitProgram(brief) {
   });
   return [{ name: "Ground Floor Apartment", elevation: 0, height: 3.2, rooms }];
 }
+function creativeHouseProgram(seed) {
+  const variant = Math.abs(seed) % 3;
+  if (variant === 0) {
+    return {
+      roof: "hip",
+      footprint: [[0, 0], [10, 0], [10, 5], [6, 5], [6, 9], [0, 9]],
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
+        room("Living Room", 6, 5, 0, 0, 0),
+        room("Kitchen Dining", 4, 3, 6, 0, 0),
+        room("Primary Bedroom", 4, 4, 0, 5, 0),
+        room("Bathroom", 2, 2.5, 4, 5, 0),
+        room("Study", 4, 2, 6, 3, 0)
+      ] }]
+    };
+  }
+  if (variant === 1) {
+    return {
+      roof: "gable",
+      footprint: [[0, 0], [12, 0], [12, 4], [8, 4], [8, 8], [4, 8], [4, 4], [0, 4]],
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
+        room("Living Room", 4, 4, 4, 0, 0),
+        room("Kitchen Dining", 4, 4, 8, 0, 0),
+        room("Entry Hall", 4, 4, 0, 0, 0),
+        room("Primary Bedroom", 4, 4, 4, 4, 0),
+        room("Bathroom", 2, 4, 2, 4, 0)
+      ] }]
+    };
+  }
+  return {
+    roof: "shed",
+    footprint: [[0, 0], [12, 0], [12, 9], [8, 9], [8, 5], [4, 5], [4, 9], [0, 9]],
+    storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
+      room("Living Room", 4, 5, 4, 0, 0),
+      room("Kitchen Dining", 4, 5, 8, 0, 0),
+      room("Entry Hall", 4, 5, 0, 0, 0),
+      room("Primary Bedroom", 4, 4, 0, 5, 0),
+      room("Bathroom", 4, 4, 8, 5, 0)
+    ] }]
+  };
+}
 function minimumBuildingPlan(brief) {
   const text = requestedText(brief);
+  if (brief?.autonomous_design) return creativeHouseProgram(Number(brief?.design_seed || Date.now())).storeys;
   if (/residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text)) return apartmentProgram(brief);
   if (/apartment/.test(text)) return apartmentUnitProgram(brief);
   const requirements = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
@@ -26017,6 +26063,13 @@ function repairPlan(plan, brief) {
   }
   const allowNoDoors = Boolean(plan.allow_no_doors);
   const layoutRepairs = [];
+  if (brief?.autonomous_design && !plan.is_edit) {
+    const generated = creativeHouseProgram(Number(brief?.design_seed || Date.now()));
+    plan.storey_plans = generated.storeys;
+    plan.roof_footprint = generated.footprint;
+    plan.roof_type = generated.roof;
+    plan.design_seed = brief?.design_seed || Date.now();
+  }
   if (plan.is_edit) {
     if (Array.isArray(plan.new_rooms)) {
       processRooms(plan.new_rooms, allowNoDoors);
@@ -26158,17 +26211,79 @@ Expected JSON Schema:
   "fix_recommendations": ["string"],
   "retry_required": boolean
 }`;
+function parseScene(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+function boundsOf(object) {
+  const bbox = object?.bbox || object?.bounding_box || object?.bounds;
+  if (Array.isArray(bbox) && bbox.length >= 6) return { min: bbox.slice(0, 3).map(Number), max: bbox.slice(3, 6).map(Number) };
+  if (bbox?.min && bbox?.max) return { min: bbox.min.map(Number), max: bbox.max.map(Number) };
+  return null;
+}
+function deterministicReview(scene, requirements, category) {
+  const objects = Array.isArray(scene?.objects) ? scene.objects : [];
+  const classes = objects.reduce((counts, object) => {
+    const name = String(object?.ifc_class || object?.type || "");
+    counts[name] = (counts[name] || 0) + 1;
+    return counts;
+  }, {});
+  const issues = [];
+  const fixes = [];
+  const required = requirements?.required_element_types || (category === "building" ? ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"] : []);
+  for (const requiredClass of required) {
+    if (!classes[requiredClass]) {
+      issues.push(`Missing required ${requiredClass} elements.`);
+      fixes.push(`Create semantic ${requiredClass} elements using the appropriate MCP tool.`);
+    }
+  }
+  if (category === "building" && Number(requirements?.minimum_rooms || 0) > 0 && (classes.IfcWall || 0) < Number(requirements.minimum_rooms) * 4) {
+    issues.push("The wall count is too low for the requested room programme.");
+    fixes.push("Build each missing room with build_room using the validated floor plan.");
+  }
+  const solids = objects.filter((object) => {
+    const cls = String(object?.ifc_class || object?.type || "");
+    return !/IfcDoor|IfcWindow|IfcOpeningElement/.test(cls) && boundsOf(object);
+  });
+  for (let i = 0; i < solids.length; i++) {
+    for (let j = i + 1; j < solids.length; j++) {
+      const a = boundsOf(solids[i]), b = boundsOf(solids[j]);
+      const overlap = [0, 1, 2].map((axis) => Math.max(0, Math.min(a.max[axis], b.max[axis]) - Math.max(a.min[axis], b.min[axis])));
+      const overlapVolume = overlap[0] * overlap[1] * overlap[2];
+      const aVolume = (a.max[0] - a.min[0]) * (a.max[1] - a.min[1]) * (a.max[2] - a.min[2]);
+      const bVolume = (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
+      if (overlapVolume > 0.1 && overlapVolume / Math.max(1e-3, Math.min(aVolume, bVolume)) > 0.35) {
+        issues.push(`Geometry clash detected between ${solids[i].name || solids[i].guid || "element"} and ${solids[j].name || solids[j].guid || "element"}.`);
+        fixes.push("Use the recorded GlobalIds and adjust or remove the overlapping element before export.");
+      }
+    }
+  }
+  return { issues: [...new Set(issues)], fixes: [...new Set(fixes)], classes };
+}
 async function handleReviewer(payload) {
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
-  const sceneInfo = await mcpCallTool("get_ifc_scene_overview", {}, mcpSessionId);
+  const sceneInfo = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: true, include_transform: true }, mcpSessionId);
+  const scene = parseScene(sceneInfo.resultText);
+  const deterministic = deterministicReview(scene, payload.qualityRequirements || {}, payload.structureCategory || "building");
   const reviewContext = {
     structure_category: payload.structureCategory || "building",
     quality_requirements: payload.qualityRequirements || {},
-    scene_overview: sceneInfo.resultText
+    scene_overview: sceneInfo.resultText,
+    deterministic_findings: deterministic
   };
   const res = await callQwen(systemPrompt3, JSON.stringify(reviewContext), true, "qwen3.8-max");
   const result = cleanJsonResponse(res);
+  result.issues = [.../* @__PURE__ */ new Set([...deterministic.issues || [], ...result.issues || []])];
+  result.fix_recommendations = [.../* @__PURE__ */ new Set([...deterministic.fixes || [], ...result.fix_recommendations || []])];
+  if (deterministic.issues.length) {
+    result.status = "FAIL";
+    result.retry_required = true;
+  }
+  result.element_counts = deterministic.classes;
   result.mcpSessionId = mcpSessionId;
   return result;
 }
@@ -26573,12 +26688,11 @@ save_and_load_ifc()`
     const y0 = Number(bbox.minY) - overhang;
     const y1 = Number(bbox.maxY) + overhang;
     const z = Number(bbox.height || 3);
-    const polyline = [
-      [x0, y0, z],
-      [x1, y0, z],
-      [x1, y1, z],
-      [x0, y1, z]
-    ];
+    const suppliedFootprint = Array.isArray(payload.footprint) ? payload.footprint : [];
+    const validFootprint = suppliedFootprint.length >= 3 && suppliedFootprint.every(
+      (point) => Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]))
+    );
+    const polyline = validFootprint ? suppliedFootprint.map((point) => [Number(point[0]), Number(point[1]), z]) : [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]];
     const buildRes = await mcpCallTool("create_roof", {
       polyline,
       roof_type,
@@ -26844,6 +26958,7 @@ Fix the issues and try again with correct tool calls.`;
 Your sole job is to call real MCP tools to perform the requested edit or creation on the active IFC model.
 
 Rules for Edits:
+ 0. If "review_required" is true, resolve EVERY review issue before making optional design changes. Use the supplied GlobalIds and semantic tools; do not create generic proxy geometry as a workaround.
  1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
  2. To MODIFY or RESIZE an existing element:
     - For doors: Call update_door(guid, width, height, offset, etc.)
