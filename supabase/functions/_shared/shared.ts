@@ -310,6 +310,8 @@ function getTargetModel(model: string): string {
 }
 
 function getQwenEndpoints(): string[] {
+  const proxy = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (proxy?.trim()) return [proxy.trim().replace(/\/+$/, "")];
   const configured = typeof Deno !== "undefined"
     ? Deno.env.get("QWEN_BASE_URL")
     : process.env.QWEN_BASE_URL;
@@ -323,7 +325,8 @@ function getQwenEndpoints(): string[] {
 
 export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "glm-5.1"): Promise<string> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
-  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
   let msgs: any[] = [{ role: "system", content: systemPrompt }];
   if (Array.isArray(userMessage)) {
     msgs = msgs.concat(userMessage.map(m => ({ role: m.role, content: m.content || "" })));
@@ -335,13 +338,16 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   let lastError: any = null;
 
   const endpoints = getQwenEndpoints();
+  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
 
   for (const endpoint of endpoints) {
     try {
       console.log(`[callQwen] Invoking ${targetModel} via ${endpoint}...`);
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        headers: endpoints[0].includes("functions/v1/qwen-proxy")
+          ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
+          : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
         signal: AbortSignal.timeout(120000), // 120s timeout per attempt
         body: JSON.stringify({
           model: targetModel,
@@ -382,7 +388,8 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
 
 export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "qwen3.8-max"): Promise<any> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
-  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
   const msgs = [
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage }
@@ -390,13 +397,16 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 
   const targetModel = getTargetModel(model);
   const endpoints = getQwenEndpoints();
+  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
 
   let lastErrText = "";
   for (const endpoint of endpoints) {
     try {
       const res = await fetch(endpoint, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        headers: endpoints[0].includes("functions/v1/qwen-proxy")
+          ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
+          : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
@@ -424,15 +434,20 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 
 export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "glm-5.1"): Promise<ReadableStream<Uint8Array>> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
-  if (!qwenKey) throw new Error("QWEN_API_KEY missing");
+  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
   const msgs = [
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage }
   ];
   const targetModel = getTargetModel(model);
-  const res = await fetch(getQwenEndpoints()[0], {
+  const streamEndpoint = getQwenEndpoints()[0];
+  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  const res = await fetch(streamEndpoint, {
     method: "POST",
-    headers: { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+    headers: streamEndpoint.includes("functions/v1/qwen-proxy")
+      ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
+      : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: targetModel,
       messages: msgs,
