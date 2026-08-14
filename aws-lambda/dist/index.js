@@ -25284,6 +25284,10 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
+        if (targetModel === "qwen3.8-max-preview" && res.status === 403 && /access_denied/i.test(errText)) {
+          console.warn("[callQwen] Qwen3.8 Max Preview is not enabled for this account; falling back to qwen-max.");
+          return callQwen(systemPrompt4, userMessage, jsonMode, "qwen-max");
+        }
         lastError = new Error(`Qwen Error (${res.status}): ${errText}`);
         continue;
       }
@@ -25333,6 +25337,10 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "qwen3.8-max")
       }
       lastErrText = await res.text();
       console.warn(`[callGLM] ${endpoint} returned (${res.status}): ${lastErrText}`);
+      if (targetModel === "qwen3.8-max-preview" && res.status === 403 && /access_denied/i.test(lastErrText)) {
+        console.warn("[callGLM] Qwen3.8 Max Preview is not enabled for this account; falling back to qwen-max.");
+        return callGLM(systemPrompt4, userMessage, tools, "qwen-max");
+      }
     } catch (e) {
       lastErrText = e.message || String(e);
     }

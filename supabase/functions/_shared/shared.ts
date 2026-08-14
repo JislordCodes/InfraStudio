@@ -347,6 +347,13 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
+        // Qwen3.8 Max Preview requires a separate DashScope Token Plan. Keep
+        // it as the preferred model, but do not take production generation
+        // down when the account has not been granted that entitlement yet.
+        if (targetModel === "qwen3.8-max-preview" && res.status === 403 && /access_denied/i.test(errText)) {
+          console.warn("[callQwen] Qwen3.8 Max Preview is not enabled for this account; falling back to qwen-max.");
+          return callQwen(systemPrompt, userMessage, jsonMode, "qwen-max");
+        }
         lastError = new Error(`Qwen Error (${res.status}): ${errText}`);
         continue;
       }
@@ -403,6 +410,10 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 
       lastErrText = await res.text();
       console.warn(`[callGLM] ${endpoint} returned (${res.status}): ${lastErrText}`);
+      if (targetModel === "qwen3.8-max-preview" && res.status === 403 && /access_denied/i.test(lastErrText)) {
+        console.warn("[callGLM] Qwen3.8 Max Preview is not enabled for this account; falling back to qwen-max.");
+        return callGLM(systemPrompt, userMessage, tools, "qwen-max");
+      }
     } catch (e: any) {
       lastErrText = e.message || String(e);
     }
