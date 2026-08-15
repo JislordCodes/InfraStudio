@@ -1,4 +1,5 @@
 import { setGlobalDispatcher, Agent } from "undici";
+import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { handleInterpreter } from "../supabase/functions/agent-interpreter/index.ts";
 import { handleArchitect } from "../supabase/functions/agent-architect/index.ts";
 import { handleReviewer } from "../supabase/functions/agent-reviewer/index.ts";
@@ -12,6 +13,24 @@ const globalAgent = new Agent({
   connectTimeout: 60000,  // 1 minute
 });
 setGlobalDispatcher(globalAgent);
+
+const secretsClient = new SecretsManagerClient({});
+let qwenSecretLoaded = false;
+async function loadQwenSecret(): Promise<void> {
+  if (qwenSecretLoaded || process.env.QWEN_API_KEY) return;
+  const secretId = process.env.QWEN_SECRET_ID;
+  if (!secretId) return;
+  const result = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
+  const raw = result.SecretString || "";
+  let key = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    key = parsed.api_key || parsed.QWEN_API_KEY || parsed.key || raw;
+  } catch { /* plain-text secret */ }
+  if (!key || key === "PENDING") throw new Error("Qwen Secrets Manager secret is empty or not configured");
+  process.env.QWEN_API_KEY = key;
+  qwenSecretLoaded = true;
+}
 
 
 export const handler = async (event: any) => {
@@ -52,6 +71,7 @@ export const handler = async (event: any) => {
 
   // Route requests by path
   try {
+    await loadQwenSecret();
     let result: any = null;
     const cleanPath = path.replace(/\/$/, ""); // remove trailing slash
 
