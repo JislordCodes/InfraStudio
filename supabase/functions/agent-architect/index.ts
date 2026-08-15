@@ -231,7 +231,19 @@ function apartmentProgram(brief: any): any[] {
 function apartmentUnitProgram(brief: any): any[] {
   const requested = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
   const requestedNames = requested.map((item: any) => String(item.name || "").toLowerCase()).join(" ");
-  const bedrooms = Math.max(1, Math.min(3, (requestedNames.match(/bed(room)?/g) || []).length || (/two|2/.test(requestedText(brief)) ? 2 : 1)));
+  const text = requestedText(brief);
+  const numberedBedrooms = new Set<string>();
+  requestedNames.replace(/bed(?:room)?\s*(\d+)/g, (_match, number) => {
+    numberedBedrooms.add(String(number));
+    return "";
+  });
+  const explicitBedroomRooms = requested.filter((item: any) => {
+    const name = String(item.name || "").toLowerCase();
+    return /bed(room)?/.test(name) && !/bath|toilet|wc|ensuite|en-suite/.test(name);
+  }).length;
+  const textBedroomMatch = text.match(/\b(\d+)\s*(?:bed|bedroom)\b/);
+  const wordBedroomCount = /\bthree\s*(?:bed|bedroom)/.test(text) ? 3 : /\btwo\s*(?:bed|bedroom)/.test(text) ? 2 : /\bone\s*(?:bed|bedroom)/.test(text) ? 1 : 0;
+  const bedrooms = Math.max(1, Math.min(6, Number(textBedroomMatch?.[1] || 0) || wordBedroomCount || numberedBedrooms.size || explicitBedroomRooms || 1));
   const rooms: Room[] = [
     room("Parlour / Living Room", 6, 5, 0, 0, 0),
     room("Kitchen", 3, 5, 6, 0, 0)
