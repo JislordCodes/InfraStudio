@@ -172,6 +172,14 @@ Expected JSON Schema:
 
 type Opening = { wall?: string; offset?: number; width?: number; height?: number; sill_height?: number; operation_type?: string };
 type Room = { name?: string; width?: number; length?: number; height?: number; origin?: number[]; floor_slab?: boolean; ceiling_slab?: boolean; doors?: Opening[]; windows?: Opening[] };
+type SpatialEdge = { from: string; to: string; from_wall: string; to_wall: string; shared_length: number };
+type SpatialConstraintResult = {
+  status: "PASS";
+  repairs: string[];
+  issues: string[];
+  adjacency_graph: { nodes: string[]; edges: SpatialEdge[] };
+  exterior_walls: Record<string, string[]>;
+};
 
 const WALLS = ["south", "east", "north", "west"];
 
@@ -441,8 +449,8 @@ function alignFloorplanGrid(rooms: Room[]): void {
     return map;
   };
 
-  const xMap = clusterMap(xCoords, 1.2);
-  const yMap = clusterMap(yCoords, 1.2);
+  const xMap = clusterMap(xCoords, 0.05);
+  const yMap = clusterMap(yCoords, 0.05);
 
   for (const r of rooms) {
     const [x, y, z] = r.origin || [0, 0, 0];
@@ -478,6 +486,136 @@ function roomsTouch(a: Room, b: Room): boolean {
     (Math.abs(A.y1 - B.y0) < 0.06 || Math.abs(B.y1 - A.y0) < 0.06) && xOverlap > 0.4;
 }
 
+function roomId(room: Room, index: number): string {
+  return `${index + 1}:${String(room.name || `Room ${index + 1}`)}`;
+}
+
+function sharedBoundary(a: Room, b: Room): { aWall: string; bWall: string; sharedLength: number } | null {
+  const A = roomBounds(a), B = roomBounds(b);
+  const xOverlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+  const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+  if (Math.abs(A.x1 - B.x0) < 0.06 && yOverlap > 0.4) return { aWall: "east", bWall: "west", sharedLength: Number(yOverlap.toFixed(2)) };
+  if (Math.abs(B.x1 - A.x0) < 0.06 && yOverlap > 0.4) return { aWall: "west", bWall: "east", sharedLength: Number(yOverlap.toFixed(2)) };
+  if (Math.abs(A.y1 - B.y0) < 0.06 && xOverlap > 0.4) return { aWall: "north", bWall: "south", sharedLength: Number(xOverlap.toFixed(2)) };
+  if (Math.abs(B.y1 - A.y0) < 0.06 && xOverlap > 0.4) return { aWall: "south", bWall: "north", sharedLength: Number(xOverlap.toFixed(2)) };
+  return null;
+}
+
+function buildAdjacencyGraph(rooms: Room[]): { nodes: string[]; edges: SpatialEdge[]; exteriorWalls: Map<Room, string[]> } {
+  const nodes = rooms.map(roomId);
+  const edges: SpatialEdge[] = [];
+  const internalWalls = new Map<Room, Set<string>>();
+  rooms.forEach((room) => internalWalls.set(room, new Set()));
+
+  rooms.forEach((room, index) => {
+    rooms.slice(index + 1).forEach((other, offset) => {
+      const boundary = sharedBoundary(room, other);
+      if (!boundary) return;
+      const otherIndex = index + 1 + offset;
+      internalWalls.get(room)!.add(boundary.aWall);
+      internalWalls.get(other)!.add(boundary.bWall);
+      edges.push({
+        from: roomId(room, index),
+        to: roomId(other, otherIndex),
+        from_wall: boundary.aWall,
+        to_wall: boundary.bWall,
+        shared_length: boundary.sharedLength,
+      });
+    });
+  });
+
+  const exteriorWalls = new Map<Room, string[]>();
+  for (const room of rooms) {
+    const internal = internalWalls.get(room) || new Set<string>();
+    exteriorWalls.set(room, WALLS.filter((wall) => !internal.has(wall)));
+  }
+  return { nodes, edges, exteriorWalls };
+}
+
+function roomPriority(room: Room): number {
+  const name = String(room.name || "").toLowerCase();
+  if (/corridor|hall|lobby|entry|entrance|stair|core|living|parlour|reception/.test(name)) return 0;
+  if (/kitchen|dining/.test(name)) return 1;
+  if (/bed/.test(name) && !/bath|toilet|ensuite|en-suite/.test(name)) return 2;
+  if (/bath|toilet|wc|ensuite|en-suite/.test(name)) return 3;
+  return 4;
+}
+
+function chooseAnchor(room: Room, placed: Room[]): Room {
+  const name = String(room.name || "").toLowerCase();
+  if (/ensuite|en-suite/.test(name)) {
+    const bedroomToken = name.match(/bedroom\s*\d+/)?.[0];
+    const match = placed.find((candidate) => bedroomToken && String(candidate.name || "").toLowerCase().includes(bedroomToken));
+    if (match) return match;
+  }
+  if (/kitchen|dining/.test(name)) {
+    return placed.find((candidate) => /living|parlour|reception|dining/.test(String(candidate.name || "").toLowerCase())) || placed[0];
+  }
+  if (/bath|toilet|wc/.test(name)) {
+    return placed.find((candidate) => /bed|corridor|hall|core/.test(String(candidate.name || "").toLowerCase())) || placed[0];
+  }
+  if (/bed/.test(name)) {
+    return placed.find((candidate) => /corridor|hall|living|parlour|core/.test(String(candidate.name || "").toLowerCase())) || placed[0];
+  }
+  return placed[0];
+}
+
+function preferredDirections(room: Room): string[] {
+  const name = String(room.name || "").toLowerCase();
+  if (/ensuite|en-suite|bath|toilet|wc/.test(name)) return ["east", "west", "north", "south"];
+  if (/kitchen|dining/.test(name)) return ["east", "north", "south", "west"];
+  if (/bed/.test(name)) return ["north", "west", "east", "south"];
+  return ["east", "north", "west", "south"];
+}
+
+function candidateOrigin(anchor: Room, room: Room, direction: string): number[] {
+  const A = roomBounds(anchor);
+  const w = Number(room.width || 4);
+  const l = Number(room.length || 4);
+  const z = Number(anchor.origin?.[2] || room.origin?.[2] || 0);
+  if (direction === "east") return [A.x1, A.y0, z];
+  if (direction === "west") return [A.x0 - w, A.y0, z];
+  if (direction === "north") return [A.x0, A.y1, z];
+  return [A.x0, A.y0 - l, z];
+}
+
+function roomWouldOverlap(room: Room, rooms: Room[]): boolean {
+  return rooms.some((other) => roomsOverlap(room, other));
+}
+
+function semanticPackRooms(rooms: Room[]): void {
+  if (rooms.length <= 1) return;
+  const ordered = [...rooms].sort((a, b) => roomPriority(a) - roomPriority(b));
+  const baseZ = Number(ordered[0].origin?.[2] || 0);
+  ordered[0].origin = [0, 0, baseZ];
+
+  const placed: Room[] = [ordered[0]];
+  for (const room of ordered.slice(1)) {
+    const anchor = chooseAnchor(room, placed);
+    let placedRoom = false;
+    const anchors = [anchor, ...placed.filter((candidate) => candidate !== anchor)];
+    for (const candidate of anchors) {
+      for (const direction of preferredDirections(room)) {
+        room.origin = candidateOrigin(candidate, room, direction);
+        if (!roomWouldOverlap(room, placed)) {
+          placedRoom = true;
+          break;
+        }
+      }
+      if (placedRoom) break;
+    }
+
+    if (!placedRoom) {
+      const bounds = placed.reduce((acc, item) => {
+        const b = roomBounds(item);
+        return { minX: Math.min(acc.minX, b.x0), minY: Math.min(acc.minY, b.y0), maxX: Math.max(acc.maxX, b.x1), maxY: Math.max(acc.maxY, b.y1) };
+      }, { minX: 0, minY: 0, maxX: 0, maxY: 0 });
+      room.origin = [bounds.maxX, bounds.minY, baseZ];
+    }
+    placed.push(room);
+  }
+}
+
 function layoutIsConnected(rooms: Room[]): boolean {
   if (rooms.length < 2) return true;
   const seen = new Set<number>([0]);
@@ -492,16 +630,7 @@ function layoutIsConnected(rooms: Room[]): boolean {
 }
 
 function reflowConnectedLayout(rooms: Room[]): void {
-  const rowLimit = 14;
-  let x = 0, y = 0, rowDepth = 0;
-  for (const room of rooms) {
-    const width = Number(room.width || 4), length = Number(room.length || 4);
-    if (x > 0 && x + width > rowLimit) { x = 0; y += rowDepth; rowDepth = 0; }
-    const z = Number(room.origin?.[2] || 0);
-    room.origin = [x, y, z];
-    x += width;
-    rowDepth = Math.max(rowDepth, length);
-  }
+  semanticPackRooms(rooms);
 }
 
 function validateAndRepairLayout(rooms: Room[]): { status: "PASS"; repairs: string[] } {
@@ -515,6 +644,171 @@ function validateAndRepairLayout(rooms: Room[]): { status: "PASS"; repairs: stri
     throw new Error("Spatial layout validation failed: rooms remain overlapping or disconnected after repair.");
   }
   return { status: "PASS", repairs };
+}
+
+function doorTouchesBoundary(room: Room, wall: string, rooms: Room[]): boolean {
+  return rooms.some((other) => other !== room && sharedBoundary(room, other)?.aWall === wall);
+}
+
+function ensureNonOverlappingOpenings(openings: Opening[], room: Room, defaultWidth: number): Opening[] {
+  const result: Opening[] = [];
+  for (const opening of openings) {
+    const clean = clampOpening(opening, room, defaultWidth);
+    if (!Number.isFinite(Number(clean.offset)) || !Number.isFinite(Number(clean.width))) continue;
+    if (result.some((existing) => openingsOverlap(existing, clean))) {
+      const wall = String(clean.wall || "south");
+      const width = Number(clean.width || defaultWidth);
+      const maxOffset = Math.max(0.45, wallLength(room, wall) - width - 0.45);
+      let foundOffset: number | null = null;
+      for (let offset = 0.45; offset <= maxOffset; offset += 0.25) {
+        const candidate = { ...clean, offset: Number(offset.toFixed(2)) };
+        if (!result.some((existing) => openingsOverlap(existing, candidate))) {
+          foundOffset = candidate.offset!;
+          break;
+        }
+      }
+      if (foundOffset === null) continue;
+      clean.offset = foundOffset;
+    }
+    result.push(clean);
+  }
+  return result;
+}
+
+function buildDoorConnectivity(rooms: Room[]): Set<number> {
+  const graph = buildAdjacencyGraph(rooms);
+  const connected = new Set<number>();
+  const start = rooms.findIndex((room) => /living|parlour|corridor|hall|entry|entrance|lobby|core/i.test(String(room.name || "")));
+  connected.add(start >= 0 ? start : 0);
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of graph.edges) {
+      const fromIndex = graph.nodes.indexOf(edge.from);
+      const toIndex = graph.nodes.indexOf(edge.to);
+      const fromHasDoor = rooms[fromIndex]?.doors?.some((door) => door.wall === edge.from_wall);
+      const toHasDoor = rooms[toIndex]?.doors?.some((door) => door.wall === edge.to_wall);
+      if (!fromHasDoor && !toHasDoor) continue;
+      if (connected.has(fromIndex) && !connected.has(toIndex)) { connected.add(toIndex); changed = true; }
+      if (connected.has(toIndex) && !connected.has(fromIndex)) { connected.add(fromIndex); changed = true; }
+    }
+  }
+  return connected;
+}
+
+function enforceSpatialConstraints(rooms: Room[], allowNoDoors = false, allowNoWindows = false): SpatialConstraintResult {
+  const repairs: string[] = [];
+  const issues: string[] = [];
+  alignFloorplanGrid(rooms);
+
+  if (rooms.some((room, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room, other))) || !layoutIsConnected(rooms)) {
+    semanticPackRooms(rooms);
+    alignFloorplanGrid(rooms);
+    repairs.push("Solved room placement with adjacency-aware no-overlap packing.");
+  }
+
+  let graph = buildAdjacencyGraph(rooms);
+  if (!layoutIsConnected(rooms)) {
+    issues.push("Rooms are still disconnected after constraint packing.");
+  }
+  if (rooms.some((room, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room, other)))) {
+    issues.push("Rooms still overlap after constraint packing.");
+  }
+
+  if (!allowNoDoors && rooms.length > 0) {
+    const hasExteriorDoor = rooms.some((room) =>
+      room.doors?.some((door) => graph.exteriorWalls.get(room)?.includes(String(door.wall)))
+    );
+    if (!hasExteriorDoor) {
+      const target = rooms.find((room) => /living|parlour|entry|entrance|lobby|corridor|hall|core/i.test(String(room.name || ""))) || rooms[0];
+      const exteriorWall = graph.exteriorWalls.get(target)?.[0];
+      if (exteriorWall) {
+        target.doors = target.doors || [];
+        target.doors.push(clampOpening({ wall: exteriorWall, offset: wallLength(target, exteriorWall) / 2 - 0.5, width: 1.0, height: 2.1 }, target, 1.0));
+        repairs.push(`Added exterior entrance door to ${target.name || "room"} on ${exteriorWall} wall.`);
+      }
+    }
+  }
+
+  for (const room of rooms) {
+    room.doors = ensureNonOverlappingOpenings(Array.isArray(room.doors) ? room.doors : [], room, 0.9);
+    room.windows = ensureNonOverlappingOpenings(Array.isArray(room.windows) ? room.windows : [], room, 1.2)
+      .filter((window) => graph.exteriorWalls.get(room)?.includes(String(window.wall)));
+
+    if (!allowNoDoors) {
+      const internalWall = WALLS.find((wall) => doorTouchesBoundary(room, wall, rooms));
+      const hasInternalDoor = internalWall && room.doors.some((door) => door.wall === internalWall);
+      if (internalWall && !hasInternalDoor) {
+        room.doors.push(clampOpening({ wall: internalWall, offset: wallLength(room, internalWall) / 2 - 0.45, width: 0.9, height: 2.1 }, room, 0.9));
+        repairs.push(`Added circulation door to ${room.name || "room"} on ${internalWall} wall.`);
+      }
+    }
+
+    if (!allowNoWindows && room.windows.length === 0) {
+      const exteriorWall = graph.exteriorWalls.get(room)?.[0];
+      if (exteriorWall) {
+        room.windows.push(clampOpening({ wall: exteriorWall, offset: wallLength(room, exteriorWall) / 2 - 0.6, width: 1.2, height: 1.3, sill_height: 0.9 }, room, 1.2));
+        repairs.push(`Added exterior window to ${room.name || "room"} on ${exteriorWall} wall.`);
+      }
+    }
+
+    room.doors = ensureNonOverlappingOpenings(room.doors, room, 0.9);
+    room.windows = ensureNonOverlappingOpenings(room.windows.filter((window) => !room.doors!.some((door) => openingsOverlap(window, door))), room, 1.2);
+  }
+
+  if (!allowNoDoors && rooms.length > 1) {
+    let connected = buildDoorConnectivity(rooms);
+    for (let guard = 0; connected.size < rooms.length && guard < rooms.length * 2; guard++) {
+      const targetIndex = rooms.findIndex((_, index) => !connected.has(index));
+      if (targetIndex < 0) break;
+      const edge = graph.edges.find((candidate) => {
+        const fromIndex = graph.nodes.indexOf(candidate.from);
+        const toIndex = graph.nodes.indexOf(candidate.to);
+        return (fromIndex === targetIndex && connected.has(toIndex)) || (toIndex === targetIndex && connected.has(fromIndex));
+      });
+      if (!edge) break;
+      const fromIndex = graph.nodes.indexOf(edge.from);
+      const targetWall = fromIndex === targetIndex ? edge.from_wall : edge.to_wall;
+      const room = rooms[targetIndex];
+      room.doors = room.doors || [];
+      room.doors.push(clampOpening({ wall: targetWall, offset: wallLength(room, targetWall) / 2 - 0.45, width: 0.9, height: 2.1 }, room, 0.9));
+      room.doors = ensureNonOverlappingOpenings(room.doors, room, 0.9);
+      repairs.push(`Connected ${room.name || "room"} into the door circulation graph.`);
+      connected = buildDoorConnectivity(rooms);
+    }
+    if (connected.size < rooms.length) {
+      issues.push("Door circulation graph is not fully connected.");
+    }
+  }
+
+  graph = buildAdjacencyGraph(rooms);
+  for (const room of rooms) {
+    for (const window of room.windows || []) {
+      if (!graph.exteriorWalls.get(room)?.includes(String(window.wall))) {
+        issues.push(`${room.name || "Room"} has a window on an internal wall.`);
+      }
+    }
+    for (const opening of [...(room.doors || []), ...(room.windows || [])]) {
+      if (Number(opening.offset || 0) < 0 || Number(opening.offset || 0) + Number(opening.width || 0) > wallLength(room, String(opening.wall))) {
+        issues.push(`${room.name || "Room"} has an opening that does not fit on its host wall.`);
+      }
+    }
+  }
+
+  if (issues.length) {
+    throw new Error(`Spatial constraint validation failed: ${[...new Set(issues)].join(" ")}`);
+  }
+
+  const exterior_walls: Record<string, string[]> = {};
+  rooms.forEach((room, index) => { exterior_walls[roomId(room, index)] = graph.exteriorWalls.get(room) || []; });
+  return {
+    status: "PASS",
+    repairs: [...new Set(repairs)],
+    issues: [],
+    adjacency_graph: { nodes: graph.nodes, edges: graph.edges },
+    exterior_walls,
+  };
 }
 
 function processRooms(rooms: Room[], allowNoDoors = false): void {
@@ -565,7 +859,9 @@ function repairPlan(plan: any, brief?: any): any {
   }
 
   const allowNoDoors = Boolean(plan.allow_no_doors);
+  const allowNoWindows = Boolean(plan.allow_no_windows);
   const layoutRepairs: string[] = [];
+  const constraintAudits: any[] = [];
 
   if (brief?.autonomous_design && !plan.is_edit) {
     const generated = creativeHouseProgram(Number(brief?.design_seed || Date.now()));
@@ -579,8 +875,11 @@ function repairPlan(plan: any, brief?: any): any {
     if (Array.isArray(plan.new_rooms)) {
       processRooms(plan.new_rooms, allowNoDoors);
       layoutRepairs.push(...validateAndRepairLayout(plan.new_rooms).repairs);
+      const audit = enforceSpatialConstraints(plan.new_rooms, allowNoDoors, allowNoWindows);
+      layoutRepairs.push(...audit.repairs);
+      constraintAudits.push({ scope: "new_rooms", ...audit });
     }
-    plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
+    plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
     return plan;
   }
 
@@ -632,10 +931,6 @@ function repairPlan(plan: any, brief?: any): any {
       }
     }
 
-    processRooms(rooms, allowNoDoors);
-    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
-    storey.rooms = rooms;
-
     // ONLY add exterior doors if we don't have explicit instructions to omit doors
     if (!allowNoDoors) {
       const hasExteriorDoor = rooms.some((room) => room.doors?.some((door) => !isInternalWall(room, String(door.wall), rooms)));
@@ -646,6 +941,13 @@ function repairPlan(plan: any, brief?: any): any {
         target.doors!.push(clampOpening({ wall, offset: wallLength(target, wall) / 2 - 0.5, width: 1.0, height: 2.1 }, target, 1.0));
       }
     }
+
+    processRooms(rooms, allowNoDoors);
+    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
+    const audit = enforceSpatialConstraints(rooms, allowNoDoors, allowNoWindows);
+    layoutRepairs.push(...audit.repairs);
+    constraintAudits.push({ scope: storey.name || "storey", ...audit });
+    storey.rooms = rooms;
   }
 
   plan.material_palette = plan.material_palette || {
@@ -662,7 +964,7 @@ function repairPlan(plan: any, brief?: any): any {
     minimum_storeys: plan.storey_plans.length,
     required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
   };
-  plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
+  plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
 
   return plan;
 }

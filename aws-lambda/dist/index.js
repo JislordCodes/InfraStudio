@@ -53526,8 +53526,8 @@ function alignFloorplanGrid(rooms) {
     }
     return map3;
   };
-  const xMap = clusterMap(xCoords, 1.2);
-  const yMap = clusterMap(yCoords, 1.2);
+  const xMap = clusterMap(xCoords, 0.05);
+  const yMap = clusterMap(yCoords, 0.05);
   for (const r5 of rooms) {
     const [x, y, z] = r5.origin || [0, 0, 0];
     const w = Number(r5.width || 4);
@@ -53555,6 +53555,123 @@ function roomsTouch(a5, b5) {
   const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
   return (Math.abs(A.x1 - B.x0) < 0.06 || Math.abs(B.x1 - A.x0) < 0.06) && yOverlap > 0.4 || (Math.abs(A.y1 - B.y0) < 0.06 || Math.abs(B.y1 - A.y0) < 0.06) && xOverlap > 0.4;
 }
+function roomId(room2, index) {
+  return `${index + 1}:${String(room2.name || `Room ${index + 1}`)}`;
+}
+function sharedBoundary(a5, b5) {
+  const A = roomBounds(a5), B = roomBounds(b5);
+  const xOverlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+  const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+  if (Math.abs(A.x1 - B.x0) < 0.06 && yOverlap > 0.4) return { aWall: "east", bWall: "west", sharedLength: Number(yOverlap.toFixed(2)) };
+  if (Math.abs(B.x1 - A.x0) < 0.06 && yOverlap > 0.4) return { aWall: "west", bWall: "east", sharedLength: Number(yOverlap.toFixed(2)) };
+  if (Math.abs(A.y1 - B.y0) < 0.06 && xOverlap > 0.4) return { aWall: "north", bWall: "south", sharedLength: Number(xOverlap.toFixed(2)) };
+  if (Math.abs(B.y1 - A.y0) < 0.06 && xOverlap > 0.4) return { aWall: "south", bWall: "north", sharedLength: Number(xOverlap.toFixed(2)) };
+  return null;
+}
+function buildAdjacencyGraph(rooms) {
+  const nodes5 = rooms.map(roomId);
+  const edges = [];
+  const internalWalls = /* @__PURE__ */ new Map();
+  rooms.forEach((room2) => internalWalls.set(room2, /* @__PURE__ */ new Set()));
+  rooms.forEach((room2, index) => {
+    rooms.slice(index + 1).forEach((other, offset) => {
+      const boundary = sharedBoundary(room2, other);
+      if (!boundary) return;
+      const otherIndex = index + 1 + offset;
+      internalWalls.get(room2).add(boundary.aWall);
+      internalWalls.get(other).add(boundary.bWall);
+      edges.push({
+        from: roomId(room2, index),
+        to: roomId(other, otherIndex),
+        from_wall: boundary.aWall,
+        to_wall: boundary.bWall,
+        shared_length: boundary.sharedLength
+      });
+    });
+  });
+  const exteriorWalls = /* @__PURE__ */ new Map();
+  for (const room2 of rooms) {
+    const internal = internalWalls.get(room2) || /* @__PURE__ */ new Set();
+    exteriorWalls.set(room2, WALLS.filter((wall) => !internal.has(wall)));
+  }
+  return { nodes: nodes5, edges, exteriorWalls };
+}
+function roomPriority(room2) {
+  const name = String(room2.name || "").toLowerCase();
+  if (/corridor|hall|lobby|entry|entrance|stair|core|living|parlour|reception/.test(name)) return 0;
+  if (/kitchen|dining/.test(name)) return 1;
+  if (/bed/.test(name) && !/bath|toilet|ensuite|en-suite/.test(name)) return 2;
+  if (/bath|toilet|wc|ensuite|en-suite/.test(name)) return 3;
+  return 4;
+}
+function chooseAnchor(room2, placed) {
+  const name = String(room2.name || "").toLowerCase();
+  if (/ensuite|en-suite/.test(name)) {
+    const bedroomToken = name.match(/bedroom\s*\d+/)?.[0];
+    const match = placed.find((candidate) => bedroomToken && String(candidate.name || "").toLowerCase().includes(bedroomToken));
+    if (match) return match;
+  }
+  if (/kitchen|dining/.test(name)) {
+    return placed.find((candidate) => /living|parlour|reception|dining/.test(String(candidate.name || "").toLowerCase())) || placed[0];
+  }
+  if (/bath|toilet|wc/.test(name)) {
+    return placed.find((candidate) => /bed|corridor|hall|core/.test(String(candidate.name || "").toLowerCase())) || placed[0];
+  }
+  if (/bed/.test(name)) {
+    return placed.find((candidate) => /corridor|hall|living|parlour|core/.test(String(candidate.name || "").toLowerCase())) || placed[0];
+  }
+  return placed[0];
+}
+function preferredDirections(room2) {
+  const name = String(room2.name || "").toLowerCase();
+  if (/ensuite|en-suite|bath|toilet|wc/.test(name)) return ["east", "west", "north", "south"];
+  if (/kitchen|dining/.test(name)) return ["east", "north", "south", "west"];
+  if (/bed/.test(name)) return ["north", "west", "east", "south"];
+  return ["east", "north", "west", "south"];
+}
+function candidateOrigin(anchor, room2, direction) {
+  const A = roomBounds(anchor);
+  const w = Number(room2.width || 4);
+  const l3 = Number(room2.length || 4);
+  const z = Number(anchor.origin?.[2] || room2.origin?.[2] || 0);
+  if (direction === "east") return [A.x1, A.y0, z];
+  if (direction === "west") return [A.x0 - w, A.y0, z];
+  if (direction === "north") return [A.x0, A.y1, z];
+  return [A.x0, A.y0 - l3, z];
+}
+function roomWouldOverlap(room2, rooms) {
+  return rooms.some((other) => roomsOverlap(room2, other));
+}
+function semanticPackRooms(rooms) {
+  if (rooms.length <= 1) return;
+  const ordered = [...rooms].sort((a5, b5) => roomPriority(a5) - roomPriority(b5));
+  const baseZ = Number(ordered[0].origin?.[2] || 0);
+  ordered[0].origin = [0, 0, baseZ];
+  const placed = [ordered[0]];
+  for (const room2 of ordered.slice(1)) {
+    const anchor = chooseAnchor(room2, placed);
+    let placedRoom = false;
+    const anchors = [anchor, ...placed.filter((candidate) => candidate !== anchor)];
+    for (const candidate of anchors) {
+      for (const direction of preferredDirections(room2)) {
+        room2.origin = candidateOrigin(candidate, room2, direction);
+        if (!roomWouldOverlap(room2, placed)) {
+          placedRoom = true;
+          break;
+        }
+      }
+      if (placedRoom) break;
+    }
+    if (!placedRoom) {
+      const bounds = placed.reduce((acc, item) => {
+        const b5 = roomBounds(item);
+        return { minX: Math.min(acc.minX, b5.x0), minY: Math.min(acc.minY, b5.y0), maxX: Math.max(acc.maxX, b5.x1), maxY: Math.max(acc.maxY, b5.y1) };
+      }, { minX: 0, minY: 0, maxX: 0, maxY: 0 });
+      room2.origin = [bounds.maxX, bounds.minY, baseZ];
+    }
+    placed.push(room2);
+  }
+}
 function layoutIsConnected(rooms) {
   if (rooms.length < 2) return true;
   const seen = /* @__PURE__ */ new Set([0]);
@@ -53571,20 +53688,7 @@ function layoutIsConnected(rooms) {
   return seen.size === rooms.length;
 }
 function reflowConnectedLayout(rooms) {
-  const rowLimit = 14;
-  let x = 0, y = 0, rowDepth = 0;
-  for (const room2 of rooms) {
-    const width = Number(room2.width || 4), length = Number(room2.length || 4);
-    if (x > 0 && x + width > rowLimit) {
-      x = 0;
-      y += rowDepth;
-      rowDepth = 0;
-    }
-    const z = Number(room2.origin?.[2] || 0);
-    room2.origin = [x, y, z];
-    x += width;
-    rowDepth = Math.max(rowDepth, length);
-  }
+  semanticPackRooms(rooms);
 }
 function validateAndRepairLayout(rooms) {
   const repairs = [];
@@ -53597,6 +53701,162 @@ function validateAndRepairLayout(rooms) {
     throw new Error("Spatial layout validation failed: rooms remain overlapping or disconnected after repair.");
   }
   return { status: "PASS", repairs };
+}
+function doorTouchesBoundary(room2, wall, rooms) {
+  return rooms.some((other) => other !== room2 && sharedBoundary(room2, other)?.aWall === wall);
+}
+function ensureNonOverlappingOpenings(openings, room2, defaultWidth) {
+  const result = [];
+  for (const opening of openings) {
+    const clean = clampOpening(opening, room2, defaultWidth);
+    if (!Number.isFinite(Number(clean.offset)) || !Number.isFinite(Number(clean.width))) continue;
+    if (result.some((existing) => openingsOverlap(existing, clean))) {
+      const wall = String(clean.wall || "south");
+      const width = Number(clean.width || defaultWidth);
+      const maxOffset = Math.max(0.45, wallLength(room2, wall) - width - 0.45);
+      let foundOffset = null;
+      for (let offset = 0.45; offset <= maxOffset; offset += 0.25) {
+        const candidate = { ...clean, offset: Number(offset.toFixed(2)) };
+        if (!result.some((existing) => openingsOverlap(existing, candidate))) {
+          foundOffset = candidate.offset;
+          break;
+        }
+      }
+      if (foundOffset === null) continue;
+      clean.offset = foundOffset;
+    }
+    result.push(clean);
+  }
+  return result;
+}
+function buildDoorConnectivity(rooms) {
+  const graph = buildAdjacencyGraph(rooms);
+  const connected = /* @__PURE__ */ new Set();
+  const start = rooms.findIndex((room2) => /living|parlour|corridor|hall|entry|entrance|lobby|core/i.test(String(room2.name || "")));
+  connected.add(start >= 0 ? start : 0);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of graph.edges) {
+      const fromIndex = graph.nodes.indexOf(edge.from);
+      const toIndex = graph.nodes.indexOf(edge.to);
+      const fromHasDoor = rooms[fromIndex]?.doors?.some((door) => door.wall === edge.from_wall);
+      const toHasDoor = rooms[toIndex]?.doors?.some((door) => door.wall === edge.to_wall);
+      if (!fromHasDoor && !toHasDoor) continue;
+      if (connected.has(fromIndex) && !connected.has(toIndex)) {
+        connected.add(toIndex);
+        changed = true;
+      }
+      if (connected.has(toIndex) && !connected.has(fromIndex)) {
+        connected.add(fromIndex);
+        changed = true;
+      }
+    }
+  }
+  return connected;
+}
+function enforceSpatialConstraints(rooms, allowNoDoors = false, allowNoWindows = false) {
+  const repairs = [];
+  const issues = [];
+  alignFloorplanGrid(rooms);
+  if (rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other))) || !layoutIsConnected(rooms)) {
+    semanticPackRooms(rooms);
+    alignFloorplanGrid(rooms);
+    repairs.push("Solved room placement with adjacency-aware no-overlap packing.");
+  }
+  let graph = buildAdjacencyGraph(rooms);
+  if (!layoutIsConnected(rooms)) {
+    issues.push("Rooms are still disconnected after constraint packing.");
+  }
+  if (rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other)))) {
+    issues.push("Rooms still overlap after constraint packing.");
+  }
+  if (!allowNoDoors && rooms.length > 0) {
+    const hasExteriorDoor = rooms.some(
+      (room2) => room2.doors?.some((door) => graph.exteriorWalls.get(room2)?.includes(String(door.wall)))
+    );
+    if (!hasExteriorDoor) {
+      const target = rooms.find((room2) => /living|parlour|entry|entrance|lobby|corridor|hall|core/i.test(String(room2.name || ""))) || rooms[0];
+      const exteriorWall = graph.exteriorWalls.get(target)?.[0];
+      if (exteriorWall) {
+        target.doors = target.doors || [];
+        target.doors.push(clampOpening({ wall: exteriorWall, offset: wallLength(target, exteriorWall) / 2 - 0.5, width: 1, height: 2.1 }, target, 1));
+        repairs.push(`Added exterior entrance door to ${target.name || "room"} on ${exteriorWall} wall.`);
+      }
+    }
+  }
+  for (const room2 of rooms) {
+    room2.doors = ensureNonOverlappingOpenings(Array.isArray(room2.doors) ? room2.doors : [], room2, 0.9);
+    room2.windows = ensureNonOverlappingOpenings(Array.isArray(room2.windows) ? room2.windows : [], room2, 1.2).filter((window2) => graph.exteriorWalls.get(room2)?.includes(String(window2.wall)));
+    if (!allowNoDoors) {
+      const internalWall = WALLS.find((wall) => doorTouchesBoundary(room2, wall, rooms));
+      const hasInternalDoor = internalWall && room2.doors.some((door) => door.wall === internalWall);
+      if (internalWall && !hasInternalDoor) {
+        room2.doors.push(clampOpening({ wall: internalWall, offset: wallLength(room2, internalWall) / 2 - 0.45, width: 0.9, height: 2.1 }, room2, 0.9));
+        repairs.push(`Added circulation door to ${room2.name || "room"} on ${internalWall} wall.`);
+      }
+    }
+    if (!allowNoWindows && room2.windows.length === 0) {
+      const exteriorWall = graph.exteriorWalls.get(room2)?.[0];
+      if (exteriorWall) {
+        room2.windows.push(clampOpening({ wall: exteriorWall, offset: wallLength(room2, exteriorWall) / 2 - 0.6, width: 1.2, height: 1.3, sill_height: 0.9 }, room2, 1.2));
+        repairs.push(`Added exterior window to ${room2.name || "room"} on ${exteriorWall} wall.`);
+      }
+    }
+    room2.doors = ensureNonOverlappingOpenings(room2.doors, room2, 0.9);
+    room2.windows = ensureNonOverlappingOpenings(room2.windows.filter((window2) => !room2.doors.some((door) => openingsOverlap(window2, door))), room2, 1.2);
+  }
+  if (!allowNoDoors && rooms.length > 1) {
+    let connected = buildDoorConnectivity(rooms);
+    for (let guard = 0; connected.size < rooms.length && guard < rooms.length * 2; guard++) {
+      const targetIndex = rooms.findIndex((_, index) => !connected.has(index));
+      if (targetIndex < 0) break;
+      const edge = graph.edges.find((candidate) => {
+        const fromIndex2 = graph.nodes.indexOf(candidate.from);
+        const toIndex = graph.nodes.indexOf(candidate.to);
+        return fromIndex2 === targetIndex && connected.has(toIndex) || toIndex === targetIndex && connected.has(fromIndex2);
+      });
+      if (!edge) break;
+      const fromIndex = graph.nodes.indexOf(edge.from);
+      const targetWall = fromIndex === targetIndex ? edge.from_wall : edge.to_wall;
+      const room2 = rooms[targetIndex];
+      room2.doors = room2.doors || [];
+      room2.doors.push(clampOpening({ wall: targetWall, offset: wallLength(room2, targetWall) / 2 - 0.45, width: 0.9, height: 2.1 }, room2, 0.9));
+      room2.doors = ensureNonOverlappingOpenings(room2.doors, room2, 0.9);
+      repairs.push(`Connected ${room2.name || "room"} into the door circulation graph.`);
+      connected = buildDoorConnectivity(rooms);
+    }
+    if (connected.size < rooms.length) {
+      issues.push("Door circulation graph is not fully connected.");
+    }
+  }
+  graph = buildAdjacencyGraph(rooms);
+  for (const room2 of rooms) {
+    for (const window2 of room2.windows || []) {
+      if (!graph.exteriorWalls.get(room2)?.includes(String(window2.wall))) {
+        issues.push(`${room2.name || "Room"} has a window on an internal wall.`);
+      }
+    }
+    for (const opening of [...room2.doors || [], ...room2.windows || []]) {
+      if (Number(opening.offset || 0) < 0 || Number(opening.offset || 0) + Number(opening.width || 0) > wallLength(room2, String(opening.wall))) {
+        issues.push(`${room2.name || "Room"} has an opening that does not fit on its host wall.`);
+      }
+    }
+  }
+  if (issues.length) {
+    throw new Error(`Spatial constraint validation failed: ${[...new Set(issues)].join(" ")}`);
+  }
+  const exterior_walls = {};
+  rooms.forEach((room2, index) => {
+    exterior_walls[roomId(room2, index)] = graph.exteriorWalls.get(room2) || [];
+  });
+  return {
+    status: "PASS",
+    repairs: [...new Set(repairs)],
+    issues: [],
+    adjacency_graph: { nodes: graph.nodes, edges: graph.edges },
+    exterior_walls
+  };
 }
 function processRooms(rooms, allowNoDoors = false) {
   alignFloorplanGrid(rooms);
@@ -53636,7 +53896,9 @@ function repairPlan(plan, brief) {
     }
   }
   const allowNoDoors = Boolean(plan.allow_no_doors);
+  const allowNoWindows = Boolean(plan.allow_no_windows);
   const layoutRepairs = [];
+  const constraintAudits = [];
   if (brief?.autonomous_design && !plan.is_edit) {
     const generated = creativeHouseProgram(Number(brief?.design_seed || Date.now()));
     plan.storey_plans = generated.storeys;
@@ -53648,8 +53910,11 @@ function repairPlan(plan, brief) {
     if (Array.isArray(plan.new_rooms)) {
       processRooms(plan.new_rooms, allowNoDoors);
       layoutRepairs.push(...validateAndRepairLayout(plan.new_rooms).repairs);
+      const audit = enforceSpatialConstraints(plan.new_rooms, allowNoDoors, allowNoWindows);
+      layoutRepairs.push(...audit.repairs);
+      constraintAudits.push({ scope: "new_rooms", ...audit });
     }
-    plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
+    plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
     return plan;
   }
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
@@ -53689,9 +53954,6 @@ function repairPlan(plan, brief) {
         curX += side;
       }
     }
-    processRooms(rooms, allowNoDoors);
-    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
-    storey.rooms = rooms;
     if (!allowNoDoors) {
       const hasExteriorDoor = rooms.some((room2) => room2.doors?.some((door) => !isInternalWall(room2, String(door.wall), rooms)));
       if (!hasExteriorDoor && rooms.length > 0) {
@@ -53701,6 +53963,12 @@ function repairPlan(plan, brief) {
         target.doors.push(clampOpening({ wall, offset: wallLength(target, wall) / 2 - 0.5, width: 1, height: 2.1 }, target, 1));
       }
     }
+    processRooms(rooms, allowNoDoors);
+    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
+    const audit = enforceSpatialConstraints(rooms, allowNoDoors, allowNoWindows);
+    layoutRepairs.push(...audit.repairs);
+    constraintAudits.push({ scope: storey.name || "storey", ...audit });
+    storey.rooms = rooms;
   }
   plan.material_palette = plan.material_palette || {
     wall: "painted plaster over blockwork",
@@ -53715,7 +53983,7 @@ function repairPlan(plan, brief) {
     minimum_storeys: plan.storey_plans.length,
     required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
   };
-  plan.layout_validation = { status: "PASS", repairs: layoutRepairs };
+  plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
   return plan;
 }
 async function handleArchitect(brief) {
