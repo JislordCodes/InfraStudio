@@ -25286,8 +25286,8 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
           // Qwen3.8 Max is a thinking model; DashScope documents 0.6 as its
           // minimum temperature and xhigh as the maximum reasoning effort.
           temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
-          reasoning_effort: targetModel === "qwen3.8-max" ? "xhigh" : void 0,
-          max_tokens: 8192,
+          reasoning_effort: targetModel === "qwen3.8-max" ? "high" : void 0,
+          max_tokens: 4096,
           response_format: jsonMode ? { type: "json_object" } : void 0
         })
       });
@@ -25332,8 +25332,8 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "qwen3.8-max")
           messages: msgs,
           tools: tools && tools.length > 0 ? tools : void 0,
           temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
-          reasoning_effort: targetModel === "qwen3.8-max" ? "xhigh" : void 0,
-          max_tokens: 8192
+          reasoning_effort: targetModel === "qwen3.8-max" ? "high" : void 0,
+          max_tokens: 4096
         })
       });
       if (res.ok) {
