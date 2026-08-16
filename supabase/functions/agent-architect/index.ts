@@ -244,23 +244,57 @@ function apartmentUnitProgram(brief: any): any[] {
   const textBedroomMatch = text.match(/\b(\d+)\s*(?:bed|bedroom)\b/);
   const wordBedroomCount = /\bthree\s*(?:bed|bedroom)/.test(text) ? 3 : /\btwo\s*(?:bed|bedroom)/.test(text) ? 2 : /\bone\s*(?:bed|bedroom)/.test(text) ? 1 : 0;
   const bedrooms = Math.max(1, Math.min(6, Number(textBedroomMatch?.[1] || 0) || wordBedroomCount || numberedBedrooms.size || explicitBedroomRooms || 1));
-  const rooms: Room[] = [
-    room("Parlour / Living Room", 6, 5, 0, 0, 0),
-    room("Kitchen", 3, 5, 6, 0, 0)
-  ];
-  for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
-    const y = 5 + bedroom * 4;
-    rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
-    rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
+  const variant = Math.abs(Number(brief?.design_seed || Date.now())) % 4;
+  const rooms: Room[] = [];
+
+  if (variant === 0) {
+    rooms.push(room("Parlour / Living Room", 6, 5, 0, 0, 0), room("Kitchen", 3, 5, 6, 0, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      const y = 5 + bedroom * 4;
+      rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
+      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
+    }
+  } else if (variant === 1) {
+    rooms.push(room("Parlour / Living Room", 5.8, 4.8, 3.2, 0, 0), room("Kitchen", 3.4, 3.6, 9, 0, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      if (bedroom % 2 === 0) {
+        const y = 4.8 + Math.floor(bedroom / 2) * 4.2;
+        rooms.push(room(`Bedroom ${bedroom + 1}`, 4.4, 4.2, 3.2, y, 0));
+        rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.4, 2.2, 7.6, y, 0));
+      } else {
+        const y = 0 + Math.floor(bedroom / 2) * 4.2;
+        rooms.push(room(`Bedroom ${bedroom + 1}`, 4.2, 4.2, -1.0, y, 0));
+        rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.2, 2.2, -3.2, y, 0));
+      }
+    }
+  } else if (variant === 2) {
+    rooms.push(room("Entry Hall", 3.2, 3.2, 0, 0, 0), room("Parlour / Living Room", 6.2, 4.6, 3.2, 0, 0), room("Kitchen", 3.4, 4.6, 9.4, 0, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      const x = bedroom % 2 === 0 ? 0 : 5.2;
+      const y = 3.2 + Math.floor(bedroom / 2) * 6.4;
+      rooms.push(room(`Bedroom ${bedroom + 1}`, 5.2, 4.2, x, y, 0));
+      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.6, 2.2, x + 2.6, y + 4.2, 0));
+    }
+  } else {
+    rooms.push(room("Parlour / Living Room", 5.4, 5.2, 0, 0, 0), room("Kitchen", 3.8, 3.2, 5.4, 0, 0), room("Dining Nook", 3.8, 2.0, 5.4, 3.2, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      const y = bedroom === 0 ? 5.2 : 5.2 + (bedroom - 1) * 4.1;
+      const x = bedroom === 0 ? 0 : 4.6;
+      rooms.push(room(`Bedroom ${bedroom + 1}`, 4.6, 4.1, x, y, 0));
+      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.3, 2.1, x + 4.6, y, 0));
+    }
   }
+
   // Provide actual external windows. build_room only creates openings supplied
   // in the plan, so relying on the model to remember them caused failed reviews.
-  rooms[0].windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
-  rooms[1].windows = [{ wall: "east", offset: 1.8, width: 1.2, height: 1.2, sill_height: 1.0 }];
+  const living = rooms.find((item) => /living|parlour/.test(String(item.name).toLowerCase())) || rooms[0];
+  const kitchen = rooms.find((item) => /kitchen/.test(String(item.name).toLowerCase())) || rooms[1];
+  if (living) living.windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
+  if (kitchen) kitchen.windows = [{ wall: "east", offset: 1.2, width: 1.2, height: 1.2, sill_height: 1.0 }];
   rooms.filter((item) => /^Bedroom \d+$/.test(String(item.name))).forEach((item) => {
     item.windows = [{ wall: "west", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9 }];
   });
-  return [{ name: "Ground Floor Apartment", elevation: 0, height: 3.2, rooms }];
+  return [{ name: `Ground Floor Apartment Variant ${variant + 1}`, elevation: 0, height: 3.2, rooms }];
 }
 
 function creativeHouseProgram(seed: number): { storeys: any[]; footprint: number[][]; roof: string } {
@@ -903,9 +937,13 @@ function repairPlan(plan: any, brief?: any): any {
 
   const expectedRooms = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
   const proposedRooms = plan.storey_plans.reduce((total: number, storey: any) => total + (Array.isArray(storey.rooms) ? storey.rooms.length : 0), 0);
-  // Multi-unit requests must never degrade into a one-room model, even when a
-  // model response was syntactically valid but semantically incomplete.
-  if ((/apartment|residential block|multi.?family|flats?/.test(requestedText(brief)) && proposedRooms < 10) ||
+  const text = requestedText(brief);
+  const isMultiUnit = /residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text);
+  const isApartmentUnit = /apartment/.test(text) && !isMultiUnit;
+  // Multi-unit buildings need a larger programme, but a single apartment must
+  // not be forced into the same fixed high-room-count template every time.
+  if ((isMultiUnit && proposedRooms < 10) ||
+      (isApartmentUnit && proposedRooms < Math.max(3, expectedRooms || 0)) ||
       (expectedRooms > 0 && proposedRooms < expectedRooms)) {
     plan.storey_plans = minimumBuildingPlan(brief);
   }

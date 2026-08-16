@@ -724,6 +724,9 @@ Your sole job is to call real MCP tools to perform the requested edit or creatio
 
 Rules for Edits:
  0. If "review_required" is true, resolve EVERY review issue before making optional design changes. Use the supplied GlobalIds and semantic tools; do not create generic proxy geometry as a workaround.
+    - For every item in review_issues/fix_recommendations, make at least one concrete mutation tool call that directly addresses it.
+    - If elements are missing, create semantic replacements (build_room, create_wall, create_slab, create_door, create_window, create_roof, create_trimesh_ifc with a real IFC class), then rely on re-review.
+    - If geometry clashes are reported, inspect bounding boxes from Current IFC Scene State and move, resize, or delete the conflicting element by GlobalId.
  1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
  2. To MODIFY or RESIZE an existing element:
     - For doors: Call update_door(guid, width, height, offset, etc.)
@@ -803,6 +806,9 @@ ${overviewRes?.resultText || "Unavailable"}`;
 
         if (!executedMutation) {
           console.warn("[dynamic_edit] No mutation tool was executed during this edit step.");
+          if (plan?.review_required) {
+            throw new Error("Review remediation produced no mutation tool calls.");
+          }
         }
         break;
       } catch (err: any) {

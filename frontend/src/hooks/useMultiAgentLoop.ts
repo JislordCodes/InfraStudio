@@ -336,8 +336,9 @@ export async function runMultiAgentLoop(
     // 4. Quality Reviewer
     pushStep("Reviewer Agent: Validating model quality...");
     let review = await callEdge('agent-reviewer', { mcpSessionId: sessionId, qualityRequirements: plan.quality_requirements, structureCategory });
-    if (review.status !== 'PASS' && review.retry_required) {
-      pushStep('Reviewer Agent: Applying the required quality corrections...');
+    const maxQualityPasses = 3;
+    for (let qualityPass = 1; review.status !== 'PASS' && review.retry_required && qualityPass <= maxQualityPasses; qualityPass++) {
+      pushStep(`Reviewer Agent: Applying quality corrections (${qualityPass}/${maxQualityPasses})...`);
       const remediation = await callEdge('agent-bim', {
         action: 'dynamic_edit',
         mcpSessionId: sessionId,
@@ -345,6 +346,7 @@ export async function runMultiAgentLoop(
           ...plan,
           review_required: true,
           review_issues: review.issues || [],
+          quality_pass: qualityPass,
           target_actions: (review.fix_recommendations || []).map((instruction: string) => ({ action: 'quality_remediation', target: 'model', parameters: { instruction } }))
         }
       });

@@ -53043,6 +53043,15 @@ Expected JSON Schema:
   "clarifying_question": "string",
   "confidence_score": number
 }`;
+function designSeedFrom(text, sessionId = "") {
+  const source = `${text}|${sessionId}|${Date.now()}`;
+  let hash = 2166136261;
+  for (let i5 = 0; i5 < source.length; i5++) {
+    hash ^= source.charCodeAt(i5);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
 async function handleInterpreter(payload2) {
   const messages = payload2.messages || [];
   const hasHistory = Array.isArray(messages) ? messages.slice(0, -1).some((message) => message?.role === "user" || message?.role === "assistant") : false;
@@ -53087,6 +53096,9 @@ Task: Parse the LATEST user message in context of conversation history. If the u
   }
   if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
     result.needs_clarification = false;
+  }
+  if (!result.is_edit && !result.design_seed) {
+    result.design_seed = designSeedFrom(String(latestText), String(payload2.sessionId || ""));
   }
   return result;
 }
@@ -53335,21 +53347,53 @@ function apartmentUnitProgram(brief) {
   const textBedroomMatch = text.match(/\b(\d+)\s*(?:bed|bedroom)\b/);
   const wordBedroomCount = /\bthree\s*(?:bed|bedroom)/.test(text) ? 3 : /\btwo\s*(?:bed|bedroom)/.test(text) ? 2 : /\bone\s*(?:bed|bedroom)/.test(text) ? 1 : 0;
   const bedrooms = Math.max(1, Math.min(6, Number(textBedroomMatch?.[1] || 0) || wordBedroomCount || numberedBedrooms.size || explicitBedroomRooms || 1));
-  const rooms = [
-    room("Parlour / Living Room", 6, 5, 0, 0, 0),
-    room("Kitchen", 3, 5, 6, 0, 0)
-  ];
-  for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
-    const y = 5 + bedroom * 4;
-    rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
-    rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
+  const variant = Math.abs(Number(brief?.design_seed || Date.now())) % 4;
+  const rooms = [];
+  if (variant === 0) {
+    rooms.push(room("Parlour / Living Room", 6, 5, 0, 0, 0), room("Kitchen", 3, 5, 6, 0, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      const y = 5 + bedroom * 4;
+      rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
+      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
+    }
+  } else if (variant === 1) {
+    rooms.push(room("Parlour / Living Room", 5.8, 4.8, 3.2, 0, 0), room("Kitchen", 3.4, 3.6, 9, 0, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      if (bedroom % 2 === 0) {
+        const y = 4.8 + Math.floor(bedroom / 2) * 4.2;
+        rooms.push(room(`Bedroom ${bedroom + 1}`, 4.4, 4.2, 3.2, y, 0));
+        rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.4, 2.2, 7.6, y, 0));
+      } else {
+        const y = 0 + Math.floor(bedroom / 2) * 4.2;
+        rooms.push(room(`Bedroom ${bedroom + 1}`, 4.2, 4.2, -1, y, 0));
+        rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.2, 2.2, -3.2, y, 0));
+      }
+    }
+  } else if (variant === 2) {
+    rooms.push(room("Entry Hall", 3.2, 3.2, 0, 0, 0), room("Parlour / Living Room", 6.2, 4.6, 3.2, 0, 0), room("Kitchen", 3.4, 4.6, 9.4, 0, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      const x = bedroom % 2 === 0 ? 0 : 5.2;
+      const y = 3.2 + Math.floor(bedroom / 2) * 6.4;
+      rooms.push(room(`Bedroom ${bedroom + 1}`, 5.2, 4.2, x, y, 0));
+      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.6, 2.2, x + 2.6, y + 4.2, 0));
+    }
+  } else {
+    rooms.push(room("Parlour / Living Room", 5.4, 5.2, 0, 0, 0), room("Kitchen", 3.8, 3.2, 5.4, 0, 0), room("Dining Nook", 3.8, 2, 5.4, 3.2, 0));
+    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
+      const y = bedroom === 0 ? 5.2 : 5.2 + (bedroom - 1) * 4.1;
+      const x = bedroom === 0 ? 0 : 4.6;
+      rooms.push(room(`Bedroom ${bedroom + 1}`, 4.6, 4.1, x, y, 0));
+      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.3, 2.1, x + 4.6, y, 0));
+    }
   }
-  rooms[0].windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
-  rooms[1].windows = [{ wall: "east", offset: 1.8, width: 1.2, height: 1.2, sill_height: 1 }];
+  const living = rooms.find((item) => /living|parlour/.test(String(item.name).toLowerCase())) || rooms[0];
+  const kitchen = rooms.find((item) => /kitchen/.test(String(item.name).toLowerCase())) || rooms[1];
+  if (living) living.windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
+  if (kitchen) kitchen.windows = [{ wall: "east", offset: 1.2, width: 1.2, height: 1.2, sill_height: 1 }];
   rooms.filter((item) => /^Bedroom \d+$/.test(String(item.name))).forEach((item) => {
     item.windows = [{ wall: "west", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9 }];
   });
-  return [{ name: "Ground Floor Apartment", elevation: 0, height: 3.2, rooms }];
+  return [{ name: `Ground Floor Apartment Variant ${variant + 1}`, elevation: 0, height: 3.2, rooms }];
 }
 function creativeHouseProgram(seed) {
   const variant = Math.abs(seed) % 3;
@@ -53934,7 +53978,10 @@ function repairPlan(plan, brief) {
   }
   const expectedRooms = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
   const proposedRooms = plan.storey_plans.reduce((total, storey) => total + (Array.isArray(storey.rooms) ? storey.rooms.length : 0), 0);
-  if (/apartment|residential block|multi.?family|flats?/.test(requestedText(brief)) && proposedRooms < 10 || expectedRooms > 0 && proposedRooms < expectedRooms) {
+  const text = requestedText(brief);
+  const isMultiUnit = /residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text);
+  const isApartmentUnit = /apartment/.test(text) && !isMultiUnit;
+  if (isMultiUnit && proposedRooms < 10 || isApartmentUnit && proposedRooms < Math.max(3, expectedRooms || 0) || expectedRooms > 0 && proposedRooms < expectedRooms) {
     plan.storey_plans = minimumBuildingPlan(brief);
   }
   for (const storey of plan.storey_plans) {
@@ -54813,6 +54860,9 @@ Your sole job is to call real MCP tools to perform the requested edit or creatio
 
 Rules for Edits:
  0. If "review_required" is true, resolve EVERY review issue before making optional design changes. Use the supplied GlobalIds and semantic tools; do not create generic proxy geometry as a workaround.
+    - For every item in review_issues/fix_recommendations, make at least one concrete mutation tool call that directly addresses it.
+    - If elements are missing, create semantic replacements (build_room, create_wall, create_slab, create_door, create_window, create_roof, create_trimesh_ifc with a real IFC class), then rely on re-review.
+    - If geometry clashes are reported, inspect bounding boxes from Current IFC Scene State and move, resize, or delete the conflicting element by GlobalId.
  1. Look at "Current IFC Scene State" and "IFC Overview" to find target GlobalId (GUID) values for existing walls, slabs, storeys, or elements. Never invent fake GUIDs.
  2. To MODIFY or RESIZE an existing element:
     - For doors: Call update_door(guid, width, height, offset, etc.)
@@ -54889,6 +54939,9 @@ Retry with concrete mutation tool calls.`;
         }
         if (!executedMutation) {
           console.warn("[dynamic_edit] No mutation tool was executed during this edit step.");
+          if (plan?.review_required) {
+            throw new Error("Review remediation produced no mutation tool calls.");
+          }
         }
         break;
       } catch (err) {

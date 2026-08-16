@@ -39,6 +39,16 @@ Expected JSON Schema:
   "confidence_score": number
 }`;
 
+function designSeedFrom(text: string, sessionId = ""): number {
+  const source = `${text}|${sessionId}|${Date.now()}`;
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
 export async function handleInterpreter(payload: any): Promise<any> {
   const messages = payload.messages || [];
   // A transport/MCP session ID exists before the first model is created.  It
@@ -102,6 +112,10 @@ export async function handleInterpreter(payload: any): Promise<any> {
   // to generate a useful baseline; never let an LLM ask a redundant question.
   if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
     result.needs_clarification = false;
+  }
+
+  if (!result.is_edit && !result.design_seed) {
+    result.design_seed = designSeedFrom(String(latestText), String(payload.sessionId || ""));
   }
 
   return result;
