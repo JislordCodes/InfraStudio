@@ -54049,31 +54049,58 @@ async function handleArchitect(brief) {
   const category = brief.structure_category || "building";
   const isBuilding = category === "building";
   const prompt = isBuilding ? systemPrompt2 : infrastructurePrompt;
+  const fallbackPlan = (reason) => {
+    const modelFailure = String(reason instanceof Error ? reason.message : reason).slice(0, 280);
+    if (isBuilding) {
+      return repairPlan({
+        is_edit: false,
+        generation_source: "constraint_program_fallback",
+        model_status: "qwen_unavailable",
+        model_failure: modelFailure,
+        roof_type: "flat",
+        has_stairs: false,
+        structural_notes: ["Generated from the validated spatial programme after the AI planner was unavailable."],
+        storey_plans: minimumBuildingPlan(brief)
+      }, brief);
+    }
+    return ensureInfrastructurePlan({
+      structure_category: category,
+      is_edit: false,
+      generation_source: "constraint_program_fallback",
+      model_status: "qwen_unavailable",
+      model_failure: modelFailure
+    }, brief);
+  };
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  let res = await callQwen(prompt, promptStr, true, "qwen3.8-max");
-  if (!res || res.trim().length < 5) {
-    throw new Error("qwen3.8-max returned an empty or invalid response.");
-  }
-  let parsed;
   try {
-    parsed = cleanJsonResponse(res);
-  } catch (firstErr) {
-    console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
-    const retryPrompt = `You are an architect AI. Return ONLY valid JSON \u2014 no markdown, no text, no thinking.
+    let res = await callQwen(prompt, promptStr, true, "qwen3.8-max");
+    if (!res || res.trim().length < 5) {
+      throw new Error("qwen3.8-max returned an empty or invalid response.");
+    }
+    let parsed;
+    try {
+      parsed = cleanJsonResponse(res);
+    } catch (firstErr) {
+      console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
+      const retryPrompt = `You are an architect AI. Return ONLY valid JSON \u2014 no markdown, no text, no thinking.
 The user wants: ${brief.project_type || "a building"} with these rooms: ${(brief.room_requirements || []).map((r5) => r5.name).join(", ")}.
 Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_palette, storey_plans(array of floors with rooms having name/width/length/origin[x,y,z]/doors[]/windows[]), special_elements, structural_notes.`;
-    res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "qwen3.8-max");
-    parsed = cleanJsonResponse(res);
-  }
-  if (isBuilding) {
-    return repairPlan(parsed, brief);
-  } else {
-    return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
+      res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, "qwen3.8-max");
+      parsed = cleanJsonResponse(res);
+    }
+    if (isBuilding) {
+      return repairPlan(parsed, brief);
+    } else {
+      return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
+    }
+  } catch (error2) {
+    console.warn("[handleArchitect] Qwen planning failed; using constrained fallback:", String(error2));
+    return fallbackPlan(error2);
   }
 }
 if (typeof Deno !== "undefined" && Deno.serve) {

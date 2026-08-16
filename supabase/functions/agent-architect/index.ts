@@ -1023,17 +1023,40 @@ export async function handleArchitect(brief: any): Promise<any> {
   const category = brief.structure_category || "building";
   const isBuilding = category === "building";
   const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
+  const fallbackPlan = (reason: unknown) => {
+    const modelFailure = String(reason instanceof Error ? reason.message : reason).slice(0, 280);
+    if (isBuilding) {
+      return repairPlan({
+        is_edit: false,
+        generation_source: "constraint_program_fallback",
+        model_status: "qwen_unavailable",
+        model_failure: modelFailure,
+        roof_type: "flat",
+        has_stairs: false,
+        structural_notes: ["Generated from the validated spatial programme after the AI planner was unavailable."],
+        storey_plans: minimumBuildingPlan(brief),
+      }, brief);
+    }
+    return ensureInfrastructurePlan({
+      structure_category: category,
+      is_edit: false,
+      generation_source: "constraint_program_fallback",
+      model_status: "qwen_unavailable",
+      model_failure: modelFailure,
+    }, brief);
+  };
   
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  // Use qwen3.8-max for Architect Agent
-  let res = await callQwen(prompt, promptStr, true, "qwen3.8-max");
-  if (!res || res.trim().length < 5) {
-    throw new Error("qwen3.8-max returned an empty or invalid response.");
-  }
+  try {
+    // Use qwen3.8-max for Architect Agent
+    let res = await callQwen(prompt, promptStr, true, "qwen3.8-max");
+    if (!res || res.trim().length < 5) {
+      throw new Error("qwen3.8-max returned an empty or invalid response.");
+    }
 
   // Attempt JSON parse — retry once if it fails
   let parsed: any;
@@ -1052,6 +1075,10 @@ Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_
     return repairPlan(parsed, brief);
   } else {
     return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
+  }
+  } catch (error) {
+    console.warn("[handleArchitect] Qwen planning failed; using constrained fallback:", String(error));
+    return fallbackPlan(error);
   }
 }
 
