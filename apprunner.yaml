@@ -1,0 +1,15 @@
+version: 1.0
+runtime: python311
+build:
+  commands:
+    build:
+      - pip install --no-cache-dir uv
+      - cd ifc-bonsai-mcp-main && uv pip install --system -e .
+      - uv pip install --system sentence-transformers chromadb fastapi uvicorn sse-starlette starlette mcp
+run:
+  command: python serve_mcp.py
+  network:
+    port: 8000
+    env:
+      - name: PORT
+        value: "8000"
