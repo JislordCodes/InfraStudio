@@ -3,11 +3,10 @@ runtime: python311
 build:
   commands:
     build:
-      - pip install --no-cache-dir uv
-      - cd ifc-bonsai-mcp-main && uv pip install --system -e .
-      - uv pip install --system sentence-transformers chromadb fastapi uvicorn sse-starlette starlette mcp
+      - python3 -m pip install --no-cache-dir -e ./ifc-bonsai-mcp-main
+      - python3 -m pip install --no-cache-dir sentence-transformers chromadb fastapi uvicorn sse-starlette starlette mcp
 run:
-  command: python serve_mcp.py
+  command: python3 serve_mcp.py
   network:
     port: 8000
     env:
