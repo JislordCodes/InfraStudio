@@ -12,9 +12,17 @@ for p in [_mcp_dir, _docker_dir, _src_dir]:
 
 os.chdir(_mcp_dir)
 
-if __name__ == "__main__":
-    import uvicorn
-    from serve_sse import app
-    port = int(os.environ.get("PORT", 8000))
-    print(f"=== Starting MCP Server on 0.0.0.0:{port} ===", flush=True)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+# Use exec so the process is replaced entirely — avoids module import issues
+# and works whether or not uvicorn is on the initial PYTHONPATH
+port = int(os.environ.get("PORT", 8000))
+print(f"=== Starting MCP Server on 0.0.0.0:{port} ===", flush=True)
+os.execv(
+    sys.executable,
+    [
+        sys.executable, "-m", "uvicorn",
+        "serve_sse:mcp_asgi_app",
+        "--host", "0.0.0.0",
+        "--port", str(port),
+        "--log-level", "info",
+    ],
+)
