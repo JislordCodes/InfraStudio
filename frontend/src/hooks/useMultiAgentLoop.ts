@@ -1,5 +1,5 @@
 // ══ CONFIG ══
-const EDGE_PROXY_BASE = "https://225v6b2eozsjnityz5eo7p3jnq0qoawb.lambda-url.eu-west-2.on.aws";
+const EDGE_PROXY_BASE = "https://sde2wzh5w4psh7i3arkwugtswu0aokos.lambda-url.eu-west-2.on.aws";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
 
 export interface MultiAgentResult {
