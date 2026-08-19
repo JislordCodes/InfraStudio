@@ -20,15 +20,8 @@ def get_ifc_file():
     if _ACTIVE_IFC_FILE:
         return _ACTIVE_IFC_FILE
 
-    import bonsai.tool as tool
     from bonsai.bim.ifc import IfcStore
-    ifc = None
-    try:
-        ifc = tool.Ifc.get()
-    except Exception:
-        pass
-    if not ifc:
-        ifc = IfcStore.file
+    ifc = IfcStore.file
     
     if not ifc:
         from .project import initialize_project
@@ -36,12 +29,7 @@ def get_ifc_file():
         logger = logging.getLogger(__name__)
         logger.info("No IFC project found. Auto-initializing fallback project...")
         initialize_project(project_name="Auto-Initialized Project")
-        try:
-            ifc = tool.Ifc.get()
-        except Exception:
-            pass
-        if not ifc:
-            ifc = IfcStore.file
+        ifc = IfcStore.file
             
         if not ifc:
             # Maybe initialize_project set it in _ACTIVE_IFC_FILE?
@@ -55,13 +43,8 @@ def get_ifc_file():
 
 def get_default_container():
     """Get active spatial container."""
-    import bonsai.tool as tool
     from bonsai.bim.ifc import IfcStore
     container = None
-    try:
-        container = tool.Root.get_default_container()
-    except Exception:
-        pass
     if not container:
         ifc = get_ifc_file()
         storeys = ifc.by_type("IfcBuildingStorey")
@@ -92,11 +75,6 @@ def save_and_load_ifc():
     try:
         global _ACTIVE_IFC_FILE
         ifc = _ACTIVE_IFC_FILE
-        if not ifc:
-            try:
-                ifc = tool.Ifc.get()
-            except Exception:
-                pass
         if not ifc:
             ifc = IfcStore.file
             

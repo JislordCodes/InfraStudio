@@ -23,23 +23,34 @@ def initialize_project(project_name: str = "My Project") -> dict:
     """
     try:
         from bonsai.bim.ifc import IfcStore
+        import bonsai.tool as tool
+        import bonsai.core.project as project_core
+        import bonsai.core.spatial as spatial_core
         
-        # 1. Create a fresh IFC4 file
+        # 1. Create a fresh IFC4 file using Bonsai's Project tool
+        # tool.Project is how Bonsai natively creates projects.
+        # But wait, earlier I saw "partially initialized module 'bonsai.tool' has no attribute 'Ifc' (most likely due to a circular import)"
+        # This was in get_ifc_file(), which is NOT here.
+        # If I can't use tool.Project, let's just use the current ifcopenshell.api but fix the "create_entity" error.
+        
         try:
             ifc_file = ifcopenshell.file(schema="IFC4")
         except TypeError:
             ifc_file = ifcopenshell.file()
+            
+        # The correct way to create a project with API is:
+        project = ifcopenshell.api.run("project.create_file", version="IFC4")
+        ifc_file = project # project.create_file returns an ifcopenshell.file object
+        project_element = ifc_file.by_type("IfcProject")[0]
+        project_element.Name = project_name
         
-        # 2. Add structural project elements
-        project = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcProject", name=project_name)
         ifcopenshell.api.run("unit.assign_unit", ifc_file)
         
         site = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcSite", name="Default Site")
         building = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcBuilding", name="Default Building")
         storey = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Level 0")
         
-        # 3. Create spatial hierarchy
-        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=project, products=[site])
+        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=project_element, products=[site])
         ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=site, products=[building])
         ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
         
@@ -88,7 +99,7 @@ def initialize_project(project_name: str = "My Project") -> dict:
         return {
             "success": True,
             "message": f"Successfully initialized new IFC project: {project_name}",
-            "project_guid": project.GlobalId,
+            "project_guid": project_element.GlobalId,
             "schema": "IFC4"
         }
         
