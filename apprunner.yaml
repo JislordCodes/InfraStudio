@@ -9,7 +9,7 @@ run:
   command: python3 serve_mcp.py
   network:
     port: 8000
-    env:
-      - name: PORT
-        value: "8000"
+  env:
+    - name: PORT
+      value: "8000"
 
