@@ -73,6 +73,14 @@ if ($exists -match "ResourceNotFoundException" -or $exists.GetType().Name -eq "E
         --principal "*" `
         --function-url-auth-type NONE `
         --region $region
+
+    aws lambda add-permission `
+        --function-name $functionName `
+        --statement-id FunctionURLAllowPublicInvokeFunction `
+        --action lambda:InvokeFunction `
+        --principal "*" `
+        --invoked-via-function-url `
+        --region $region
 } else {
     Write-Host "Lambda function exists in region $region. Updating code and configuration..."
     aws lambda update-function-code `
