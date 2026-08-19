@@ -72,8 +72,9 @@ def initialize_project(project_name: str = "My Project") -> dict:
         IfcStore.file = ifc_file
         IfcStore.path = "new_project.ifc"
         try:
-            import blender_addon.api.ifc_utils as ifc_utils
+            from . import ifc_utils
             ifc_utils._ACTIVE_IFC_FILE = ifc_file
+            logger.info("Set _ACTIVE_IFC_FILE successfully")
         except Exception as e:
             logger.warning(f"Failed to set _ACTIVE_IFC_FILE: {e}")
         
