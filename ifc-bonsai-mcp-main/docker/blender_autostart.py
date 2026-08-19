@@ -45,7 +45,11 @@ try:
     _w.triangulation = getattr(_w, 'TriangulationElement', None)
     _w.serialization = getattr(_w, 'SerializedElement', None)
     _w.brep = getattr(_w, 'BRepElement', None)
-    logger.info("Configured geom wrapper aliases.")
+    for cls in [_w.file, getattr(_w, 'File', None)]:
+        if cls is not None:
+            setattr(cls, 'post_init', lambda self: None)
+    _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
+    logger.info("Configured geom wrapper and entity_instance bridge for Bonsai.")
 except Exception as _w_err:
     logger.warning(f"Geom alias notice: {_w_err}")
 
