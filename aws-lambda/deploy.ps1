@@ -17,17 +17,18 @@ Compress-Archive -Path dist/index.js -DestinationPath dist.zip -Force
 $functionName = "InfraStudio-Agents"
 $accountId = (aws sts get-caller-identity | ConvertFrom-Json).Account
 $roleArn = "arn:aws:iam::${accountId}:role/InfraStudio-Agents-ExecutionRole"
-$qwenApiKey = if ($env:QWEN_API_KEY) { $env:QWEN_API_KEY } else { "sk-ws-H.IXPRPH.wpQo.MEYCIQDGaOFthnPMgvcqPxg5yin91LnkQFW9S2EdZDzlFjyiuwIhAO4M5pNSPn_H4ncna21SUgKCgO5vzUPKsUuuJNwaKvKv" }
+# Never fall back to credentials committed in source. Deployments must receive
+# either an explicit local key or, preferably, a Secrets Manager secret id.
+$qwenApiKey = $env:QWEN_API_KEY
 $qwenSecretId = $env:QWEN_SECRET_ID
 $defaultSaJson = '{"type":"service_account","project_id":"gemini-app-sa-495716","private_key_id":"ace08f296bbbaccff93a81a904968667f7be9631","private_key":"-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDloN+aWsBY5yyM\nC91ttnFqwO+AidVSYL/uOoY6qJYUi//xssIEVqaRd5FEokN9jwii5g/J5J/KBf9R\ntswL2SZ7AAFH05FzzqkR+LSAAoAXHGpSO4yl5Rs5yTiEjUz8ULqg+c020bHCR9+3\nKohvLCwmyLOjLqG2eeXEuOJ56+IIKil4dBHj+7GrRVpw77YOuyXvliXr0+Phytkj\nDO7AoRLjOjDFea7rXY9qVgScwa2wUhR/rl7euurcMgKSCEXcPE9+dQ5VhzAW9CQg\nWVqCVLEH+Ab1mPTP7U9sYYFdxUNTWb41H4vu+Y1wHDz7g1l7vWqHnLEldl8lDOWg\n8qgud9EnAgMBAAECggEAYm8XWyYK7TFP5crSRU0fikkhgeLT+Kezrs4Uq0GIcE9h\nTH058T0p0xLDyX2bW8/8PkRLwVqJasMuYxtulaek+LYUVnNplxCgZi1MRtGLkhyi\nsRSI4rZ2+Mr6uMuPlFuQ3R+oKhcy0ZsY2f5YFPwFAy0m4E1FkiDn72/n2abVsnR8\nftXboBaAWTU0edGjs858TZ7ShLU1yPqRzoJpHwKkAhyUgqgY+hNElTuPxQbl111M\nE59NfPWOzLNx5yp2sg94glbGprNUDhfknTLRw0gIWACF4UTzo/8cYy4jv7BWk+r1\n+4X4YyJU+LW/L1Z5ze3l8BRfrj8X9r530i+w0NNR5QKBgQD3uvxy45lWZbtRfqX2\nh2k4dAY2S7APGfHT+z/vttzpjvq/sEOEhtFpZOkAitZ3C0qvevAGYQUare/DdlRm\ntk/u1Zj6l3uRXcd5cknnWOVYUDxnaiG0sbHpdOKqiLV/rV9XRCwYTCEslOPXuWGe\nOsztRMDVcGzRJVFeBkY6rlBxowKBgQDtSzG3KLbzzFDqpJEvUgK3hb+xaQDNla0Q\nUUYlEKX3nStSBDTxfRbsv+RjgO8Z4iiJe46Zn9J5V2mvJP50H1jjQrrDHaYLxuvJ\n9R6i1SWYDtEpWXCsD1E26qo4NGZJ9D+9TxeHU74oB+WDsEIwSj3JZCJzKMDokstI\n1PKJ6uVCrQKBgQCo1YYh4t3pVRIR24fOecELWX+2V2UZFayLtWuAuxbaErjwFXge\nhSeJdd2aogTCQy7WY6ncHxk0cqC6jRW+nrfhZS+Kcd0kWE6PhYW6pwo/YweXz2xD\nUuuW2TN12BAigQ0+U1beBFyDnsGdj1lpVle9ySLHFIUFETLgKtSIP67RkwKBgQDs\nauGCecclyafIz+NywQPB8zjUuig5q+l8e20mmpqwxF+X3GcfPqDrihgzZw9Ru3jl\n2TtvJcPeb0/1VydJbL3z1tUadtyrmSns0hIO68wD3qdXyiuu0af5zf1/9/z9q6Mh\nqr5nbvDjE1MBTEf1stIyZ1jHYZApZ6+vxbJL5MM8FQKBgF6Os32Comibng+KFJhs\nNZnBtgT544k9mR8azZrPYbcOyBx9WtBteJl/oAjBs8tZ2CTjSEdZoblMcV/DfLGO\nhnJkhGKgAS57GBQ3QS+7OIGASvcroNZALk3I6nEhErQS2vO1ECU1YhYOFebjXcO4\n3NFyL+H5+BO0VqtGfHFv8WNb\n-----END PRIVATE KEY-----\n","client_email":"gemini-app-sa@gemini-app-sa-495716.iam.gserviceaccount.com","client_id":"105281269608440211871","token_uri":"https://oauth2.googleapis.com/token"}'
-$gcpSaJson = if ($env:GCP_SERVICE_ACCOUNT_JSON) { $env:GCP_SERVICE_ACCOUNT_JSON } else { $defaultSaJson }
-$region = "eu-west-2"
+$gcpSaJson = $env:GCP_SERVICE_ACCOUNT_JSON
+$region = if ($env:AWS_REGION) { $env:AWS_REGION } else { "us-east-1" }
 
 $envObj = @{
-    Variables = @{
-        GCP_SERVICE_ACCOUNT_JSON = $gcpSaJson
-    }
+    Variables = @{}
 }
+if ($gcpSaJson) { $envObj.Variables["GCP_SERVICE_ACCOUNT_JSON"] = $gcpSaJson }
 if ($qwenApiKey) { $envObj.Variables["QWEN_API_KEY"] = $qwenApiKey }
 if ($qwenSecretId) { $envObj.Variables["QWEN_SECRET_ID"] = $qwenSecretId }
 if ($env:QWEN_BASE_URL) { $envObj.Variables["QWEN_BASE_URL"] = $env:QWEN_BASE_URL }
