@@ -19,43 +19,21 @@ def initialize_project(project_name: str = "My Project") -> dict:
         Dict containing success status and project information.
     """
     try:
-        if not hasattr(ifcopenshell.file, "create_entity") and hasattr(ifcopenshell.file, "create"):
-            ifcopenshell.file.create_entity = ifcopenshell.file.create
-            
-        import bonsai.tool as tool
         from bonsai.bim.ifc import IfcStore
+        import os
+        import ifcopenshell
+        import ifcopenshell.guid
         
-        # 1. Create a fresh project using Bonsai's Project tool
-        # This automatically handles the IFC4 file creation, Project, Site, Building, Storey, and geometric contexts!
-        tool.Project.create(project_name)
+        # Load from the bundled template to avoid all ifcopenshell.api creation bugs!
+        template_path = os.path.join(os.path.dirname(__file__), "blank_project.ifc")
+        ifc_file = ifcopenshell.open(template_path)
         
-        ifc_file = IfcStore.file
         project_element = ifc_file.by_type("IfcProject")[0]
+        project_element.Name = project_name
+        project_element.GlobalId = ifcopenshell.guid.new()
         
-        # 3b. Create geometric representation contexts (required for all geometry creation)
-        model_context = ifcopenshell.api.run(
-            "context.add_context", ifc_file,
-            context_type="Model",
-        )
-        body_context = ifcopenshell.api.run(
-            "context.add_context", ifc_file,
-            context_type="Model",
-            context_identifier="Body",
-            target_view="MODEL_VIEW",
-            parent=model_context,
-        )
-        plan_context = ifcopenshell.api.run(
-            "context.add_context", ifc_file,
-            context_type="Plan",
-        )
-        axis_context = ifcopenshell.api.run(
-            "context.add_context", ifc_file,
-            context_type="Plan",
-            context_identifier="Axis",
-            target_view="GRAPH_VIEW",
-            parent=plan_context,
-        )
-        logger.info(f"Created geometric contexts: Model={model_context.id()}, Body={body_context.id()}, Plan={plan_context.id()}, Axis={axis_context.id()}")
+        # Geometric contexts are already in the template
+        logger.info(f"Loaded template project with guid: {project_element.GlobalId}")
         
         # 4. Set as active file in Bonsai and locally
         IfcStore.file = ifc_file
