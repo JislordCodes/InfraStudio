@@ -42,10 +42,11 @@ WORKDIR /app
 COPY . .
 
 # ── Install MCP server Python dependencies ────────────────────────────────
-RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu && \
-    uv pip install --system -e . && \
-    uv pip install --system \
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -e . && \
+    pip install --no-cache-dir \
         "mcp>=1.0.0" \
+        fastmcp \
         sentence-transformers \
         chromadb \
         fastapi \
