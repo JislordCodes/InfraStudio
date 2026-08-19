@@ -73,14 +73,11 @@ def initialize_project(project_name: str = "My Project") -> dict:
         IfcStore.path = "new_project.ifc"
         
         # 5. Sync with Blender
-        # In headless mode, we must save the file to disk first so Bonsai can load it
-        # and trigger its internal UI/data synchronization, setting up `tool.Ifc.get()`.
         try:
             ifc_file.write("new_project.ifc")
-            bpy.ops.bim.load_project(filepath="new_project.ifc")
+            logger.info("Saved IFC project to new_project.ifc")
         except Exception as e:
-            # If the operator fails, log it
-            logger.warning(f"bpy.ops.bim.load_project warning: {e}")
+            logger.warning(f"ifc_file.write warning: {e}")
         
         return {
             "success": True,

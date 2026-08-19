@@ -15,15 +15,26 @@ from typing import List, Optional, Any, Dict
 def get_ifc_file():
     """Get current IFC file. Auto-initializes a project if none is open."""
     import bonsai.tool as tool
-    ifc = tool.Ifc.get()
+    from bonsai.bim.ifc import IfcStore
+    ifc = None
+    try:
+        ifc = tool.Ifc.get()
+    except Exception:
+        pass
     if not ifc:
-        # Avoid circular import at top level
+        ifc = IfcStore.file
+    if not ifc:
         from .project import initialize_project
         import logging
         logger = logging.getLogger(__name__)
         logger.info("No IFC project found. Auto-initializing fallback project...")
         initialize_project(project_name="Auto-Initialized Project")
-        ifc = tool.Ifc.get()
+        try:
+            ifc = tool.Ifc.get()
+        except Exception:
+            pass
+        if not ifc:
+            ifc = IfcStore.file
         if not ifc:
             raise RuntimeError("No IFC file open and auto-initialization failed")
     return ifc
@@ -32,41 +43,52 @@ def get_ifc_file():
 def get_default_container():
     """Get active spatial container."""
     import bonsai.tool as tool
-    container = tool.Root.get_default_container()
+    from bonsai.bim.ifc import IfcStore
+    container = None
+    try:
+        container = tool.Root.get_default_container()
+    except Exception:
+        pass
+    if not container:
+        ifc = get_ifc_file()
+        storeys = ifc.by_type("IfcBuildingStorey")
+        if storeys:
+            container = storeys[0]
+        else:
+            buildings = ifc.by_type("IfcBuilding")
+            if buildings:
+                container = buildings[0]
+            else:
+                sites = ifc.by_type("IfcSite")
+                if sites:
+                    container = sites[0]
     if not container:
         raise RuntimeError("No active spatial container")
     return container
 
 
 def save_and_load_ifc():
-    """
-    Saves the current IFC project to its file, then clears the scene 
-    and reloads the project from the same file. 
-    """
+    """Saves the current IFC project to its file."""
     import bpy
     import logging
-    from bonsai.bim import export_ifc
     from bonsai.bim.ifc import IfcStore
     import bonsai.tool as tool
 
-    path = IfcStore.path
-
-    if not path:
-        print("No IFC file path found. Cannot save and reload.")
-        return
+    path = IfcStore.path or "new_project.ifc"
 
     try:
-        # Simply write the native IfcOpenShell modifications to disk
-        ifc = tool.Ifc.get()
+        ifc = None
+        try:
+            ifc = tool.Ifc.get()
+        except Exception:
+            pass
+        if not ifc:
+            ifc = IfcStore.file
         if ifc:
             ifc.write(path)
-        
-        # Reload the project into Bonsai to update the Blender scene graph
-        tool.IfcGit.load_project(path)
-        
-
+            logging.getLogger(__name__).info(f"Saved IFC project directly to {path}")
     except Exception as e:
-        print(f"An error occurred during the save and load process: {e}")
+        print(f"An error occurred during save_and_load_ifc: {e}")
 
 
 def get_selected_guids() -> List[str]:
