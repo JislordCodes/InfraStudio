@@ -51,8 +51,8 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
         uvicorn[standard] \
         sse-starlette
 
-# ── Download and install Blender 4.4.3 ────────────────────────────────────
-ENV BLENDER_VERSION=4.4.3
+# ── Download and install Blender 4.4.0 ────────────────────────────────────
+ENV BLENDER_VERSION=4.4.0
 ENV BLENDER_DIR=/opt/blender-${BLENDER_VERSION}-linux-x64
 RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz && \
     tar -xf /tmp/blender.tar.xz -C /opt/ && \
