@@ -54,7 +54,7 @@ def get_bonsai_tool():
             pass
     return _bonsai_tool
 
-from .api import scene, wall
+from . import api
 from .scene_analysis.scene_analysis import *
 
 def execute_command(command_type: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
