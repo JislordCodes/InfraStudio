@@ -19,6 +19,9 @@ def initialize_project(project_name: str = "My Project") -> dict:
         Dict containing success status and project information.
     """
     try:
+        if not hasattr(ifcopenshell.file, "create_entity") and hasattr(ifcopenshell.file, "create"):
+            ifcopenshell.file.create_entity = ifcopenshell.file.create
+            
         import bonsai.tool as tool
         from bonsai.bim.ifc import IfcStore
         
