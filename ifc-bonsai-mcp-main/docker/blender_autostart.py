@@ -121,6 +121,6 @@ try:
                 _mcp_queue.put((func, exec_time))
                 time.sleep(0.05)
         except queue.Empty:
-            pass
+            time.sleep(0.02)
 except KeyboardInterrupt:
     logger.info("Blender process received shutdown signal.")
