@@ -60,7 +60,9 @@ def initialize_project(project_name: str = "My Project") -> dict:
         }
         
     except Exception as e:
-        error_msg = f"Failed to initialize project: {str(e)}"
+        import traceback
+        tb = traceback.format_exc()
+        error_msg = f"Failed to initialize project: {str(e)}\n{tb}"
         logger.error(error_msg)
         return {
             "success": False,
