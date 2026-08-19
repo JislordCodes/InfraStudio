@@ -37,12 +37,11 @@ export const handler = async (event: any) => {
   const path = event.rawPath || "/";
   const method = event.requestContext?.http?.method || "POST";
 
-  // CORS Headers
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-  };
+  // Function URL CORS is configured by deploy.ps1. Do not add a second set of
+  // headers here: Lambda Function URLs merge duplicate CORS headers, producing
+  // an invalid value such as "*, https://app.example" that browsers reject as
+  // a network-level "Failed to fetch" error.
+  const corsHeaders: Record<string, string> = {};
 
   // Handle CORS preflight options request
   if (method === "OPTIONS") {
