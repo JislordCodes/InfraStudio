@@ -45,6 +45,7 @@ COPY . .
 RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu && \
     uv pip install --system -e . && \
     uv pip install --system \
+        "mcp>=1.0.0" \
         sentence-transformers \
         chromadb \
         fastapi \
