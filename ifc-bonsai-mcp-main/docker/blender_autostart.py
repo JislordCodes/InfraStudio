@@ -1,20 +1,23 @@
 """
 blender_autostart.py — runs inside Blender's Python interpreter at startup.
+Applies ifcopenshell compatibility patches then starts the MCP socket server.
 """
 import os
 import sys
 import time
 import logging
-import addon_utils
+import importlib
+import importlib.util
 
-# Standardize logs to stdout for App Runner/CloudWatch
+# Standardize logs to stdout for CloudWatch
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] blender: %(message)s',
-    force=True  # Ensure we override any Blender internal logging config
+    force=True
 )
 logger = logging.getLogger('blender_mcp')
 
+# ── Step 1: Determine paths ─────────────────────────────────────────────────
 def get_addons_path():
     try:
         import bpy
@@ -26,15 +29,17 @@ def get_addons_path():
 
 addons_path = get_addons_path()
 
-# 1. Inject addons path and blendermcp path into sys.path
-for p in [addons_path, os.path.join(addons_path, 'blendermcp'), os.path.join(addons_path, 'bonsai')]:
+# Only inject blendermcp into sys.path (NOT bonsai — it lives in site-packages)
+for p in [addons_path, os.path.join(addons_path, 'blendermcp')]:
     if os.path.exists(p) and p not in sys.path:
         sys.path.insert(0, p)
         logger.info(f"Injected {p} into sys.path")
 
-# Setup geom C-extension aliases safely
+# ── Step 2: Apply ALL ifcopenshell C-extension patches BEFORE any bonsai import
 try:
     import ifcopenshell.ifcopenshell_wrapper as _w
+
+    # Geom element aliases
     _w.native_element = getattr(_w, 'Element', None)
     _w.triangulation_element = getattr(_w, 'TriangulationElement', None)
     _w.serialized_element = getattr(_w, 'SerializedElement', None)
@@ -45,46 +50,39 @@ try:
     _w.triangulation = getattr(_w, 'TriangulationElement', None)
     _w.serialization = getattr(_w, 'SerializedElement', None)
     _w.brep = getattr(_w, 'BRepElement', None)
+
+    # post_init stub for ifcopenshell.file
     for cls in [_w.file, getattr(_w, 'File', None)]:
         if cls is not None:
             setattr(cls, 'post_init', lambda self: None)
+
+    # entity_instance attribute bridge (TemplateType etc.)
     _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
-    logger.info("Configured geom wrapper and entity_instance bridge for Bonsai.")
+
+    logger.info("Successfully patched ifcopenshell_wrapper (geom aliases + post_init + entity_instance bridge).")
 except Exception as _w_err:
-    logger.warning(f"Geom alias notice: {_w_err}")
+    logger.warning(f"ifcopenshell patch notice: {_w_err}")
 
-logger.info(f"=== Filesystem Audit: {addons_path} ===")
-if os.path.exists(addons_path):
-    logger.info(f"Addons folder content: {os.listdir(addons_path)}")
-logger.info("==========================================")
-logger.info("Starting Blender internal autostart sequence...")
+# ── Step 3: Enable Bonsai addon ─────────────────────────────────────────────
+logger.info("Enabling Bonsai addon...")
+try:
+    import addon_utils
+    res = addon_utils.enable("bonsai", default_set=True)
+    if res:
+        logger.info(f"Bonsai addon enabled: {res}")
+    else:
+        logger.warning("Bonsai addon enable returned None (non-fatal, direct import may still work)")
+except Exception as e:
+    logger.warning(f"Bonsai addon enable exception (non-fatal): {e}")
 
-def enable_addons():
-    try:
-        # Enable Bonsai (BIM Engine) first
-        logger.info("Enabling 'bonsai' addon...")
-        # Note: In Blender 4.4, the addon name is 'bonsai'
-        res = addon_utils.enable("bonsai", default_set=True)
-        if res:
-            logger.info("Bonsai addon enabled successfully")
-        else:
-            logger.error("Failed to enable 'bonsai' addon (returned False/None)")
+# Verify bonsai.tool.Ifc is accessible
+try:
+    import bonsai.tool as tool
+    logger.info(f"bonsai.tool.Ifc verified: {tool.Ifc}")
+except Exception as e:
+    logger.error(f"bonsai.tool.Ifc NOT available: {e}")
 
-        # Enable BlenderMCP (Our integration)
-        logger.info("Enabling 'blendermcp' addon...")
-        res = addon_utils.enable("blendermcp", default_set=True)
-        if res:
-            logger.info("BlenderMCP addon enabled successfully")
-        else:
-            logger.error("Failed to enable 'blendermcp' addon")
-            
-    except Exception as e:
-        logger.error(f"Error during addon activation: {str(e)}", exc_info=True)
-
-# Run activation
-enable_addons()
-
-# ── Ensure the socket server is running and intercept timers ───────────────
+# ── Step 4: Intercept bpy.app.timers for headless operation ──────────────────
 import queue
 import bpy
 
@@ -97,48 +95,52 @@ def custom_register(func, first_interval=0.0, persistent=False):
     return first_interval
 
 bpy.app.timers.register = custom_register
-logger.info("Intercepted bpy.app.timers.register to allow headless execution.")
+logger.info("Intercepted bpy.app.timers.register for headless execution.")
 
-# Start the socket server directly (since we bypassed the normal timers)
+# ── Step 5: Start socket server by loading core.py DIRECTLY ──────────────────
+# We load core.py via importlib to BYPASS blendermcp/__init__.py which
+# triggers `from . import commands` → `from bonsai import tool` circular import.
+# core.py only needs bpy, json, threading, socket — no bonsai at import time.
 try:
-    from blendermcp import core as _core
+    core_path = os.path.join(addons_path, 'blendermcp', 'core.py')
+    spec = importlib.util.spec_from_file_location("blendermcp.core", core_path)
+    _core = importlib.util.module_from_spec(spec)
+    sys.modules["blendermcp.core"] = _core
+    spec.loader.exec_module(_core)
+
     port = int(os.environ.get("BLENDER_MCP_PORT", "9876"))
     srv = _core.create_server_instance(port=port)
     srv.start()
-    logger.info(f"BlenderMCP socket server started directly on port {port}.")
+    logger.info(f"BlenderMCP socket server started on port {port}.")
 except Exception as e:
     logger.error(f"Could not start socket server: {e}", exc_info=True)
 
-# ── Phase 8.1.1: Pre-initialize IFC context to avoid tool-call latency ──────
+# ── Step 6: Pre-initialize IFC project ───────────────────────────────────────
 try:
     logger.info("Pre-initializing IFC project context...")
-    # Addons are enabled, so we can import our API
     from blendermcp.api.project import initialize_project
     init_res = initialize_project(project_name="Cloud Default Project")
     if init_res.get("success"):
         logger.info(f"IFC Context ready: {init_res.get('project_guid')}")
     else:
-        logger.warning(f"IFC Context initialization returned error: {init_res.get('error')}")
+        logger.warning(f"IFC Context init returned: {init_res.get('error')}")
 except Exception as e:
-    logger.warning(f"IFC Context pre-initialization failed (will fallback on first call): {e}", exc_info=True)
+    logger.warning(f"IFC Context pre-init failed (will fallback on first call): {e}")
 
-# Keep Blender alive in headless mode AND process tasks
-logger.info("Blender is now running custom headless event pump for MCP requests.")
+# ── Step 7: Headless event pump ──────────────────────────────────────────────
+logger.info("Blender is now running headless event pump for MCP requests.")
 try:
     while True:
         try:
             func, exec_time = _mcp_queue.get(timeout=0.1)
-            current_time = time.time()
-            if current_time >= exec_time:
+            if time.time() >= exec_time:
                 try:
                     res = func()
-                    # If timer returns a number, it wants to run again after that delay
                     if isinstance(res, (int, float)) and res > 0:
                         _mcp_queue.put((func, time.time() + res))
                 except Exception as e:
                     logger.error(f"Timer execution failed: {e}", exc_info=True)
             else:
-                # Not ready yet, put it back
                 _mcp_queue.put((func, exec_time))
                 time.sleep(0.05)
         except queue.Empty:
