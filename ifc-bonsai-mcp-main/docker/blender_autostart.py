@@ -32,6 +32,23 @@ for p in [addons_path, os.path.join(addons_path, 'blendermcp'), os.path.join(add
         sys.path.insert(0, p)
         logger.info(f"Injected {p} into sys.path")
 
+# Setup geom C-extension aliases safely
+try:
+    import ifcopenshell.ifcopenshell_wrapper as _w
+    _w.native_element = getattr(_w, 'Element', None)
+    _w.triangulation_element = getattr(_w, 'TriangulationElement', None)
+    _w.serialized_element = getattr(_w, 'SerializedElement', None)
+    _w.brep_element = getattr(_w, 'BRepElement', None)
+    _w.settings = getattr(_w, 'Settings', None)
+    _w.iterator = getattr(_w, 'Iterator', None)
+    _w.native = getattr(_w, 'Element', None)
+    _w.triangulation = getattr(_w, 'TriangulationElement', None)
+    _w.serialization = getattr(_w, 'SerializedElement', None)
+    _w.brep = getattr(_w, 'BRepElement', None)
+    logger.info("Configured geom wrapper aliases.")
+except Exception as _w_err:
+    logger.warning(f"Geom alias notice: {_w_err}")
+
 logger.info(f"=== Filesystem Audit: {addons_path} ===")
 if os.path.exists(addons_path):
     logger.info(f"Addons folder content: {os.listdir(addons_path)}")

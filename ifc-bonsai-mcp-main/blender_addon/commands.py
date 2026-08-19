@@ -39,11 +39,19 @@ try:
     from bonsai import tool as _tool
     _bonsai_tool = _tool
     BONSAI_AVAILABLE = True
-except (ImportError, ModuleNotFoundError) as e:
+except Exception as e:
     BONSAI_AVAILABLE = False
-    print(f"Bonsai/IfcOpenShell/BCF not available: {e}")
+    print(f"Bonsai/IfcOpenShell/BCF initial import notice: {e}")
 
 def get_bonsai_tool():
+    global _bonsai_tool, BONSAI_AVAILABLE
+    if _bonsai_tool is None:
+        try:
+            from bonsai import tool as _tool
+            _bonsai_tool = _tool
+            BONSAI_AVAILABLE = True
+        except Exception:
+            pass
     return _bonsai_tool
 
 from .api import scene, wall
