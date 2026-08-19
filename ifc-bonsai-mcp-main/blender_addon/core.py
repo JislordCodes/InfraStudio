@@ -18,7 +18,7 @@ server_instance = None
 class BlenderMCPServer:
     """Socket server implementation for the IFC Bonsai MCP addon"""
     
-    def __init__(self, host='localhost', port=9876):
+    def __init__(self, host='0.0.0.0', port=9876):
         self.host = host
         self.port = port
         self.running = False

@@ -106,7 +106,8 @@ RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
 
 # ── Install the Blender addon (blendermcp) ────────────────────────────────
 RUN mkdir -p ${BLENDER_ADDONS_DIR}/blendermcp && \
-    cp -r /app/blender_addon/* ${BLENDER_ADDONS_DIR}/blendermcp/
+    cp -r /app/blender_addon/* ${BLENDER_ADDONS_DIR}/blendermcp/ && \
+    echo -e "${BLENDER_ADDONS_DIR}\n${BLENDER_ADDONS_DIR}/blendermcp\n${BLENDER_ADDONS_DIR}/bonsai" > /opt/blender-4.3.2-linux-x64/4.3/python/lib/python3.11/site-packages/addons.pth
 
 # ── Pre-build the RAG knowledge base ──────────────────────────────────────
 ENV PYTHONPATH=/app/src
