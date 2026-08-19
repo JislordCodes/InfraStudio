@@ -68,9 +68,14 @@ def initialize_project(project_name: str = "My Project") -> dict:
         )
         logger.info(f"Created geometric contexts: Model={model_context.id()}, Body={body_context.id()}, Plan={plan_context.id()}, Axis={axis_context.id()}")
         
-        # 4. Set as active file in Bonsai
+        # 4. Set as active file in Bonsai and locally
         IfcStore.file = ifc_file
         IfcStore.path = "new_project.ifc"
+        try:
+            import blender_addon.api.ifc_utils as ifc_utils
+            ifc_utils._ACTIVE_IFC_FILE = ifc_file
+        except Exception as e:
+            logger.warning(f"Failed to set _ACTIVE_IFC_FILE: {e}")
         
         # 5. Sync with Blender
         try:

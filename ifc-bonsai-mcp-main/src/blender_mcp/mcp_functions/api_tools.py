@@ -3567,3 +3567,28 @@ def build_building(
     except Exception as e:
         logger.error(f"Error building: {e}")
         return json.dumps({"success": False, "error": f"Error building: {e}"}, indent=2)
+
+@mcp.tool()
+def create_storey(
+    ctx: Context,
+    name: str,
+    elevation: float = 0.0
+) -> str:
+    """
+    Create a new Building Storey in the IFC project.
+    
+    Args:
+        name: Name of the storey (e.g. 'First Floor')
+        elevation: Elevation height in meters
+    """
+    try:
+        blender = get_blender_connection()
+        params = {
+            "name": name,
+            "elevation": elevation
+        }
+        result = blender.send_command("create_storey", params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating storey: {e}")
+        return json.dumps({"error": f"Error creating storey: {str(e)}"}, indent=2)

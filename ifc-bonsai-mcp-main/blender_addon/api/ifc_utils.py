@@ -12,8 +12,14 @@ import ifcopenshell.util.unit
 from typing import List, Optional, Any, Dict
 
 
+_ACTIVE_IFC_FILE = None
+
 def get_ifc_file():
     """Get current IFC file. Auto-initializes a project if none is open."""
+    global _ACTIVE_IFC_FILE
+    if _ACTIVE_IFC_FILE:
+        return _ACTIVE_IFC_FILE
+
     import bonsai.tool as tool
     from bonsai.bim.ifc import IfcStore
     ifc = None
@@ -23,6 +29,7 @@ def get_ifc_file():
         pass
     if not ifc:
         ifc = IfcStore.file
+    
     if not ifc:
         from .project import initialize_project
         import logging
@@ -35,8 +42,14 @@ def get_ifc_file():
             pass
         if not ifc:
             ifc = IfcStore.file
+            
         if not ifc:
+            # Maybe initialize_project set it in _ACTIVE_IFC_FILE?
+            if _ACTIVE_IFC_FILE:
+                return _ACTIVE_IFC_FILE
             raise RuntimeError("No IFC file open and auto-initialization failed")
+            
+    _ACTIVE_IFC_FILE = ifc
     return ifc
 
 
@@ -77,13 +90,16 @@ def save_and_load_ifc():
     path = IfcStore.path or "new_project.ifc"
 
     try:
-        ifc = None
-        try:
-            ifc = tool.Ifc.get()
-        except Exception:
-            pass
+        global _ACTIVE_IFC_FILE
+        ifc = _ACTIVE_IFC_FILE
+        if not ifc:
+            try:
+                ifc = tool.Ifc.get()
+            except Exception:
+                pass
         if not ifc:
             ifc = IfcStore.file
+            
         if ifc:
             ifc.write(path)
             logging.getLogger(__name__).info(f"Saved IFC project directly to {path}")
