@@ -25,7 +25,10 @@ def initialize_project(project_name: str = "My Project") -> dict:
         from bonsai.bim.ifc import IfcStore
         
         # 1. Create a fresh IFC4 file
-        ifc_file = ifcopenshell.file(schema="IFC4")
+        try:
+            ifc_file = ifcopenshell.file(schema="IFC4")
+        except TypeError:
+            ifc_file = ifcopenshell.file()
         
         # 2. Add structural project elements
         project = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcProject", name=project_name)
