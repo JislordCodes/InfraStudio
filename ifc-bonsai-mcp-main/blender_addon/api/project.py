@@ -26,7 +26,11 @@ def initialize_project(project_name: str = "My Project") -> dict:
         
         # Load from the bundled template to avoid all ifcopenshell.api creation bugs!
         template_path = os.path.join(os.path.dirname(__file__), "blank_project.ifc")
-        ifc_file = ifcopenshell.open(template_path)
+        
+        import ifcopenshell.ifcopenshell_wrapper as wrapper
+        ifc_file = wrapper.open(template_path, False)
+        if not ifc_file.good():
+            raise Exception("Failed to open blank template via wrapper")
         
         project_element = ifc_file.by_type("IfcProject")[0]
         project_element.Name = project_name
