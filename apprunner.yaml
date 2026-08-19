@@ -3,8 +3,8 @@ runtime: python311
 build:
   commands:
     build:
-      - python3 -m pip install --no-cache-dir -e ./ifc-bonsai-mcp-main
-      - python3 -m pip install --no-cache-dir sentence-transformers chromadb fastapi uvicorn sse-starlette starlette mcp
+      - python3 -m pip install --no-cache-dir --target /app/lib -e ./ifc-bonsai-mcp-main
+      - python3 -m pip install --no-cache-dir --target /app/lib sentence-transformers chromadb fastapi uvicorn sse-starlette starlette mcp
 run:
   command: python3 serve_mcp.py
   network:
@@ -12,3 +12,4 @@ run:
     env:
       - name: PORT
         value: "8000"
+
