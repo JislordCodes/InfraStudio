@@ -51,16 +51,18 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
         uvicorn[standard] \
         sse-starlette
 
-# ── Download and install Blender 4.4.0 ────────────────────────────────────
-ENV BLENDER_VERSION=4.4.0
+# ── Download and install Blender 4.3.2 (LTS) ──────────────────────────────
+ENV BLENDER_VERSION=4.3.2
+ENV BLENDER_MAJOR=4.3
 ENV BLENDER_DIR=/opt/blender-${BLENDER_VERSION}-linux-x64
-RUN wget -q https://download.blender.org/release/Blender4.4/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz && \
+RUN (curl -fsSL https://download.blender.org/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -o /tmp/blender.tar.xz || \
+     wget -q --no-check-certificate https://download.blender.org/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz) && \
     tar -xf /tmp/blender.tar.xz -C /opt/ && \
     rm /tmp/blender.tar.xz && \
     ln -s ${BLENDER_DIR}/blender /usr/local/bin/blender
 
 # ── Install required packages into Blender's Python ────────────────────────
-ENV BLENDER_PYTHON=${BLENDER_DIR}/4.4/python/bin/python3.11
+ENV BLENDER_PYTHON=${BLENDER_DIR}/${BLENDER_MAJOR}/python/bin/python3.11
 RUN ${BLENDER_PYTHON} -m ensurepip && \
     ${BLENDER_PYTHON} -m pip install --upgrade pip && \
     ${BLENDER_PYTHON} -m pip install --no-cache-dir ifcopenshell bcf && \
@@ -72,7 +74,7 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
 # ── Phase 8.8.3: Dynamic Autonomous Bonsai Sync (Latest release) ────────────
 # We dynamically scrape the latest daily alpha from GitHub Releases to prevent 404s
 # and extract ALL top-level packages to satisfy internal imports.
-ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/4.4/scripts/addons
+ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/${BLENDER_MAJOR}/scripts/addons
 
 RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     export BONSAI_ZIP_URL=$(curl -sL https://api.github.com/repos/IfcOpenShell/IfcOpenShell/releases | grep -o '"browser_download_url": "[^"]*bonsai_py311[^"]*linux-x64\.zip"' | head -n 1 | cut -d '"' -f 4) && \
