@@ -32,28 +32,6 @@ for p in [addons_path, os.path.join(addons_path, 'blendermcp'), os.path.join(add
         sys.path.insert(0, p)
         logger.info(f"Injected {p} into sys.path")
 
-# 2. Bridge ifcopenshell_wrapper PascalCase -> snake_case symbol compatibility
-try:
-    import re
-    import ifcopenshell
-    import ifcopenshell.ifcopenshell_wrapper as _w
-    for _a in dir(_w):
-        if not _a.startswith('_'):
-            _val = getattr(_w, _a)
-            setattr(_w, _a.lower(), _val)
-            setattr(_w, re.sub(r'(?<!^)(?=[A-Z])', '_', _a).lower(), _val)
-    _w.native_element = getattr(_w, 'Element', None)
-    _w.triangulation_element = getattr(_w, 'TriangulationElement', None)
-    _w.serialized_element = getattr(_w, 'SerializedElement', None)
-    _w.brep_element = getattr(_w, 'BRepElement', None)
-    _w.native = getattr(_w, 'Element', None)
-    _w.triangulation = getattr(_w, 'TriangulationElement', None)
-    _w.serialization = getattr(_w, 'SerializedElement', None)
-    _w.brep = getattr(_w, 'BRepElement', None)
-    logger.info("Successfully patched ifcopenshell_wrapper symbol compatibility bridge.")
-except Exception as _patch_err:
-    logger.warning(f"ifcopenshell_wrapper patch notice: {_patch_err}")
-
 logger.info(f"=== Filesystem Audit: {addons_path} ===")
 if os.path.exists(addons_path):
     logger.info(f"Addons folder content: {os.listdir(addons_path)}")
