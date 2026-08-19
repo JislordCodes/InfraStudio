@@ -55,8 +55,9 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
 ENV BLENDER_VERSION=4.3.2
 ENV BLENDER_MAJOR=4.3
 ENV BLENDER_DIR=/opt/blender-${BLENDER_VERSION}-linux-x64
-RUN (curl -fsSL https://download.blender.org/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -o /tmp/blender.tar.xz || \
-     wget -q --no-check-certificate https://download.blender.org/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz) && \
+RUN (curl -fsSL https://mirrors.dotsrc.org/blender/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -o /tmp/blender.tar.xz || \
+     curl -fsSL https://ftp.nluug.nl/pub/graphics/blender/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -o /tmp/blender.tar.xz || \
+     wget -q https://mirrors.dotsrc.org/blender/release/Blender${BLENDER_MAJOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz -O /tmp/blender.tar.xz) && \
     tar -xf /tmp/blender.tar.xz -C /opt/ && \
     rm /tmp/blender.tar.xz && \
     ln -s ${BLENDER_DIR}/blender /usr/local/bin/blender
