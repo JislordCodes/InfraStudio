@@ -3200,7 +3200,9 @@ def initialize_project(
         })
         if result.get("status") == "error":
             return json.dumps({"success": False, "error": result.get("result", "Unknown error")})
-        return json.dumps(result.get("result", {"success": True, "message": "Project initialized"}), indent=2)
+        if "error" in result:
+            return json.dumps({"success": False, "error": result["error"]})
+        return json.dumps(result, indent=2)
     except Exception as e:
         logger.error(f"Error initializing project: {e}")
         return json.dumps({"success": False, "error": f"Error initializing project: {e}"}, indent=2)
