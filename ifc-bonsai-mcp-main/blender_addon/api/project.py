@@ -35,9 +35,9 @@ def initialize_project(project_name: str = "My Project") -> dict:
         # Geometric contexts are already in the template
         logger.info(f"Loaded template project with guid: {project_element.GlobalId}")
         
-        # 4. Set as active file in Bonsai and locally
-        IfcStore.file = ifc_file
-        IfcStore.path = "new_project.ifc"
+        # 4. Set as active file locally (skip IfcStore to avoid Bonsai UI hooks)
+        # IfcStore.file = ifc_file
+        # IfcStore.path = "new_project.ifc"
         try:
             from . import ifc_utils
             ifc_utils._ACTIVE_IFC_FILE = ifc_file
