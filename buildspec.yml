@@ -1,0 +1,15 @@
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_URI
+  build:
+    commands:
+      - echo Building Docker image from ifc-bonsai-mcp-main/Dockerfile...
+      - docker build -t $ECR_URI:latest -f ifc-bonsai-mcp-main/Dockerfile ifc-bonsai-mcp-main/
+  post_build:
+    commands:
+      - echo Pushing image to ECR...
+      - docker push $ECR_URI:latest
+      - echo Done. Image pushed to $ECR_URI:latest
