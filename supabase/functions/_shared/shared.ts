@@ -1,8 +1,25 @@
 
 /// <reference types="jsr:@supabase/functions-js/edge-runtime.d.ts" />
 
-export const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 export const LOCATION = "global";
+
+/** Resolve per request so ECS migration errors cannot crash CORS preflight. */
+export function getMcpUrl(): string {
+  const configured = typeof Deno !== "undefined"
+    ? Deno.env.get("MCP_URL")
+    : process.env.MCP_URL;
+  const url = configured?.trim();
+  if (!url) {
+    throw new Error("MCP_URL is not configured. Set it to the stable ECS MCP endpoint, including /mcp.");
+  }
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("unsupported protocol");
+    return parsed.toString();
+  } catch {
+    throw new Error("MCP_URL must be a valid HTTP(S) URL ending in /mcp.");
+  }
+}
 
 export const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -30,7 +47,7 @@ export async function mcpPost(body: unknown, clientSessionId: string): Promise<{
     "Accept": "application/json, text/event-stream"
   };
   if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
-  const res = await fetch(MCP_URL, {
+  const res = await fetch(getMcpUrl(), {
     method: "POST",
     headers,
     body: JSON.stringify(body)

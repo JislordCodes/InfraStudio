@@ -52648,7 +52648,20 @@ var import_undici = __toESM(require_undici());
 var import_client_secrets_manager = __toESM(require_dist_cjs16());
 
 // ../supabase/functions/_shared/shared.ts
-var MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
+function getMcpUrl() {
+  const configured = typeof Deno !== "undefined" ? Deno.env.get("MCP_URL") : process.env.MCP_URL;
+  const url = configured?.trim();
+  if (!url) {
+    throw new Error("MCP_URL is not configured. Set it to the stable ECS MCP endpoint, including /mcp.");
+  }
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("unsupported protocol");
+    return parsed.toString();
+  } catch {
+    throw new Error("MCP_URL must be a valid HTTP(S) URL ending in /mcp.");
+  }
+}
 var CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -52675,7 +52688,7 @@ async function mcpPost(body, clientSessionId) {
     "Accept": "application/json, text/event-stream"
   };
   if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
-  const res = await fetch(MCP_URL, {
+  const res = await fetch(getMcpUrl(), {
     method: "POST",
     headers,
     body: JSON.stringify(body)

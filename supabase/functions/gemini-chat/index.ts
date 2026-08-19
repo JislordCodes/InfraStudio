@@ -1,7 +1,17 @@
 /// <reference types="jsr:@supabase/functions-js/edge-runtime.d.ts" />
 
 // ══ CONFIG ══
-const MCP_URL = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
+function getMcpUrl(): string {
+  const url = Deno.env.get("MCP_URL")?.trim();
+  if (!url) throw new Error("MCP_URL is not configured. Set it to the stable ECS MCP endpoint, including /mcp.");
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("unsupported protocol");
+    return parsed.toString();
+  } catch {
+    throw new Error("MCP_URL must be a valid HTTP(S) URL ending in /mcp.");
+  }
+}
 const LOCATION = "global";
 
 const CORS = {
@@ -31,7 +41,7 @@ async function mcpPost(body: unknown, clientSessionId: string): Promise<{ data: 
     "Accept": "application/json, text/event-stream"
   };
   if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
-  const res = await fetch(MCP_URL, {
+  const res = await fetch(getMcpUrl(), {
     method: "POST",
     headers,
     body: JSON.stringify(body)

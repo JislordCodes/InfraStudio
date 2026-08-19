@@ -31,6 +31,7 @@ $envObj = @{
 if ($qwenApiKey) { $envObj.Variables["QWEN_API_KEY"] = $qwenApiKey }
 if ($qwenSecretId) { $envObj.Variables["QWEN_SECRET_ID"] = $qwenSecretId }
 if ($env:QWEN_BASE_URL) { $envObj.Variables["QWEN_BASE_URL"] = $env:QWEN_BASE_URL }
+if ($env:MCP_URL) { $envObj.Variables["MCP_URL"] = $env:MCP_URL }
 if ($env:QWEN_BASE_URL) {
     $envObj.Variables["QWEN_BASE_URL"] = $env:QWEN_BASE_URL
 }
