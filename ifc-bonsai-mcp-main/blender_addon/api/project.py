@@ -15,44 +15,19 @@ logger = logging.getLogger(__name__)
 def initialize_project(project_name: str = "My Project") -> dict:
     """Initialize a new empty IFC4 project with Project, Site, Building, and Storey.
     
-    Args:
-        project_name: The name of the new IFC project.
-        
     Returns:
         Dict containing success status and project information.
     """
     try:
-        from bonsai.bim.ifc import IfcStore
         import bonsai.tool as tool
-        import bonsai.core.project as project_core
-        import bonsai.core.spatial as spatial_core
+        from bonsai.bim.ifc import IfcStore
         
-        # 1. Create a fresh IFC4 file using Bonsai's Project tool
-        # tool.Project is how Bonsai natively creates projects.
-        # But wait, earlier I saw "partially initialized module 'bonsai.tool' has no attribute 'Ifc' (most likely due to a circular import)"
-        # This was in get_ifc_file(), which is NOT here.
-        # If I can't use tool.Project, let's just use the current ifcopenshell.api but fix the "create_entity" error.
+        # 1. Create a fresh project using Bonsai's Project tool
+        # This automatically handles the IFC4 file creation, Project, Site, Building, Storey, and geometric contexts!
+        tool.Project.create(project_name)
         
-        try:
-            ifc_file = ifcopenshell.file(schema="IFC4")
-        except TypeError:
-            ifc_file = ifcopenshell.file()
-            
-        # The correct way to create a project with API is:
-        project = ifcopenshell.api.run("project.create_file", version="IFC4")
-        ifc_file = project # project.create_file returns an ifcopenshell.file object
+        ifc_file = IfcStore.file
         project_element = ifc_file.by_type("IfcProject")[0]
-        project_element.Name = project_name
-        
-        ifcopenshell.api.run("unit.assign_unit", ifc_file)
-        
-        site = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcSite", name="Default Site")
-        building = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcBuilding", name="Default Building")
-        storey = ifcopenshell.api.run("root.create_entity", ifc_file, ifc_class="IfcBuildingStorey", name="Level 0")
-        
-        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=project_element, products=[site])
-        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=site, products=[building])
-        ifcopenshell.api.run("aggregate.assign_object", ifc_file, relating_object=building, products=[storey])
         
         # 3b. Create geometric representation contexts (required for all geometry creation)
         model_context = ifcopenshell.api.run(
