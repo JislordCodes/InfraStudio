@@ -68,7 +68,6 @@ RUN (curl -fsSL https://mirrors.dotsrc.org/blender/release/Blender${BLENDER_MAJO
 ENV BLENDER_PYTHON=${BLENDER_DIR}/${BLENDER_MAJOR}/python/bin/python3.11
 RUN ${BLENDER_PYTHON} -m ensurepip && \
     ${BLENDER_PYTHON} -m pip install --upgrade pip && \
-    ${BLENDER_PYTHON} -m pip install --no-cache-dir ifcopenshell bcf && \
     ${BLENDER_PYTHON} -m pip install \
         "trimesh>=3.24.0" \
         "pillow>=10.0.0" \

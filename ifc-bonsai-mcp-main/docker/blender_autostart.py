@@ -15,45 +15,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger('blender_mcp')
 
-def audit_filesystem():
+def get_addons_path():
     try:
-        blender_dir = os.environ.get('BLENDER_DIR', '/opt/blender-4.4.3-linux-x64')
-        addons_path = os.path.join(blender_dir, '4.4', 'scripts', 'addons')
-        logger.info(f"=== Filesystem Audit: {addons_path} ===")
-        if os.path.exists(addons_path):
-            logger.info(f"Addons folder content: {os.listdir(addons_path)}")
-            bonsai_dir = os.path.join(addons_path, 'bonsai')
-            if os.path.exists(bonsai_dir):
-                logger.info(f"Bonsai folder content: {os.listdir(bonsai_dir)}")
-                # Check for bim folder
-                bim_dir = os.path.join(bonsai_dir, 'bim')
-                logger.info(f"Bonsai/bim exists: {os.path.exists(bim_dir)}")
-            else:
-                logger.error("Bonsai directory MISSING in addons folder!")
-        else:
-            logger.error("Addons path MISSING!")
-        logger.info("==========================================")
-    except Exception as e:
-        logger.error(f"Audit failed: {e}")
+        import bpy
+        major_ver = f"{bpy.app.version[0]}.{bpy.app.version[1]}"
+        blender_dir = os.environ.get('BLENDER_DIR', f"/opt/blender-{bpy.app.version[0]}.{bpy.app.version[1]}.{bpy.app.version[2]}-linux-x64")
+        return os.path.join(blender_dir, major_ver, 'scripts', 'addons')
+    except Exception:
+        return "/opt/blender-4.3.2-linux-x64/4.3/scripts/addons"
 
-# ── Phase 8.1: Hardened Path Initialization ──────────────────────────────
-blender_dir = os.environ.get('BLENDER_DIR', '/opt/blender-4.4.3-linux-x64')
-addons_path = os.path.join(blender_dir, '4.4', 'scripts', 'addons')
+addons_path = get_addons_path()
 
-# 1. Audit first
-audit_filesystem()
+# 1. Inject addons path and blendermcp path into sys.path
+for p in [addons_path, os.path.join(addons_path, 'blendermcp'), os.path.join(addons_path, 'bonsai')]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
+        logger.info(f"Injected {p} into sys.path")
 
-# 2. Inject paths BEFORE any imports
-if addons_path not in sys.path:
-    sys.path.insert(0, addons_path)
-    logger.info(f"Injected {addons_path} into sys.path")
-
-# 3. Specifically inject bonsai directory for internal resolution if needed
-bonsai_path = os.path.join(addons_path, 'bonsai')
-if bonsai_path not in sys.path:
-    sys.path.insert(0, bonsai_path)
-    logger.info(f"Injected {bonsai_path} into sys.path")
-
+logger.info(f"=== Filesystem Audit: {addons_path} ===")
+if os.path.exists(addons_path):
+    logger.info(f"Addons folder content: {os.listdir(addons_path)}")
+logger.info("==========================================")
 logger.info("Starting Blender internal autostart sequence...")
 
 def enable_addons():
