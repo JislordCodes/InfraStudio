@@ -54,26 +54,9 @@ try:
     # entity_instance attribute bridge (TemplateType etc.)
     _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
 
-    def _file_create_entity(self, ifc_class, **kwargs):
-        decl = self.schema.declaration_by_name(ifc_class)
-        entity = self.create(decl)
-        for k, v in kwargs.items():
-            if v is not None:
-                try:
-                    setattr(entity, k, v)
-                except Exception:
-                    try:
-                        idx = entity.get_argument_index(k)
-                        if idx >= 0:
-                            entity.set_argument(idx, v)
-                    except Exception:
-                        pass
-        return entity
-
-    _w.file.create_entity = _file_create_entity
-    for cls in [_w.file, getattr(_w, 'File', None)]:
-        if cls is not None:
-            setattr(cls, 'post_init', lambda self: None)
+    # We remove the custom create_entity monkey patch to let the native Python subclass
+    # of ifcopenshell.file handle this method correctly.
+    logger.info("Skipped monkey-patching create_entity and post_init to preserve Python subclass initialization.")
 
     logger.info("Successfully patched ifcopenshell_wrapper (geom aliases + create_entity + post_init + entity_instance bridge).")
 except Exception as _w_err:
