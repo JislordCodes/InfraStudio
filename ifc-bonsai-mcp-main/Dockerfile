@@ -71,7 +71,7 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
     ${BLENDER_PYTHON} -m pip install \
         "trimesh>=3.24.0" \
         "pillow>=10.0.0" \
-        "numpy>=1.26.0"
+        "numpy<2.0.0,>=1.26.0"
 
 # ── Phase 8.8.3: Dynamic Autonomous Bonsai Sync (Latest release) ────────────
 # We dynamically scrape the latest daily alpha from GitHub Releases to prevent 404s
@@ -99,6 +99,7 @@ RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     # into Blender's own Python interpreter so they are available as platform libraries.
     # We remove --no-index to allow fetching missing secondary dependencies (like pydantic) from PyPI.
     ${BLENDER_PYTHON} -m pip install --find-links=/tmp/bonsai_ext/bonsai/wheels /tmp/bonsai_ext/bonsai/wheels/*.whl && \
+    ${BLENDER_PYTHON} -m pip install --no-cache-dir "numpy<2.0.0" && \
     echo "=== Step 3 done — dependencies installed via pip ===" && \
     ls ${BLENDER_ADDONS_DIR}/bonsai/ && \
     rm -rf /tmp/bonsai.zip /tmp/bonsai_ext /tmp/bonsai_wheel_ext
