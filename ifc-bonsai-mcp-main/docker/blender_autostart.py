@@ -208,6 +208,20 @@ try:
 except Exception as e:
     logger.error(f"bonsai.tool.Ifc NOT available: {e}")
 
+# Bonsai imports the ``ifcopenshell.entity_instance`` and ``ifcopenshell.file``
+# submodules while loading. Python then assigns those modules onto the parent
+# package, replacing the public classes expected by API code in isinstance()
+# checks. Restore the public class API *after* Bonsai has finished importing.
+try:
+    import ifcopenshell
+    if _file_cls is not None:
+        ifcopenshell.file = _file_cls
+    if hasattr(_w, "entity_instance"):
+        ifcopenshell.entity_instance = _w.entity_instance
+    logger.info("Restored IfcOpenShell public classes after Bonsai import.")
+except Exception as _public_api_err:
+    logger.warning(f"Could not restore IfcOpenShell public classes: {_public_api_err}")
+
 # ── Step 4: Intercept bpy.app.timers for headless operation ──────────────────
 import queue
 import bpy
