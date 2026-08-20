@@ -405,13 +405,25 @@ def create_trimesh_ifc(
         body_context = get_or_create_body_context(ifc_file)
 
         import ifcopenshell.api
-        element = ifcopenshell.api.run(
-            "root.create_entity",
-            ifc_file,
-            ifc_class=canonical_class,
-            name=name,
-            predefined_type=predefined_type
-        )
+        try:
+            element = ifcopenshell.api.run(
+                "root.create_entity",
+                ifc_file,
+                ifc_class=canonical_class,
+                name=name,
+                predefined_type=predefined_type
+            )
+        except Exception as e:
+            # Fallback to direct creation for older wrapper versions
+            if hasattr(ifc_file, 'create_entity'):
+                element = ifc_file.create_entity(canonical_class)
+            else:
+                element = getattr(ifc_file, f"create{canonical_class}")()
+            
+            if name:
+                element.Name = name
+            if predefined_type and hasattr(element, "PredefinedType"):
+                element.PredefinedType = predefined_type
 
         ifcopenshell.api.run(
             "spatial.assign_container",

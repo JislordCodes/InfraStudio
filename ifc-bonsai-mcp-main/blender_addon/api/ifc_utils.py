@@ -17,47 +17,50 @@ _ACTIVE_IFC_FILE = None
 def get_ifc_file():
     """Get current IFC file. Auto-initializes a project if none is open."""
     global _ACTIVE_IFC_FILE
-    if _ACTIVE_IFC_FILE:
+    if _ACTIVE_IFC_FILE is not None:
         return _ACTIVE_IFC_FILE
 
-    from bonsai.bim.ifc import IfcStore
-    ifc = IfcStore.file
-    
-    if not ifc:
-        from .project import initialize_project
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("No IFC project found. Auto-initializing fallback project...")
-        initialize_project(project_name="Auto-Initialized Project")
+    # Try Bonsai's IfcStore as a secondary fallback
+    try:
+        from bonsai.bim.ifc import IfcStore
         ifc = IfcStore.file
-            
-        if not ifc:
-            # Maybe initialize_project set it in _ACTIVE_IFC_FILE?
-            if _ACTIVE_IFC_FILE:
-                return _ACTIVE_IFC_FILE
-            raise RuntimeError("No IFC file open and auto-initialization failed")
-            
-    _ACTIVE_IFC_FILE = ifc
-    return ifc
+        if ifc is not None:
+            _ACTIVE_IFC_FILE = ifc
+            return ifc
+    except Exception:
+        pass  # Bonsai may not be available in headless mode
+
+    # Auto-initialize a blank project
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("No IFC project found. Auto-initializing fallback project...")
+    try:
+        from .project import initialize_project
+        initialize_project(project_name="Auto-Initialized Project")
+    except Exception as e:
+        logger.error(f"Auto-initialization failed: {e}")
+
+    if _ACTIVE_IFC_FILE is not None:
+        return _ACTIVE_IFC_FILE
+
+    raise RuntimeError("No IFC file open and auto-initialization failed")
 
 
 def get_default_container():
     """Get active spatial container."""
-    from bonsai.bim.ifc import IfcStore
     container = None
-    if not container:
-        ifc = get_ifc_file()
-        storeys = ifc.by_type("IfcBuildingStorey")
-        if storeys:
-            container = storeys[0]
+    ifc = get_ifc_file()
+    storeys = ifc.by_type("IfcBuildingStorey")
+    if storeys:
+        container = storeys[0]
+    else:
+        buildings = ifc.by_type("IfcBuilding")
+        if buildings:
+            container = buildings[0]
         else:
-            buildings = ifc.by_type("IfcBuilding")
-            if buildings:
-                container = buildings[0]
-            else:
-                sites = ifc.by_type("IfcSite")
-                if sites:
-                    container = sites[0]
+            sites = ifc.by_type("IfcSite")
+            if sites:
+                container = sites[0]
     if not container:
         raise RuntimeError("No active spatial container")
     return container
