@@ -76,6 +76,11 @@ try:
         logger.warning(f"Could not load IfcOpenShell file mixin: {_mixin_err}")
 
     if _file_cls is not None and _file_mixin is not None:
+        # ``post_init`` stores transaction state on a class-level registry;
+        # the native class does not carry the Python mixin's class attributes.
+        for _name in ("registry", "units", "history_size", "to_delete"):
+            if not hasattr(_file_cls, _name) and hasattr(_file_mixin, _name):
+                setattr(_file_cls, _name, getattr(_file_mixin, _name))
         for _name in ("post_init", "create_entity"):
             _method = getattr(_file_mixin, _name, None)
             if _method is not None:
@@ -83,6 +88,15 @@ try:
 
     if _file_cls is not None and not hasattr(_file_cls, "post_init"):
         setattr(_file_cls, "post_init", lambda self: None)
+
+    if _file_cls is not None and not hasattr(_file_cls, "schema_identifier"):
+        # Bonsai's unit and pset helpers use this property when opening a file.
+        # Native IfcOpenShell exposes the same value through the header object.
+        setattr(
+            _file_cls,
+            "schema_identifier",
+            property(lambda self: self.header.file_schema.schema_identifiers[0]),
+        )
 
     if _file_cls is not None and not hasattr(_file_cls, "create_entity"):
         def _create_entity(self, entity_type, *args, **kwargs):
