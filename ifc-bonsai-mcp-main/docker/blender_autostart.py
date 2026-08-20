@@ -51,9 +51,11 @@ try:
     _w.serialization = getattr(_w, 'SerializedElement', None)
     _w.brep = getattr(_w, 'BRepElement', None)
 
-    # entity_instance attribute bridge (TemplateType etc.).  The bundled
-    # native class also omits the Python mixin's item assignment methods,
-    # which are required when API tools populate IFC attributes.
+    # The pinned Bonsai bundle supplies matching Python and native
+    # IfcOpenShell bindings. Do not monkey-patch its file/entity classes.
+    # Doing so masks version conflicts and can break semantic IFC creation.
+    logger.info("Applied IfcOpenShell geometry compatibility aliases.")
+    '''
     _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
     if not hasattr(_w.entity_instance, "set_attribute_value_py"):
         # The native method named ``set_attribute_value`` only accepts an
@@ -185,7 +187,7 @@ try:
             return entity
         setattr(_file_cls, "create_entity", _create_entity)
 
-    logger.info("Successfully patched ifcopenshell compatibility (geom aliases + create_entity + post_init + entity_instance bridge).")
+    '''
 except Exception as _w_err:
     logger.warning(f"ifcopenshell patch notice: {_w_err}")
 
@@ -207,20 +209,6 @@ try:
     logger.info(f"bonsai.tool.Ifc verified: {tool.Ifc}")
 except Exception as e:
     logger.error(f"bonsai.tool.Ifc NOT available: {e}")
-
-# Bonsai imports the ``ifcopenshell.entity_instance`` and ``ifcopenshell.file``
-# submodules while loading. Python then assigns those modules onto the parent
-# package, replacing the public classes expected by API code in isinstance()
-# checks. Restore the public class API *after* Bonsai has finished importing.
-try:
-    import ifcopenshell
-    if _file_cls is not None:
-        ifcopenshell.file = _file_cls
-    if hasattr(_w, "entity_instance"):
-        ifcopenshell.entity_instance = _w.entity_instance
-    logger.info("Restored IfcOpenShell public classes after Bonsai import.")
-except Exception as _public_api_err:
-    logger.warning(f"Could not restore IfcOpenShell public classes: {_public_api_err}")
 
 # ── Step 4: Intercept bpy.app.timers for headless operation ──────────────────
 import queue

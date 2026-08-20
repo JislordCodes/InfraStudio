@@ -77,11 +77,12 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
 # We dynamically scrape the latest daily alpha from GitHub Releases to prevent 404s
 # and extract ALL top-level packages to satisfy internal imports.
 ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/${BLENDER_MAJOR}/scripts/addons
+ENV BONSAI_VERSION=0.8.2-alpha250218
+ENV BONSAI_ZIP_URL=https://github.com/IfcOpenShell/IfcOpenShell/releases/download/bonsai-${BONSAI_VERSION}/bonsai_py311-${BONSAI_VERSION}-linux-x64.zip
 
 RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
-    export BONSAI_ZIP_URL=$(curl -sL https://api.github.com/repos/IfcOpenShell/IfcOpenShell/releases | grep -o '"browser_download_url": "[^"]*bonsai_py311[^"]*linux-x64\.zip"' | head -n 1 | cut -d '"' -f 4) && \
-    echo "Resolving Bonsai zip: $BONSAI_ZIP_URL" && \
-    wget -qO /tmp/bonsai.zip "$BONSAI_ZIP_URL" && \
+    echo "Installing pinned Bonsai zip: ${BONSAI_ZIP_URL}" && \
+    wget -qO /tmp/bonsai.zip "${BONSAI_ZIP_URL}" && \
     mkdir -p /tmp/bonsai_ext && \
     unzip -q /tmp/bonsai.zip -d /tmp/bonsai_ext && \
     # Step 1: Copy the addon outer folder into addons dir
