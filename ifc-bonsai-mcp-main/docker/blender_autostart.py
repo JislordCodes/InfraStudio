@@ -51,8 +51,30 @@ try:
     _w.serialization = getattr(_w, 'SerializedElement', None)
     _w.brep = getattr(_w, 'BRepElement', None)
 
-    # entity_instance attribute bridge (TemplateType etc.)
+    # entity_instance attribute bridge (TemplateType etc.).  The bundled
+    # native class also omits the Python mixin's item assignment methods,
+    # which are required when API tools populate IFC attributes.
     _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
+    try:
+        _entity_module = importlib.import_module("ifcopenshell.entity_instance")
+        _entity_mixin = getattr(_entity_module, "entity_instance_mixin", None)
+        if _entity_mixin is not None:
+            for _name in (
+                "__getattr__",
+                "__setattr__",
+                "__getitem__",
+                "__setitem__",
+                "__dir__",
+                "get_info",
+                "is_entity",
+                "walk",
+                "compare",
+            ):
+                _method = getattr(_entity_mixin, _name, None)
+                if _method is not None:
+                    setattr(_w.entity_instance, _name, _method)
+    except Exception as _entity_err:
+        logger.warning(f"Could not load IfcOpenShell entity mixin: {_entity_err}")
 
     # Some bundled IfcOpenShell builds expose the low-level C++ `file` class
     # without the Python methods that Bonsai and ifcopenshell.api expect.
