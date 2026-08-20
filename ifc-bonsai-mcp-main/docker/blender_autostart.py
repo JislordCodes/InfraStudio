@@ -91,10 +91,19 @@ try:
     if _file_cls is not None and not hasattr(_file_cls, "schema_identifier"):
         # Bonsai's unit and pset helpers use this property when opening a file.
         # Native IfcOpenShell exposes the same value through the header object.
+        def _schema_identifier(self):
+            header = self.header() if callable(getattr(self, "header", None)) else self.header
+            file_schema = getattr(header, "file_schema", None)
+            identifiers = getattr(file_schema, "schema_identifiers", None)
+            if callable(identifiers):
+                identifiers = identifiers()
+            if identifiers:
+                return identifiers[0]
+            return "IFC4"
         setattr(
             _file_cls,
             "schema_identifier",
-            property(lambda self: self.header.file_schema.schema_identifiers[0]),
+            property(_schema_identifier),
         )
 
     if _file_cls is not None:
@@ -107,10 +116,13 @@ try:
             mapping while adapting to the native signature.
             """
             kwargs.pop("id", None)
-            try:
-                entity = self.create(entity_type, -1)
-            except TypeError:
-                entity = self.create(entity_type)
+            # This native build's ``file.create`` accepts an IFC schema
+            # declaration pointer, not a type string or explicit id.
+            schema_name = getattr(self, "schema_identifier", "IFC4")
+            if callable(schema_name):
+                schema_name = schema_name()
+            declaration = _w.schema_by_name(schema_name or "IFC4").declaration_by_name(entity_type)
+            entity = self.create(declaration)
 
             attrs = list(enumerate(args))
             attrs.extend((entity.get_argument_index(name), value) for name, value in kwargs.items())
