@@ -27,10 +27,13 @@ def initialize_project(project_name: str = "My Project") -> dict:
         # Load from the bundled template to avoid all ifcopenshell.api creation bugs!
         template_path = os.path.join(os.path.dirname(__file__), "blank_project.ifc")
         
-        import ifcopenshell.ifcopenshell_wrapper as wrapper
-        ifc_file = wrapper.open(template_path, False)
-        if not ifc_file.good():
-            raise Exception("Failed to open blank template via wrapper")
+        # Use the Python IfcOpenShell file object. The low-level
+        # ifcopenshell_wrapper.open() result is only a C++ handle and does not
+        # implement create_entity, which causes ifcopenshell.api.run()
+        # (including room/storey creation) to fail at runtime.
+        ifc_file = ifcopenshell.open(template_path)
+        if not hasattr(ifc_file, "create_entity"):
+            raise TypeError("IfcOpenShell template did not return a Python file object with create_entity")
         
         project_element = ifc_file.by_type("IfcProject")[0]
         project_element.Name = project_name
