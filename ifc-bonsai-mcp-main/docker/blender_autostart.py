@@ -54,11 +54,45 @@ try:
     # entity_instance attribute bridge (TemplateType etc.)
     _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
 
-    # We remove the custom create_entity monkey patch to let the native Python subclass
-    # of ifcopenshell.file handle this method correctly.
-    logger.info("Skipped monkey-patching create_entity and post_init to preserve Python subclass initialization.")
+    # Some bundled IfcOpenShell builds expose the low-level C++ `file` class
+    # without the Python methods that Bonsai and ifcopenshell.api expect.
+    # Install narrow compatibility shims before importing Bonsai. Without these,
+    # `ifcopenshell.open()` fails with missing post_init and API creation fails
+    # with `file object has no attribute create_entity`.
+    import ifcopenshell
+    _file_cls = getattr(ifcopenshell, "file", None)
 
-    logger.info("Successfully patched ifcopenshell_wrapper (geom aliases + create_entity + post_init + entity_instance bridge).")
+    # The Blender-bundled IfcOpenShell build exposes the native C++ ``file``
+    # class but omits the Python ``file_mixin`` methods that Bonsai/API code
+    # relies on.  In particular, forwarding to ``createIfc*`` is not enough:
+    # the native class does not expose dynamic creators for every IFC type
+    # (for example IfcOwnerHistory).  Reattach the upstream mixin methods to
+    # the native class so create_entity performs schema-aware attribute setup.
+    _file_mixin = None
+    try:
+        _file_module = importlib.import_module("ifcopenshell.file")
+        _file_mixin = getattr(_file_module, "file_mixin", None)
+    except Exception as _mixin_err:
+        logger.warning(f"Could not load IfcOpenShell file mixin: {_mixin_err}")
+
+    if _file_cls is not None and _file_mixin is not None:
+        for _name in ("post_init", "create_entity"):
+            _method = getattr(_file_mixin, _name, None)
+            if _method is not None:
+                setattr(_file_cls, _name, _method)
+
+    if _file_cls is not None and not hasattr(_file_cls, "post_init"):
+        setattr(_file_cls, "post_init", lambda self: None)
+
+    if _file_cls is not None and not hasattr(_file_cls, "create_entity"):
+        def _create_entity(self, entity_type, *args, **kwargs):
+            creator = getattr(self, f"create{entity_type}", None)
+            if creator is None:
+                raise AttributeError(f"file object cannot create {entity_type}")
+            return creator(*args, **kwargs)
+        setattr(_file_cls, "create_entity", _create_entity)
+
+    logger.info("Successfully patched ifcopenshell compatibility (geom aliases + create_entity + post_init + entity_instance bridge).")
 except Exception as _w_err:
     logger.warning(f"ifcopenshell patch notice: {_w_err}")
 
