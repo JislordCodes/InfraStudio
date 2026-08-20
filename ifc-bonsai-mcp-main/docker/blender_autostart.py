@@ -81,10 +81,9 @@ try:
         for _name in ("registry", "units", "history_size", "to_delete"):
             if not hasattr(_file_cls, _name) and hasattr(_file_mixin, _name):
                 setattr(_file_cls, _name, getattr(_file_mixin, _name))
-        for _name in ("post_init", "create_entity"):
-            _method = getattr(_file_mixin, _name, None)
-            if _method is not None:
-                setattr(_file_cls, _name, _method)
+        _post_init = getattr(_file_mixin, "post_init", None)
+        if _post_init is not None:
+            setattr(_file_cls, "post_init", _post_init)
 
     if _file_cls is not None and not hasattr(_file_cls, "post_init"):
         setattr(_file_cls, "post_init", lambda self: None)
@@ -98,12 +97,38 @@ try:
             property(lambda self: self.header.file_schema.schema_identifiers[0]),
         )
 
-    if _file_cls is not None and not hasattr(_file_cls, "create_entity"):
+    if _file_cls is not None:
         def _create_entity(self, entity_type, *args, **kwargs):
-            creator = getattr(self, f"create{entity_type}", None)
-            if creator is None:
-                raise AttributeError(f"file object cannot create {entity_type}")
-            return creator(*args, **kwargs)
+            """Schema-aware create_entity for the bundled native file class.
+
+            This build's native ``file.create`` accepts only the IFC type,
+            whereas the upstream Python mixin passes an explicit id as a
+            second positional argument.  Preserve the upstream attribute
+            mapping while adapting to the native signature.
+            """
+            kwargs.pop("id", None)
+            try:
+                entity = self.create(entity_type, -1)
+            except TypeError:
+                entity = self.create(entity_type)
+
+            attrs = list(enumerate(args))
+            attrs.extend((entity.get_argument_index(name), value) for name, value in kwargs.items())
+            if len(attrs) > len(entity):
+                raise ValueError(
+                    f"entity instance of type '{entity.is_a(True)}' has only {len(entity)} "
+                    f"attributes but {len(attrs)} attributes were provided."
+                )
+            try:
+                for index, value in attrs:
+                    entity[index] = value
+            except IndexError:
+                invalid = [name for name in kwargs if entity.get_argument_index(name) == 0xFFFFFFFF]
+                raise ValueError(
+                    f"entity instance of type '{entity.is_a(True)}' doesn't have the following attributes: "
+                    f"{', '.join(invalid)}."
+                )
+            return entity
         setattr(_file_cls, "create_entity", _create_entity)
 
     logger.info("Successfully patched ifcopenshell compatibility (geom aliases + create_entity + post_init + entity_instance bridge).")
