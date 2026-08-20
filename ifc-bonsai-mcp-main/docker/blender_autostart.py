@@ -55,6 +55,10 @@ try:
     # native class also omits the Python mixin's item assignment methods,
     # which are required when API tools populate IFC attributes.
     _w.entity_instance.__getattr__ = lambda self, name: self.get_argument(self.get_argument_index(name))
+    if not hasattr(_w.entity_instance, "set_attribute_value_py"):
+        # Newer native bindings expose ``set_attribute_value`` directly while
+        # the Python mixin calls the historical ``*_py`` name.
+        _w.entity_instance.set_attribute_value_py = lambda self, index, value: self.set_attribute_value(index, value)
     try:
         _entity_module = importlib.import_module("ifcopenshell.entity_instance")
         _entity_mixin = getattr(_entity_module, "entity_instance_mixin", None)
