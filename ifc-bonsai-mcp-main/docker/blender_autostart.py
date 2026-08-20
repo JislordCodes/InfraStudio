@@ -87,6 +87,10 @@ try:
                 _method = getattr(_entity_mixin, _name, None)
                 if _method is not None:
                     setattr(_w.entity_instance, _name, _method)
+        # Importing a submodule otherwise overwrites ``ifcopenshell``'s public
+        # class attribute with the module object, breaking Bonsai annotations
+        # such as ``ifcopenshell.entity_instance | None``.
+        setattr(ifcopenshell, "entity_instance", _w.entity_instance)
     except Exception as _entity_err:
         logger.warning(f"Could not load IfcOpenShell entity mixin: {_entity_err}")
 
@@ -108,6 +112,8 @@ try:
     try:
         _file_module = importlib.import_module("ifcopenshell.file")
         _file_mixin = getattr(_file_module, "file_mixin", None)
+        # Keep the public API aligned with a normal IfcOpenShell install.
+        setattr(ifcopenshell, "file", _file_cls)
     except Exception as _mixin_err:
         logger.warning(f"Could not load IfcOpenShell file mixin: {_mixin_err}")
 
