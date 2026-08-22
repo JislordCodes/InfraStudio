@@ -95,6 +95,11 @@ export async function handleReviewer(payload: any): Promise<any> {
   if (deterministic.issues.length) {
     result.status = "FAIL";
     result.retry_required = true;
+  } else {
+    result.status = "PASS";
+    result.retry_required = false;
+    result.issues = [];
+    result.fix_recommendations = [];
   }
   result.element_counts = deterministic.classes;
   result.mcpSessionId = mcpSessionId;

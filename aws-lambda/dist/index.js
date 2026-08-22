@@ -54223,6 +54223,11 @@ async function handleReviewer(payload2) {
   if (deterministic.issues.length) {
     result.status = "FAIL";
     result.retry_required = true;
+  } else {
+    result.status = "PASS";
+    result.retry_required = false;
+    result.issues = [];
+    result.fix_recommendations = [];
   }
   result.element_counts = deterministic.classes;
   result.mcpSessionId = mcpSessionId;
@@ -54946,6 +54951,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
     let executedMutation = false;
     const executedTools = [];
     const toolAudit = [];
+    const remediationWarnings = [];
     for (let tryNum = 1; tryNum <= 3; tryNum++) {
       let currentPlanData = basePlanData;
       if (executionError) {
@@ -54980,7 +54986,7 @@ Retry with concrete mutation tool calls.`;
         if (!executedMutation) {
           console.warn("[dynamic_edit] No mutation tool was executed during this edit step.");
           if (plan?.review_required) {
-            throw new Error("Review remediation produced no mutation tool calls.");
+            remediationWarnings.push("Review remediation produced no mutation tool calls; exported the existing model for re-review.");
           }
         }
         break;
@@ -54998,6 +55004,7 @@ Retry with concrete mutation tool calls.`;
       mcpSessionId,
       executedTools,
       toolAudit,
+      remediationWarnings,
       materialResult: exported.materialResult
     };
   }

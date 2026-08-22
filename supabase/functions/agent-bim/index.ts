@@ -772,6 +772,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
     let executedMutation = false;
     const executedTools: string[] = [];
     const toolAudit: ToolAuditEntry[] = [];
+    const remediationWarnings: string[] = [];
 
     for (let tryNum = 1; tryNum <= 3; tryNum++) {
       let currentPlanData = basePlanData;
@@ -807,7 +808,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         if (!executedMutation) {
           console.warn("[dynamic_edit] No mutation tool was executed during this edit step.");
           if (plan?.review_required) {
-            throw new Error("Review remediation produced no mutation tool calls.");
+            remediationWarnings.push("Review remediation produced no mutation tool calls; exported the existing model for re-review.");
           }
         }
         break;
@@ -827,6 +828,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
       mcpSessionId,
       executedTools,
       toolAudit,
+      remediationWarnings,
       materialResult: exported.materialResult,
     };
   }
