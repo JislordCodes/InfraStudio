@@ -54966,7 +54966,13 @@ Retry with concrete mutation tool calls.`;
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";
-        if (tryNum === 3) throw new Error(executionError);
+        if (tryNum === 3) {
+          if (plan?.review_required) {
+            remediationWarnings.push("Review remediation produced no tool calls; exported the existing model for re-review.");
+            break;
+          }
+          throw new Error(executionError);
+        }
         continue;
       }
       try {
