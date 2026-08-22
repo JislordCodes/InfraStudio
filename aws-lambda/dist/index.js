@@ -52667,6 +52667,7 @@ var CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
+var STATELESS_MCP_SESSION_ID = "stateless-mcp";
 function extractText(content) {
   if (!content) return void 0;
   if (Array.isArray(content)) {
@@ -52693,7 +52694,7 @@ async function mcpPost(body, clientSessionId) {
     headers,
     body: JSON.stringify(body)
   });
-  const returnedSession = res.headers.get("mcp-session-id") || clientSessionId;
+  const returnedSession = res.headers.get("mcp-session-id") || clientSessionId || STATELESS_MCP_SESSION_ID;
   const text = await res.text();
   if (text.trim().startsWith("data:")) {
     const l3 = text.split("\n").find((l4) => l4.startsWith("data:"));
@@ -52713,7 +52714,7 @@ async function mcpInit(clientSessionId) {
     method: "initialize",
     params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
   }, clientSessionId);
-  const newSession = res1.session;
+  const newSession = res1.session || STATELESS_MCP_SESSION_ID;
   await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, newSession).catch(() => {
   });
   return newSession;
