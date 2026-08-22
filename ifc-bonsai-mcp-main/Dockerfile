@@ -79,7 +79,8 @@ RUN ${BLENDER_PYTHON} -m ensurepip && \
 # and extract ALL top-level packages to satisfy internal imports.
 ENV BLENDER_ADDONS_DIR=${BLENDER_DIR}/${BLENDER_MAJOR}/scripts/addons
 ENV BONSAI_VERSION=0.8.6-alpha260726
-ENV BONSAI_ZIP_URL=https://github.com/IfcOpenShell/IfcOpenShell/releases/download/bonsai-${BONSAI_VERSION}/bonsai_py311-${BONSAI_VERSION}-linux-x64.zip
+ENV BONSAI_RELEASE_TAG=bonsai-0.8.6-alpha2607261419
+ENV BONSAI_ZIP_URL=https://github.com/IfcOpenShell/IfcOpenShell/releases/download/${BONSAI_RELEASE_TAG}/bonsai_py311-${BONSAI_VERSION}-linux-x64.zip
 
 RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     echo "Installing pinned Bonsai zip: ${BONSAI_ZIP_URL}" && \
