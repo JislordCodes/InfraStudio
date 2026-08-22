@@ -29,6 +29,39 @@ def _get_bonsai_tool():
     except Exception:
         return None
 
+def _get_active_ifc_file():
+    tool = _get_bonsai_tool()
+    try:
+        if tool:
+            ifc = tool.Ifc.get()
+            if ifc:
+                return ifc
+    except Exception:
+        pass
+    try:
+        from .ifc_utils import get_ifc_file
+        return get_ifc_file()
+    except Exception:
+        return None
+
+def _ifc_elements_as_scene_objects(ifc_file, round_decimals: int = 3):
+    objects = []
+    if not ifc_file:
+        return objects
+    for element in ifc_file.by_type("IfcElement"):
+        guid = getattr(element, "GlobalId", None)
+        cls = element.is_a()
+        name = getattr(element, "Name", None) or cls
+        objects.append({
+            "name": name,
+            "type": "IFC",
+            "visible": True,
+            "selected": False,
+            "guid": guid,
+            "ifc_class": cls,
+        })
+    return objects
+
 
 @register_command('get_scene_info', description="Get basic information about the current Blender scene.")
 def get_scene_info(
@@ -74,7 +107,8 @@ def get_scene_info(
                 "selected": obj.select_get()
             }
             
-            element = _get_bonsai_tool().Ifc.get_entity(obj)
+            tool = _get_bonsai_tool()
+            element = tool.Ifc.get_entity(obj) if tool else None
             if element:
                 obj_info["guid"] = getattr(element, 'GlobalId', None)
                 obj_info["ifc_class"] = element.is_a()
@@ -111,6 +145,11 @@ def get_scene_info(
                 obj_info["detailed_info"] = get_blender_object_info(obj.name)
             
             objects.append(obj_info)
+
+        if not any(obj.get("ifc_class") for obj in objects):
+            ifc_objects = _ifc_elements_as_scene_objects(_get_active_ifc_file(), round_decimals)
+            if ifc_objects:
+                objects = ifc_objects
         
         return {
             "count": len(objects),
@@ -390,7 +429,7 @@ def get_object_info(
 @register_command('get_ifc_scene_overview', description='Get comprehensive IFC scene overview')
 def get_ifc_scene_overview(include_selection_summary: bool = False) -> Dict[str, Any]:
     """Return consolidated overview of the loaded IFC scene."""
-    ifc_file = _get_bonsai_tool().Ifc.get()
+    ifc_file = _get_active_ifc_file()
     if not ifc_file:
         return {"success": False, "error": "No IFC file loaded"}
 
