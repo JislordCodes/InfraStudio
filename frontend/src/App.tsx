@@ -33,7 +33,10 @@ function App() {
 
     const poll = async () => {
       try {
-        const res = await fetch(`/codex-bridge.json?t=${Date.now()}`, { cache: 'no-store' });
+        let res = await fetch(`/codex-bridge.local.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) {
+          res = await fetch(`/codex-bridge.json?t=${Date.now()}`, { cache: 'no-store' });
+        }
         if (!res.ok) return;
         const data = await res.json();
         const revision = String(data.revision || '');
