@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
 import { Uploader } from './components/Uploader';
@@ -14,6 +14,43 @@ function App() {
   const handleLoadIfcUrl = (url: string) => {
     viewerRef.current?.loadIfcFromUrl(url);
   };
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const ifcUrl = url.searchParams.get('ifc_url');
+    if (ifcUrl) {
+      handleLoadIfcUrl(ifcUrl);
+    }
+  }, []);
+
+  useEffect(() => {
+    const lastRevision = { current: '' };
+    const isEnabled = import.meta.env.DEV ||
+      new URL(window.location.href).searchParams.get('codexBridge') === '1' ||
+      localStorage.getItem('infrastudio_codex_bridge') === '1';
+
+    if (!isEnabled) return;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/codex-bridge.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const revision = String(data.revision || '');
+        const ifcUrl = String(data.ifc_url || '');
+        if (ifcUrl && revision && revision !== lastRevision.current) {
+          lastRevision.current = revision;
+          handleLoadIfcUrl(ifcUrl);
+        }
+      } catch {
+        // Optional local test bridge; ignore when the file is unavailable.
+      }
+    };
+
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
     <div className="flex flex-col w-full h-[100dvh] overflow-hidden bg-neutral-950">
