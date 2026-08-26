@@ -1,5 +1,5 @@
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
-const url = "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1/agent-bim";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const url = process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL}/functions/v1/agent-bim` : "https://pzeoilvqeyuheslkfhjq.supabase.co/functions/v1/agent-bim";
 
 async function test() {
   console.log("Calling agent-bim initialize...");

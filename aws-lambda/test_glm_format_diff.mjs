@@ -1,6 +1,8 @@
-import { fetch } from "undici";
-
-const qwenKey = process.env.QWEN_API_KEY || "sk-ws-H.IXPRPH.wpQo.MEYCIQDGaOFthnPMgvcqPxg5yin91LnkQFW9S2EdZDzlFjyiuwIhAO4M5pNSPn_H4ncna21SUgKCgO5vzUPKsUuuJNwaKvKv";
+const qwenKey = process.env.QWEN_API_KEY;
+if (!qwenKey) {
+  console.error("ERROR: QWEN_API_KEY environment variable is required to run this test.");
+  process.exit(1);
+}
 
 async function testGlm52WithoutJsonFormat() {
   console.log("=== TEST 1: glm-5.2 WITHOUT response_format ===");

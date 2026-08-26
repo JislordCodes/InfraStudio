@@ -1,5 +1,5 @@
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
-const url = "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const url = process.env.MCP_URL || "https://m63bpfmqks.us-east-1.awsapprunner.com/mcp";
 
 async function ping() {
   const start = Date.now();

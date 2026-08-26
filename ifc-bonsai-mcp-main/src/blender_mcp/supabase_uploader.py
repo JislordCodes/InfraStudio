@@ -14,12 +14,8 @@ from urllib.error import URLError, HTTPError
 
 logger = logging.getLogger("SupabaseUploader")
 
-# Configuration from environment variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://pzeoilvqeyuheslkfhjq.supabase.co")
-SUPABASE_ANON_KEY = os.environ.get(
-    "SUPABASE_ANON_KEY",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc"
-)
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 BUCKET_NAME = "ifc-models"
 
 # Default IFC file path (matches project.py's IfcStore.path)

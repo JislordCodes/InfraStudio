@@ -1,6 +1,6 @@
 // ══ CONFIG ══
-const EDGE_PROXY_BASE = "https://xdii2dngnrumglsuv74fv5awz40rgwrg.lambda-url.us-east-1.on.aws";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
+const EDGE_PROXY_BASE = import.meta.env.VITE_EDGE_PROXY_BASE || "https://xdii2dngnrumglsuv74fv5awz40rgwrg.lambda-url.us-east-1.on.aws";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
 
 export interface MultiAgentResult {
   reply: string;

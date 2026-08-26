@@ -1,1 +1,64 @@
+# Dependency & Build Artifacts
+node_modules/
+dist/
+dist.zip
+build/
+*.zip
+*.tsbuildinfo
+
+# Environment & Secret Files (CRITICAL: Never commit credentials)
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+*.pfx
+*.p12
+*service_account*.json
+*sa*.json
+*credentials*.json
+env.json
+gcp-key.json
+
+# Local & Scratch Workspaces
+scratch/
+*.log
+payload*.json
 frontend/public/codex-bridge.local.json
+ifc-bonsai-mcp-main/payload*.json
+
+# Temporary AWS Lambda SSM / CLI debug output dumps
+aws-lambda/build-*.json
+aws-lambda/check-*.json
+aws-lambda/test-*.json
+aws-lambda/debug-*.json
+aws-lambda/deploy-*.json
+aws-lambda/inspect-*.json
+aws-lambda/read-*.json
+aws-lambda/restart-*.json
+aws-lambda/run-*.json
+aws-lambda/update-*.json
+aws-lambda/copy-*.json
+aws-lambda/clone-*.json
+aws-lambda/direct-*.json
+aws-lambda/correct-*.json
+aws-lambda/find-*.json
+aws-lambda/fix-*.json
+aws-lambda/full-*.json
+aws-lambda/get-*.json
+aws-lambda/grep-*.json
+aws-lambda/instance.json
+aws-lambda/launch-*.json
+aws-lambda/list-*.json
+aws-lambda/ps-check.json
+aws-lambda/source-repo.json
+aws-lambda/verify-*.json
+aws-lambda/docker-*.json
+aws-lambda/dummy.json
+
+# OS & Editor Metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
