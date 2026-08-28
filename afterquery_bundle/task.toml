@@ -1,0 +1,38 @@
+schema_version = "1.1"
+artifacts = ["/logs/artifacts/model.patch"]
+
+[task]
+name = "afterquery/spatial-clash-detection"
+
+[metadata]
+task_id = "spatial-clash-detection"
+display_title = "Spatial Clash & Clearance Detection Engine"
+display_description = "Implement 3D AABB clash detection, severity classification, clearance matrices, and report serialization for BIM elements."
+category = "feature_request"
+language = "javascript"
+repository_url = "https://github.com/JislordCodes/InfraStudio"
+base_commit_hash = "d164e056d8ca5cd89568f1d970d5664a1aee3138"
+
+[agent]
+timeout_sec = 5400
+
+[verifier]
+environment_mode = "separate"
+timeout_sec = 1800
+
+[verifier.environment]
+build_timeout_sec = 1800
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+allow_internet = false
+
+[environment]
+build_timeout_sec = 1800
+docker_image = "us-docker.pkg.dev/afterquery-compute/compute-images/gold-repo-infrastudio-qpgl30:v1"
+os = "linux"
+cpus = 2
+memory_mb = 8192
+storage_mb = 20480
+gpus = 0
+allow_internet = false

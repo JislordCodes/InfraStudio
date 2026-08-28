@@ -1,0 +1,580 @@
+diff --git a/frontend/src/spatial/aabb.ts b/frontend/src/spatial/aabb.ts
+new file mode 100644
+index 0000000..2e5af2c
+--- /dev/null
++++ b/frontend/src/spatial/aabb.ts
+@@ -0,0 +1,84 @@
++import { Vector3D, AxisAlignedBoundingBox } from './types';
++
++export function createAxisAlignedBoundingBox(min: Vector3D, max: Vector3D): AxisAlignedBoundingBox {
++  if (min[0] > max[0] || min[1] > max[1] || min[2] > max[2]) {
++    throw new Error('Invalid bounding box coordinates: min values must be less than or equal to max values');
++  }
++
++  const size: Vector3D = [
++    max[0] - min[0],
++    max[1] - min[1],
++    max[2] - min[2]
++  ];
++
++  const center: Vector3D = [
++    min[0] + size[0] / 2,
++    min[1] + size[1] / 2,
++    min[2] + size[2] / 2
++  ];
++
++  return {
++    min: [min[0], min[1], min[2]],
++    max: [max[0], max[1], max[2]],
++    size,
++    center
++  };
++}
++
++export function intersectsAABB(a: AxisAlignedBoundingBox, b: AxisAlignedBoundingBox, tolerance = 0): boolean {
++  return (
++    a.min[0] <= b.max[0] + tolerance &&
++    a.max[0] >= b.min[0] - tolerance &&
++    a.min[1] <= b.max[1] + tolerance &&
++    a.max[1] >= b.min[1] - tolerance &&
++    a.min[2] <= b.max[2] + tolerance &&
++    a.max[2] >= b.min[2] - tolerance
++  );
++}
++
++export function computeIntersectionBox(
++  a: AxisAlignedBoundingBox,
++  b: AxisAlignedBoundingBox
++): AxisAlignedBoundingBox | null {
++  const minX = Math.max(a.min[0], b.min[0]);
++  const minY = Math.max(a.min[1], b.min[1]);
++  const minZ = Math.max(a.min[2], b.min[2]);
++
++  const maxX = Math.min(a.max[0], b.max[0]);
++  const maxY = Math.min(a.max[1], b.max[1]);
++  const maxZ = Math.min(a.max[2], b.max[2]);
++
++  if (minX <= maxX && minY <= maxY && minZ <= maxZ) {
++    return createAxisAlignedBoundingBox([minX, minY, minZ], [maxX, maxY, maxZ]);
++  }
++  return null;
++}
++
++export function computePenetrationDepth(
++  a: AxisAlignedBoundingBox,
++  b: AxisAlignedBoundingBox
++): number {
++  const overlapX = Math.min(a.max[0], b.max[0]) - Math.max(a.min[0], b.min[0]);
++  const overlapY = Math.min(a.max[1], b.max[1]) - Math.max(a.min[1], b.min[1]);
++  const overlapZ = Math.min(a.max[2], b.max[2]) - Math.max(a.min[2], b.min[2]);
++
++  if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
++    return Math.min(overlapX, overlapY, overlapZ);
++  }
++  return 0;
++}
++
++export function expandBoundingBox(box: AxisAlignedBoundingBox, margin: number): AxisAlignedBoundingBox {
++  return createAxisAlignedBoundingBox(
++    [box.min[0] - margin, box.min[1] - margin, box.min[2] - margin],
++    [box.max[0] + margin, box.max[1] + margin, box.max[2] + margin]
++  );
++}
++
++export function containsPoint(box: AxisAlignedBoundingBox, point: Vector3D): boolean {
++  return (
++    point[0] >= box.min[0] && point[0] <= box.max[0] &&
++    point[1] >= box.min[1] && point[1] <= box.max[1] &&
++    point[2] >= box.min[2] && point[2] <= box.max[2]
++  );
++}
+diff --git a/frontend/src/spatial/clashDetector.ts b/frontend/src/spatial/clashDetector.ts
+new file mode 100644
+index 0000000..7e979f2
+--- /dev/null
++++ b/frontend/src/spatial/clashDetector.ts
+@@ -0,0 +1,116 @@
++import {
++  SpatialElement,
++  ClashOptions,
++  ClashResult,
++  ClashRecord,
++  ClashSeverity,
++  DisciplineType
++} from './types';
++import {
++  intersectsAABB,
++  computeIntersectionBox,
++  computePenetrationDepth
++} from './aabb';
++import { calculateAABBDistance } from './geometryUtils';
++
++const SEVERITY_RANK: Record<ClashSeverity, number> = {
++  critical: 4,
++  high: 3,
++  medium: 2,
++  low: 1
++};
++
++export function detectClashes(
++  elements: SpatialElement[],
++  options?: ClashOptions
++): ClashResult {
++  const clashes: ClashRecord[] = [];
++  let hardCount = 0;
++  let clearanceCount = 0;
++
++  if (!elements || elements.length < 2) {
++    return {
++      clashes: [],
++      summary: {
++        total: 0,
++        hard: 0,
++        clearance: 0,
++        processedElements: elements ? elements.length : 0
++      }
++    };
++  }
++
++  const tolerance = options?.tolerance ?? 0;
++  const minSeverity = options?.minSeverity;
++  const includeTouching = options?.includeTouching ?? false;
++  const filterDisciplines = options?.filterDisciplines;
++
++  for (let i = 0; i < elements.length; i++) {
++    for (let j = i + 1; j < elements.length; j++) {
++      const elemA = elements[i];
++      const elemB = elements[j];
++
++      if (filterDisciplines && filterDisciplines.length >= 2) {
++        const hasA = filterDisciplines.includes(elemA.discipline);
++        const hasB = filterDisciplines.includes(elemB.discipline);
++        if (!hasA || !hasB || elemA.discipline === elemB.discipline) {
++          continue;
++        }
++      }
++
++      const intersection = computeIntersectionBox(elemA.boundingBox, elemB.boundingBox);
++
++      if (intersection) {
++        const isTouching = intersection.size[0] === 0 || intersection.size[1] === 0 || intersection.size[2] === 0;
++        if (isTouching && !includeTouching) {
++          continue;
++        }
++
++        const penetration = computePenetrationDepth(elemA.boundingBox, elemB.boundingBox);
++        const record: ClashRecord = {
++          id: `clash-${elemA.id}-${elemB.id}`,
++          elementA: elemA,
++          elementB: elemB,
++          type: 'hard',
++          severity: 'critical',
++          distance: 0,
++          penetrationDepth: penetration,
++          intersectionBox: intersection
++        };
++
++        if (!minSeverity || SEVERITY_RANK[record.severity] >= SEVERITY_RANK[minSeverity]) {
++          clashes.push(record);
++          hardCount++;
++        }
++      } else if (tolerance > 0) {
++        const distance = calculateAABBDistance(elemA.boundingBox, elemB.boundingBox);
++        if (distance > 0 && distance <= tolerance) {
++          const severity: ClashSeverity = distance < tolerance * 0.5 ? 'high' : 'medium';
++          const record: ClashRecord = {
++            id: `clash-${elemA.id}-${elemB.id}`,
++            elementA: elemA,
++            elementB: elemB,
++            type: 'clearance',
++            severity,
++            distance
++          };
++
++          if (!minSeverity || SEVERITY_RANK[record.severity] >= SEVERITY_RANK[minSeverity]) {
++            clashes.push(record);
++            clearanceCount++;
++          }
++        }
++      }
++    }
++  }
++
++  return {
++    clashes,
++    summary: {
++      total: clashes.length,
++      hard: hardCount,
++      clearance: clearanceCount,
++      processedElements: elements.length
++    }
++  };
++}
+diff --git a/frontend/src/spatial/clearanceMatrix.ts b/frontend/src/spatial/clearanceMatrix.ts
+new file mode 100644
+index 0000000..89f67f8
+--- /dev/null
++++ b/frontend/src/spatial/clearanceMatrix.ts
+@@ -0,0 +1,68 @@
++import {
++  SpatialElement,
++  ClearanceInfo,
++  ClearanceMatrixResult,
++  ClearanceViolation,
++  Vector3D
++} from './types';
++import { calculateAABBDistance, getClosestPointsAABB } from './geometryUtils';
++
++export function calculateClearance(
++  elemA: SpatialElement,
++  elemB: SpatialElement,
++  requiredClearance: number
++): ClearanceInfo {
++  const distance = calculateAABBDistance(elemA.boundingBox, elemB.boundingBox);
++  const closestPoints = getClosestPointsAABB(elemA.boundingBox, elemB.boundingBox);
++
++  return {
++    distance,
++    hasConflict: distance < requiredClearance,
++    closestPoints
++  };
++}
++
++export function buildClearanceMatrix(
++  elements: SpatialElement[],
++  requiredClearance: number,
++  maxDistanceCutoff?: number
++): ClearanceMatrixResult {
++  const elementIds = elements.map(e => e.id);
++  const n = elements.length;
++  const matrix: number[][] = Array.from({ length: n }, () => Array(n).fill(0));
++  const violations: ClearanceViolation[] = [];
++
++  for (let i = 0; i < n; i++) {
++    for (let j = i; j < n; j++) {
++      if (i === j) {
++        matrix[i][j] = 0;
++      } else {
++        const elemA = elements[i];
++        const elemB = elements[j];
++        let dist = calculateAABBDistance(elemA.boundingBox, elemB.boundingBox);
++
++        if (maxDistanceCutoff !== undefined && dist > maxDistanceCutoff) {
++          dist = Infinity;
++        }
++
++        matrix[i][j] = dist;
++        matrix[j][i] = dist;
++
++        if (dist < requiredClearance) {
++          violations.push({
++            elementA: elemA.id,
++            elementB: elemB.id,
++            distance: dist,
++            requiredClearance
++          });
++        }
++      }
++    }
++  }
++
++  return {
++    elementIds,
++    matrix,
++    violations
++  };
++}
+diff --git a/frontend/src/spatial/geometryUtils.ts b/frontend/src/spatial/geometryUtils.ts
+new file mode 100644
+index 0000000..2f1d12a
+--- /dev/null
++++ b/frontend/src/spatial/geometryUtils.ts
+@@ -0,0 +1,115 @@
++import { Vector3D, AxisAlignedBoundingBox } from './types';
++
++export function calculateAABBDistance(a: AxisAlignedBoundingBox, b: AxisAlignedBoundingBox): number {
++  let dx = 0;
++  let dy = 0;
++  let dz = 0;
++
++  if (a.max[0] < b.min[0]) {
++    dx = b.min[0] - a.max[0];
++  } else if (b.max[0] < a.min[0]) {
++    dx = a.min[0] - b.max[0];
++  }
++
++  if (a.max[1] < b.min[1]) {
++    dy = b.min[1] - a.max[1];
++  } else if (b.max[1] < a.min[1]) {
++    dy = a.min[1] - b.max[1];
++  }
++
++  if (a.max[2] < b.min[2]) {
++    dz = b.min[2] - a.max[2];
++  } else if (b.max[2] < a.min[2]) {
++    dz = a.min[2] - b.max[2];
++  }
++
++  return Math.sqrt(dx * dx + dy * dy + dz * dz);
++}
++
++export function getClosestPointsAABB(
++  a: AxisAlignedBoundingBox,
++  b: AxisAlignedBoundingBox
++): { pointA: Vector3D; pointB: Vector3D } {
++  const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(max, val));
++
++  const pointA: Vector3D = [
++    clamp(b.center[0], a.min[0], a.max[0]),
++    clamp(b.center[1], a.min[1], a.max[1]),
++    clamp(b.center[2], a.min[2], a.max[2])
++  ];
++
++  const pointB: Vector3D = [
++    clamp(a.center[0], b.min[0], b.max[0]),
++    clamp(a.center[1], b.min[1], b.max[1]),
++    clamp(a.center[2], b.min[2], b.max[2])
++  ];
++
++  return { pointA, pointB };
++}
++
++export function pointDistance3D(p1: Vector3D, p2: Vector3D): number {
++  const dx = p2[0] - p1[0];
++  const dy = p2[1] - p1[1];
++  const dz = p2[2] - p1[2];
++  return Math.sqrt(dx * dx + dy * dy + dz * dz);
++}
++
++export function lerpPoint3D(p1: Vector3D, p2: Vector3D, t: number): Vector3D {
++  return [
++    p1[0] + (p2[0] - p1[0]) * t,
++    p1[1] + (p2[1] - p1[1]) * t,
++    p1[2] + (p2[2] - p1[2]) * t
++  ];
++}
++
++export function unionBoundingBoxes(boxes: AxisAlignedBoundingBox[]): AxisAlignedBoundingBox | null {
++  if (!boxes || boxes.length === 0) return null;
++  let minX = boxes[0].min[0];
++  let minY = boxes[0].min[1];
++  let minZ = boxes[0].min[2];
++  let maxX = boxes[0].max[0];
++  let maxY = boxes[0].max[1];
++  let maxZ = boxes[0].max[2];
++
++  for (let i = 1; i < boxes.length; i++) {
++    minX = Math.min(minX, boxes[i].min[0]);
++    minY = Math.min(minY, boxes[i].min[1]);
++    minZ = Math.min(minZ, boxes[i].min[2]);
++    maxX = Math.max(maxX, boxes[i].max[0]);
++    maxY = Math.max(maxY, boxes[i].max[1]);
++    maxZ = Math.max(maxZ, boxes[i].max[2]);
++  }
++
++  const size: Vector3D = [maxX - minX, maxY - minY, maxZ - minZ];
++  const center: Vector3D = [minX + size[0] / 2, minY + size[1] / 2, minZ + size[2] / 2];
++
++  return {
++    min: [minX, minY, minZ],
++    max: [maxX, maxY, maxZ],
++    size,
++    center
++  };
++}
++
++export function scaleBoundingBox(box: AxisAlignedBoundingBox, factor: number): AxisAlignedBoundingBox {
++  const halfSize: Vector3D = [
++    (box.size[0] * factor) / 2,
++    (box.size[1] * factor) / 2,
++    (box.size[2] * factor) / 2
++  ];
++  return {
++    min: [box.center[0] - halfSize[0], box.center[1] - halfSize[1], box.center[2] - halfSize[2]],
++    max: [box.center[0] + halfSize[0], box.center[1] + halfSize[1], box.center[2] + halfSize[2]],
++    size: [box.size[0] * factor, box.size[1] * factor, box.size[2] * factor],
++    center: [...box.center]
++  };
++}
++
++export function translateBoundingBox(box: AxisAlignedBoundingBox, offset: Vector3D): AxisAlignedBoundingBox {
++  return {
++    min: [box.min[0] + offset[0], box.min[1] + offset[1], box.min[2] + offset[2]],
++    max: [box.max[0] + offset[0], box.max[1] + offset[1], box.max[2] + offset[2]],
++    size: [...box.size],
++    center: [box.center[0] + offset[0], box.center[1] + offset[1], box.center[2] + offset[2]]
++  };
++}
+diff --git a/frontend/src/spatial/index.ts b/frontend/src/spatial/index.ts
+new file mode 100644
+index 0000000..33801f0
+--- /dev/null
++++ b/frontend/src/spatial/index.ts
+@@ -0,0 +1,6 @@
++export * from './types';
++export * from './aabb';
++export * from './clashDetector';
++export * from './clearanceMatrix';
++export * from './reporter';
++export * from './geometryUtils';
+diff --git a/frontend/src/spatial/reporter.ts b/frontend/src/spatial/reporter.ts
+new file mode 100644
+index 0000000..ab0619b
+--- /dev/null
++++ b/frontend/src/spatial/reporter.ts
+@@ -0,0 +1,70 @@
++import { ClashRecord, ClashResult, ClashSeverity, DisciplineType } from './types';
++
++export function groupClashes(
++  clashes: ClashRecord[],
++  groupBy: 'severity' | 'element' | 'discipline'
++): Record<string, ClashRecord[]> {
++  const grouped: Record<string, ClashRecord[]> = {};
++
++  for (const clash of clashes) {
++    let keys: string[] = [];
++
++    if (groupBy === 'severity') {
++      keys = [clash.severity];
++    } else if (groupBy === 'element') {
++      keys = [clash.elementA.id, clash.elementB.id];
++    } else if (groupBy === 'discipline') {
++      const dA = clash.elementA.discipline;
++      const dB = clash.elementB.discipline;
++      const pairKey = [dA, dB].sort().join('-');
++      keys = [pairKey];
++    }
++
++    for (const key of keys) {
++      if (!grouped[key]) {
++        grouped[key] = [];
++      }
++      if (!grouped[key].some(c => c.id === clash.id)) {
++        grouped[key].push(clash);
++      }
++    }
++  }
++
++  return grouped;
++}
++
++export function exportClashReport(
++  result: ClashResult,
++  format: 'json' | 'summary_text'
++): string {
++  if (format === 'json') {
++    return JSON.stringify(result, null, 2);
++  }
++
++  const lines: string[] = [];
++  lines.push('========================================');
++  lines.push('   SPATIAL CLASH DETECTION REPORT');
++  lines.push('========================================');
++  lines.push(`Total Clashes: ${result.summary.total}`);
++  lines.push(`Hard Clashes: ${result.summary.hard}`);
++  lines.push(`Clearance Violations: ${result.summary.clearance}`);
++  lines.push(`Processed Elements: ${result.summary.processedElements}`);
++  lines.push('----------------------------------------');
++
++  if (result.clashes.length === 0) {
++    lines.push('No clashes detected across processed elements.');
++  } else {
++    for (let i = 0; i < result.clashes.length; i++) {
++      const c = result.clashes[i];
++      lines.push(`${i + 1}. [${c.type.toUpperCase()}] (${c.severity.toUpperCase()}) ${c.elementA.name} <-> ${c.elementB.name}`);
++      if (c.penetrationDepth !== undefined && c.penetrationDepth > 0) {
++        lines.push(`   Penetration Depth: ${c.penetrationDepth.toFixed(3)}m`);
++      } else if (c.distance > 0) {
++        lines.push(`   Separation Distance: ${c.distance.toFixed(3)}m`);
++      }
++    }
++  }
++
++  lines.push('========================================');
++  return lines.join('\n');
++}
+diff --git a/frontend/src/spatial/types.ts b/frontend/src/spatial/types.ts
+new file mode 100644
+index 0000000..d94e067
+--- /dev/null
++++ b/frontend/src/spatial/types.ts
+@@ -0,0 +1,79 @@
++export type Vector3D = [number, number, number];
++
++export type DisciplineType = 'architectural' | 'structural' | 'mechanical' | 'electrical' | 'plumbing' | 'generic';
++
++export type ClashSeverity = 'critical' | 'high' | 'medium' | 'low';
++
++export type ClashType = 'hard' | 'clearance';
++
++export interface AxisAlignedBoundingBox {
++  min: Vector3D;
++  max: Vector3D;
++  size: Vector3D;
++  center: Vector3D;
++}
++
++export interface SpatialElement {
++  id: string;
++  name: string;
++  discipline: DisciplineType;
++  boundingBox: AxisAlignedBoundingBox;
++  properties?: Record<string, any>;
++}
++
++export interface ClashOptions {
++  tolerance?: number;
++  minSeverity?: ClashSeverity;
++  includeTouching?: boolean;
++  filterDisciplines?: DisciplineType[];
++}
++
++export interface ClashRecord {
++  id: string;
++  elementA: SpatialElement;
++  elementB: SpatialElement;
++  type: ClashType;
++  severity: ClashSeverity;
++  distance: number;
++  penetrationDepth?: number;
++  intersectionBox?: AxisAlignedBoundingBox;
++}
++
++export interface ClashSummary {
++  total: number;
++  hard: number;
++  clearance: number;
++  processedElements: number;
++}
++
++export interface ClashResult {
++  clashes: ClashRecord[];
++  summary: ClashSummary;
++}
++
++export interface ClearanceInfo {
++  distance: number;
++  hasConflict: boolean;
++  closestPoints: {
++    pointA: Vector3D;
++    pointB: Vector3D;
++  };
++}
++
++export interface ClearanceViolation {
++  elementA: string;
++  elementB: string;
++  distance: number;
++  requiredClearance: number;
++}
++
++export interface ClearanceMatrixResult {
++  elementIds: string[];
++  matrix: number[][];
++  violations: ClearanceViolation[];
++}
++
++export interface Ray3D {
++  origin: Vector3D;
++  direction: Vector3D;
++}
