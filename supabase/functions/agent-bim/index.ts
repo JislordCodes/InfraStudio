@@ -286,17 +286,30 @@ if buildings:
 
   if (payload.action === "build_room") {
     const room = payload.room || {};
+    let origin: number[] = [0, 0, 0];
+    if (Array.isArray(room.origin)) {
+      origin = room.origin.map(Number);
+    } else if (typeof room.origin === "string") {
+      const parts = room.origin.trim().split(/[\s,]+/).map(Number);
+      if (parts.length >= 3 && !parts.some(isNaN)) {
+        origin = parts.slice(0, 3);
+      }
+    }
+
+    const doors = Array.isArray(room.doors) ? room.doors : [];
+    const windows = Array.isArray(room.windows) ? room.windows : [];
+
     const buildRes = await mcpCallTool("build_room", {
       room_name: room.name,
       width: room.width || 4,
       length: room.length || 4,
       height: payload.storeyHeight || room.height || 3,
       wall_thickness: room.wall_thickness || 0.2,
-      origin: room.origin || [0, 0, 0],
+      origin: origin,
       floor_slab: room.floor_slab !== undefined ? Boolean(room.floor_slab) : true,
       ceiling_slab: room.ceiling_slab !== undefined ? Boolean(room.ceiling_slab) : true,
-      doors: room.doors || [],
-      windows: room.windows || [],
+      doors: doors,
+      windows: windows,
     }, mcpSessionId);
     mcpSessionId = buildRes.session;
     return { status: "success", result: buildRes, mcpSessionId };

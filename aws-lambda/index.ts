@@ -33,6 +33,28 @@ async function loadQwenSecret(): Promise<void> {
 }
 
 
+let explabsSecretLoaded = false;
+async function loadExplabsSecret(): Promise<void> {
+  if (explabsSecretLoaded || process.env.EXPLABS_API_KEY) return;
+  const secretId = process.env.EXPLABS_SECRET_ID;
+  if (!secretId) return;
+  try {
+    const result = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretId }));
+    const raw = result.SecretString || "";
+    let key = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      key = parsed.EXPLABS_API_KEY || parsed.api_key || parsed.key || raw;
+    } catch { /* plain-text secret */ }
+    if (key && key !== "PENDING") {
+      process.env.EXPLABS_API_KEY = key;
+      explabsSecretLoaded = true;
+    }
+  } catch (e) {
+    console.warn("Could not load EXPLABS_SECRET_ID:", e);
+  }
+}
+
 export const handler = async (event: any) => {
   const path = event.rawPath || "/";
   const method = event.requestContext?.http?.method || "POST";
@@ -71,6 +93,7 @@ export const handler = async (event: any) => {
   // Route requests by path
   try {
     await loadQwenSecret();
+    await loadExplabsSecret();
     let result: any = null;
     const cleanPath = path.replace(/\/$/, ""); // remove trailing slash
 

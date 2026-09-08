@@ -52819,6 +52819,40 @@ async function fetchMcpTools(clientSessionId) {
     session: res.session
   };
 }
+function getExplabsApiKey() {
+  return typeof Deno !== "undefined" ? Deno.env.get("EXPLABS_API_KEY") : process.env.EXPLABS_API_KEY;
+}
+async function callAstra(systemPrompt4, userMessage, jsonMode = false, model = "gpt-6-astra") {
+  const key = getExplabsApiKey();
+  if (!key) throw new Error("EXPLABS_API_KEY is not configured.");
+  let msgs = [{ role: "system", content: systemPrompt4 }];
+  if (Array.isArray(userMessage)) {
+    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role, content: m3.content || "" })));
+  } else {
+    msgs.push({ role: "user", content: String(userMessage) });
+  }
+  const payload2 = {
+    model: model || "gpt-6-astra",
+    messages: msgs
+  };
+  if (jsonMode) {
+    payload2.response_format = { type: "json_object" };
+  }
+  const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload2)
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`[Experiential Labs Astra ${res.status}]: ${errText}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
 function getTargetModel(model) {
   if (model === "qwen3.8-max" || model === "qwen3.8-max-preview") {
     return "qwen3.8-max";
@@ -52846,6 +52880,14 @@ function getQwenEndpoints() {
   ];
 }
 async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "glm-5.1") {
+  const explabsKey = getExplabsApiKey();
+  if (explabsKey) {
+    try {
+      return await callAstra(systemPrompt4, userMessage, jsonMode, "gpt-6-astra");
+    } catch (err) {
+      console.warn("[callQwen] Fallback from Astra error:", err);
+    }
+  }
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -52870,8 +52912,6 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          // Qwen3.8 Max is a thinking model; DashScope documents 0.6 as its
-          // minimum temperature and xhigh as the maximum reasoning effort.
           temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
           reasoning_effort: targetModel === "qwen3.8-max" ? "medium" : void 0,
           max_tokens: 4096,
@@ -52898,6 +52938,37 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "g
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 async function callGLM(systemPrompt4, userMessage, tools, model = "qwen3.8-max") {
+  const explabsKey = getExplabsApiKey();
+  if (explabsKey) {
+    try {
+      const msgs2 = [
+        { role: "system", content: systemPrompt4 },
+        { role: "user", content: userMessage }
+      ];
+      const payload2 = {
+        model: "gpt-6-astra",
+        messages: msgs2
+      };
+      if (tools && tools.length > 0) {
+        payload2.tools = tools;
+      }
+      const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${explabsKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload2)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices?.[0]?.message;
+      }
+      console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
+    } catch (err) {
+      console.warn("[callGLM Astra] Fallback on error:", err);
+    }
+  }
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -54380,77 +54451,64 @@ function parseJson(text) {
 function literal(value) {
   return JSON.stringify(String(value ?? ""));
 }
-function guidsByClass(scene) {
-  const grouped = {};
-  for (const obj of scene?.objects || []) {
-    if (!obj?.guid || !obj?.ifc_class) continue;
-    const cls = String(obj.ifc_class);
-    grouped[cls] = grouped[cls] || [];
-    grouped[cls].push(String(obj.guid));
-  }
-  return grouped;
-}
 async function applyDefaultMaterials(mcpSessionId) {
   let session = mcpSessionId;
   const errors = [];
   const summary = {};
-  const sceneRes = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: false, include_transform: false }, session);
-  session = sceneRes.session;
-  const scene = parseJson(sceneRes.resultText);
-  const byClass = guidsByClass(scene);
-  const styleRun = Date.now();
-  const styles = [
-    {
-      name: `InfraStudio_Plaster_${styleRun}`,
-      color: [0.86, 0.84, 0.78],
-      transparency: 0,
-      classes: ["IfcWall", "IfcWallStandardCase"]
-    },
-    {
-      name: `InfraStudio_ConcreteFloor_${styleRun}`,
-      color: [0.48, 0.48, 0.46],
-      transparency: 0,
-      classes: ["IfcSlab", "IfcRoof"]
-    },
-    {
-      name: `InfraStudio_WoodDoor_${styleRun}`,
-      color: [0.45, 0.28, 0.14],
-      transparency: 0,
-      classes: ["IfcDoor"]
-    },
-    {
-      name: `InfraStudio_Glass_${styleRun}`,
-      color: [0.62, 0.82, 0.92],
-      transparency: 0.55,
-      classes: ["IfcWindow"]
-    },
-    {
-      name: `InfraStudio_StairConcrete_${styleRun}`,
-      color: [0.58, 0.58, 0.56],
-      transparency: 0,
-      classes: ["IfcStair", "IfcStairFlight"]
-    }
-  ];
-  for (const style of styles) {
-    const targetGuids = style.classes.flatMap((cls) => byClass[cls] || []);
-    summary[style.name] = targetGuids.length;
-    if (targetGuids.length === 0) continue;
-    try {
-      const created = await mcpCallTool("create_surface_style", {
-        name: style.name,
-        color: style.color,
-        transparency: style.transparency,
-        style_type: "rendering"
-      }, session);
-      session = created.session;
-      const applied = await mcpCallTool("apply_style_to_object", {
-        object_guids: targetGuids,
-        style_name: style.name
-      }, session);
-      session = applied.session;
-    } catch (err) {
-      errors.push(`${style.name}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const harnessPython = `
+import ifcopenshell
+import ifcopenshell.api as api
+
+ifc = get_ifc_file()
+body_ctx = get_or_create_body_context(ifc)
+
+material_configs = [
+    ("IfcWall", "Architectural Wall Render", "Style_Wall_Render", (0.88, 0.86, 0.82), 0.0),
+    ("IfcWallStandardCase", "Architectural Wall Render", "Style_Wall_Render", (0.88, 0.86, 0.82), 0.0),
+    ("IfcSlab", "Structural Concrete Slab", "Style_Concrete_Slab", (0.55, 0.55, 0.56), 0.0),
+    ("IfcDoor", "Hardwood Timber Door", "Style_Timber_Door", (0.45, 0.28, 0.14), 0.0),
+    ("IfcWindow", "Double-Glazed Vision Glass", "Style_Vision_Glass", (0.60, 0.82, 0.94), 0.60),
+    ("IfcRoof", "Weatherproof Roofing Membrane", "Style_Roof_Membrane", (0.32, 0.33, 0.35), 0.0),
+    ("IfcColumn", "Structural Column Steel/Concrete", "Style_Column_Anthracite", (0.28, 0.30, 0.32), 0.0),
+    ("IfcBeam", "Structural Framing Steel", "Style_Steel_Framing", (0.92, 0.75, 0.10), 0.0),
+    ("IfcFooting", "Reinforced Concrete Foundation", "Style_Concrete_Footing", (0.60, 0.62, 0.64), 0.0),
+    ("IfcPile", "Deep Foundation Steel Casing", "Style_Foundation_Pile", (0.35, 0.36, 0.38), 0.0),
+    ("IfcStair", "Architectural Concrete Stair", "Style_Stair_Concrete", (0.65, 0.66, 0.68), 0.0),
+    ("IfcStairFlight", "Architectural Concrete Stair Flight", "Style_Stair_Concrete", (0.65, 0.66, 0.68), 0.0),
+    ("IfcRailing", "Stainless Steel Safety Railing", "Style_Safety_Railing", (0.90, 0.78, 0.10), 0.0),
+    ("IfcBuildingElementProxy", "Engineered Infrastructure Element", "Style_Infra_Proxy", (0.75, 0.76, 0.78), 0.0)
+]
+
+applied_count = 0
+for ifc_class, mat_name, style_name, (r, g, b), transp in material_configs:
+    elements = ifc.by_type(ifc_class)
+    if not elements:
+        continue
+    mat = api.run("material.add_material", ifc, name=mat_name)
+    style = api.run("style.add_style", ifc, name=style_name, ifc_class="IfcSurfaceStyle")
+    rgb = ifc.create_entity("IfcColourRgb", Red=r, Green=g, Blue=b)
+    shading = ifc.create_entity("IfcSurfaceStyleShading", SurfaceColour=rgb, Transparency=transp)
+    style.Styles = [shading]
+    api.run("style.assign_material_style", ifc, material=mat, style=style, context=body_ctx)
+    api.run("material.assign_material", ifc, products=elements, material=mat)
+    for el in elements:
+        if el.Representation:
+            for rep in el.Representation.Representations:
+                try:
+                    api.run("style.assign_representation_styles", ifc, shape_representation=rep, styles=[style])
+                except Exception:
+                    pass
+    applied_count += len(elements)
+
+save_and_load_ifc()
+print(f"Harness Applied PBR Styles & Materials to {applied_count} objects!")
+`;
+  try {
+    const res = await mcpCallTool("execute_ifc_code_tool", { code: harnessPython }, session);
+    session = res.session;
+    summary["harness_pbr_styled"] = 1;
+  } catch (err) {
+    errors.push(`Harness Material Styling Error: ${err instanceof Error ? err.message : String(err)}`);
   }
   return { session, summary, errors };
 }
@@ -54501,17 +54559,28 @@ if buildings:
   }
   if (payload2.action === "build_room") {
     const room2 = payload2.room || {};
+    let origin = [0, 0, 0];
+    if (Array.isArray(room2.origin)) {
+      origin = room2.origin.map(Number);
+    } else if (typeof room2.origin === "string") {
+      const parts = room2.origin.trim().split(/[\s,]+/).map(Number);
+      if (parts.length >= 3 && !parts.some(isNaN)) {
+        origin = parts.slice(0, 3);
+      }
+    }
+    const doors = Array.isArray(room2.doors) ? room2.doors : [];
+    const windows = Array.isArray(room2.windows) ? room2.windows : [];
     const buildRes = await mcpCallTool("build_room", {
       room_name: room2.name,
       width: room2.width || 4,
       length: room2.length || 4,
       height: payload2.storeyHeight || room2.height || 3,
       wall_thickness: room2.wall_thickness || 0.2,
-      origin: room2.origin || [0, 0, 0],
+      origin,
       floor_slab: room2.floor_slab !== void 0 ? Boolean(room2.floor_slab) : true,
       ceiling_slab: room2.ceiling_slab !== void 0 ? Boolean(room2.ceiling_slab) : true,
-      doors: room2.doors || [],
-      windows: room2.windows || []
+      doors,
+      windows
     }, mcpSessionId);
     mcpSessionId = buildRes.session;
     return { status: "success", result: buildRes, mcpSessionId };
@@ -55062,6 +55131,28 @@ async function loadQwenSecret() {
   process.env.QWEN_API_KEY = key;
   qwenSecretLoaded = true;
 }
+var explabsSecretLoaded = false;
+async function loadExplabsSecret() {
+  if (explabsSecretLoaded || process.env.EXPLABS_API_KEY) return;
+  const secretId = process.env.EXPLABS_SECRET_ID;
+  if (!secretId) return;
+  try {
+    const result = await secretsClient.send(new import_client_secrets_manager.GetSecretValueCommand({ SecretId: secretId }));
+    const raw = result.SecretString || "";
+    let key = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      key = parsed.EXPLABS_API_KEY || parsed.api_key || parsed.key || raw;
+    } catch {
+    }
+    if (key && key !== "PENDING") {
+      process.env.EXPLABS_API_KEY = key;
+      explabsSecretLoaded = true;
+    }
+  } catch (e5) {
+    console.warn("Could not load EXPLABS_SECRET_ID:", e5);
+  }
+}
 var handler = async (event) => {
   const path = event.rawPath || "/";
   const method = event.requestContext?.http?.method || "POST";
@@ -55089,6 +55180,7 @@ var handler = async (event) => {
   }
   try {
     await loadQwenSecret();
+    await loadExplabsSecret();
     let result = null;
     const cleanPath = path.replace(/\/$/, "");
     if (cleanPath.endsWith("/agent-interpreter")) {
