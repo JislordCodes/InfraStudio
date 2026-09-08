@@ -193,8 +193,10 @@ const WALLS = ["south", "east", "north", "west"];
 function requestedText(brief: any): string {
   return [
     brief?.project_type,
+    brief?.client_requirements,
     ...(brief?.special_features || []),
     ...(brief?.constraints || []),
+    ...(brief?.component_requirements || []).map((c: any) => `${c.name || ""} ${c.type || ""} ${c.description || ""}`),
     ...(brief?.room_requirements || []).map((room: any) => room.name)
   ].filter(Boolean).join(" ").toLowerCase();
 }
@@ -377,18 +379,179 @@ function railwayProgram(): any[] {
   return components;
 }
 
+function cofferdamProgram(name: string): any[] {
+  const components: any[] = [];
+  const W = 16, L = 24, H_pile = 12, Z_water = 4.0;
+  
+  // 1. Perimeter AZ-36 Sheet Piles (Corrugated panels)
+  for (let x = -L/2; x < L/2; x += 2.4) {
+    components.push({
+      name: `Sheet_Pile_South_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [x, -W/2, 0],
+      rotation_z: 0,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+    components.push({
+      name: `Sheet_Pile_North_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [x + 2.4, W/2, 0],
+      rotation_z: 180,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+  }
+  for (let y = -W/2; y < W/2; y += 2.4) {
+    components.push({
+      name: `Sheet_Pile_East_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [L/2, y, 0],
+      rotation_z: 90,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+    components.push({
+      name: `Sheet_Pile_West_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [-L/2, y + 2.4, 0],
+      rotation_z: 270,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+  }
+
+  // 2. Waler Compression Rings (3 tiers: Z = 2.0, 5.0, 8.0)
+  [2.0, 5.0, 8.0].forEach((z, tier) => {
+    components.push({
+      name: `Waler_Tier${tier + 1}_South`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: L },
+      position: [-L/2, -W/2 + 0.3, z],
+      rotation_z: 0,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    components.push({
+      name: `Waler_Tier${tier + 1}_North`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: L },
+      position: [-L/2, W/2 - 0.3, z],
+      rotation_z: 0,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    components.push({
+      name: `Waler_Tier${tier + 1}_East`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: W },
+      position: [L/2 - 0.3, -W/2, z],
+      rotation_z: 90,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    components.push({
+      name: `Waler_Tier${tier + 1}_West`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: W },
+      position: [-L/2 + 0.3, -W/2, z],
+      rotation_z: 90,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+
+    [-6.0, 0, 6.0].forEach((x, si) => {
+      components.push({
+        name: `Strut_Tier${tier + 1}_S${si + 1}`,
+        ifc_class: "IfcMember",
+        geometry_type: "pipe",
+        dimensions: { outer_radius: 0.35, inner_radius: 0.30, length: W - 0.6, axis: [0, 1, 0] },
+        position: [x, 0, z + 0.3],
+        material: "Tubular Steel Strut",
+        rgb: [0.88, 0.72, 0.15]
+      });
+    });
+  });
+
+  // 3. Central Concrete Pier with Hydrodynamic Cutwater
+  components.push({
+    name: "Hydrodynamic_Cutwater_Pier",
+    ifc_class: "IfcColumn",
+    geometry_type: "cutwater_pier",
+    dimensions: { length: 14.0, width: 4.5, height: 11.0, nose_radius: 2.25 },
+    position: [0, 0, 0.8],
+    material: "High-Strength Marine Concrete C40",
+    rgb: [0.65, 0.65, 0.63]
+  });
+
+  // 4. Pier Footing Foundation
+  components.push({
+    name: "Pier_Deep_Footing",
+    ifc_class: "IfcFooting",
+    geometry_type: "box",
+    dimensions: { length: 16.0, width: 6.5, height: 1.2 },
+    position: [0, 0, 0.6],
+    material: "Reinforced Concrete Footing",
+    rgb: [0.55, 0.55, 0.53]
+  });
+
+  // 5. Tremie Seal Plug (Dewatered Excavation Bottom)
+  components.push({
+    name: "Tremie_Concrete_Seal_Plug",
+    ifc_class: "IfcSlab",
+    geometry_type: "box",
+    dimensions: { length: L - 0.2, width: W - 0.2, height: 1.5 },
+    position: [0, 0, 0.75],
+    material: "Tremie Mass Concrete Plug",
+    rgb: [0.45, 0.46, 0.48]
+  });
+
+  // 6. Translucent River Water Surface
+  components.push({
+    name: "River_Water_Surface",
+    ifc_class: "IfcBuildingElementProxy",
+    geometry_type: "box",
+    dimensions: { length: L + 16, width: W + 16, height: 0.1 },
+    position: [0, 0, Z_water],
+    material: "River Water Surface",
+    rgb: [0.20, 0.55, 0.70],
+    transparency: 0.55
+  });
+
+  return components;
+}
+
 function ensureInfrastructurePlan(plan: any, brief: any): any {
   const text = requestedText(brief);
-  // Bridge and rail systems are safety-critical, repeatable assemblies.  Do
-  // not let a plausible-looking list of arbitrary cubes override the known
-  // load path / track template merely because it contains enough items.
+  if (/cofferdam|coffer/i.test(text)) {
+    return {
+      ...plan,
+      structure_category: "infrastructure",
+      is_edit: false,
+      structure_name: brief?.project_type || "Bridge Pier Cofferdam",
+      components: cofferdamProgram(brief?.project_type || "Bridge Pier Cofferdam"),
+      quality_requirements: { minimum_components: 20, required_element_types: ["IfcWall", "IfcBeam", "IfcMember", "IfcColumn", "IfcFooting", "IfcSlab"] }
+    };
+  }
   if (/bridge/.test(text)) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Bridge", components: bridgeProgram(brief?.project_type || "Bridge"), quality_requirements: { minimum_components: 8, required_element_types: ["IfcSlab", "IfcColumn", "IfcBeam", "IfcFooting"] } };
   }
   if (/rail|railway|track/.test(text)) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Railway", components: railwayProgram(), quality_requirements: { minimum_components: 30, required_element_types: ["IfcSlab", "IfcMember"] } };
   }
-  const minimum = /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
+  const minimum = /cofferdam|coffer/i.test(text) ? 20 : /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
   if (Array.isArray(plan?.components) && plan.components.length >= minimum) return plan;
   const components = plan?.components || [];
   return { ...plan, structure_category: brief?.structure_category || "infrastructure", is_edit: false, structure_name: brief?.project_type || "InfraStudio Infrastructure", components, quality_requirements: { minimum_components: minimum } };
@@ -1019,8 +1182,10 @@ function repairPlan(plan: any, brief?: any): any {
   return plan;
 }
 
-export async function handleArchitect(brief: any): Promise<any> {
-  const category = brief.structure_category || "building";
+export async function handleArchitect(rawBrief: any): Promise<any> {
+  const brief = (rawBrief && rawBrief.brief) ? { ...rawBrief.brief, client_requirements: rawBrief.client_requirements || rawBrief.brief?.client_requirements } : (rawBrief || {});
+  const textCheck = requestedText(brief);
+  const category = brief.structure_category || (/cofferdam|coffer|bridge|rail|road|pier|jetty|pier/i.test(textCheck) ? "infrastructure" : "building");
   const isBuilding = category === "building";
   const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
   const fallbackPlan = (reason: unknown) => {

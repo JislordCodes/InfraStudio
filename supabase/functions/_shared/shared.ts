@@ -117,6 +117,271 @@ try:
     trimesh.creation.cylinder = _safe_creation_cylinder
 except Exception:
     pass
+
+try:
+    import mathutils
+except Exception:
+    mathutils = None
+
+def extrude_polygon_safe(poly, height=1.0):
+    pts = None
+    if hasattr(poly, 'exterior'):
+        pts = list(poly.exterior.coords)[:-1]
+    elif isinstance(poly, (list, tuple, np.ndarray)):
+        pts = list(poly)
+    else:
+        try:
+            pts = list(poly.vertices)
+        except Exception:
+            pts = list(poly)
+
+    pts_2d = [[float(p[0]), float(p[1])] for p in pts]
+    N = len(pts_2d)
+    bottom_v = [[p[0], p[1], 0.0] for p in pts_2d]
+    top_v = [[p[0], p[1], float(height)] for p in pts_2d]
+    all_v = np.array(bottom_v + top_v, dtype=float)
+
+    cap_tris = []
+    if mathutils is not None and hasattr(mathutils, 'geometry'):
+        try:
+            cap_tris = mathutils.geometry.tessellate_polygon([pts_2d])
+        except Exception:
+            cap_tris = []
+    if not cap_tris:
+        for i in range(1, N - 1):
+            cap_tris.append((0, i, i + 1))
+
+    faces = []
+    for (i, j, k) in cap_tris:
+        faces.append([i, k, j])
+    for (i, j, k) in cap_tris:
+        faces.append([N + i, N + j, N + k])
+    for i in range(N):
+        nxt = (i + 1) % N
+        faces.append([i, nxt, N + nxt])
+        faces.append([i, N + nxt, N + i])
+
+    m = trimesh.Trimesh(vertices=all_v, faces=np.array(faces, dtype=int), process=True)
+    return m
+
+try:
+    trimesh.creation.extrude_polygon = extrude_polygon_safe
+except Exception:
+    pass
+
+def InfraStudioHarness(ifc_file, storey=None):
+    if storey is None:
+        st = ifc_file.by_type("IfcBuildingStorey")
+        storey = st[0] if st else None
+
+    body_ctx = None
+    try:
+        contexts = ifc_file.by_type("IfcGeometricRepresentationSubContext")
+        for ctx in contexts:
+            if getattr(ctx, "ContextIdentifier", "") == "Body":
+                body_ctx = ctx
+                break
+        if body_ctx is None:
+            m_ctx = ifc_file.by_type("IfcGeometricRepresentationContext")
+            mc = m_ctx[0] if m_ctx else ifc_file.create_entity("IfcGeometricRepresentationContext", ContextType="Model", CoordinateSpaceDimension=3, Precision=1e-5)
+            body_ctx = ifc_file.create_entity("IfcGeometricRepresentationSubContext", ContextIdentifier="Body", ContextType="Model", TargetView="MODEL_VIEW", ParentContext=mc)
+    except Exception:
+        body_ctx = None
+
+    elements = []
+    styles = {}
+
+    def create_box(extents=[1, 1, 1], pos=[0, 0, 0], rot_z_deg=0.0):
+        m = trimesh.primitives.Box(extents=extents)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_cylinder(radius=0.5, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
+        m = trimesh.primitives.Cylinder(radius=radius, height=height, sections=sections)
+        ax = np.array(axis, dtype=float)
+        norm = np.linalg.norm(ax)
+        if norm > 1e-6:
+            ax = ax / norm
+            z_ax = np.array([0, 0, 1], dtype=float)
+            if not np.allclose(ax, z_ax):
+                v = np.cross(z_ax, ax)
+                c = np.dot(z_ax, ax)
+                if np.allclose(c, -1.0):
+                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
+                else:
+                    s = np.linalg.norm(v)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
+                    R = np.eye(4)
+                    R[:3, :3] = R_3x3
+                m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_pipe(outer_r=0.4, inner_r=0.35, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
+        outer = trimesh.primitives.Cylinder(radius=outer_r, height=height, sections=sections)
+        inner = trimesh.primitives.Cylinder(radius=inner_r, height=height + 0.02, sections=sections)
+        try:
+            m = outer.difference(inner)
+        except Exception:
+            m = outer
+        ax = np.array(axis, dtype=float)
+        norm = np.linalg.norm(ax)
+        if norm > 1e-6:
+            ax = ax / norm
+            z_ax = np.array([0, 0, 1], dtype=float)
+            if not np.allclose(ax, z_ax):
+                v = np.cross(z_ax, ax)
+                c = np.dot(z_ax, ax)
+                if np.allclose(c, -1.0):
+                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
+                else:
+                    s = np.linalg.norm(v)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
+                    R = np.eye(4)
+                    R[:3, :3] = R_3x3
+                m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_corrugated_panel(width=2.4, height=12.0, depth=0.45, pitch=0.6, thickness=0.04, pos=[0, 0, 0], rot_z_deg=0.0):
+        pts = []
+        n_waves = max(2, int(width / pitch))
+        for i in range(n_waves):
+            x0 = i * pitch
+            x1 = x0 + pitch * 0.25
+            x2 = x0 + pitch * 0.50
+            x3 = x0 + pitch * 0.75
+            pts.extend([[x0, 0], [x1, depth], [x2, depth], [x3, 0]])
+        pts.append([width, 0])
+        polyline = np.array(pts)
+        outward = []
+        inward = []
+        for p in polyline:
+            outward.append([p[0], p[1] + thickness / 2])
+            inward.append([p[0], p[1] - thickness / 2])
+        poly2d = outward + inward[::-1]
+        m = extrude_polygon_safe(poly2d, height=height)
+        R_align = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+        m.apply_transform(R_align)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R_rot)
+        m.apply_translation(pos)
+        return m
+
+    def create_cutwater_pier(length=12.0, width=4.0, height=8.0, nose_r=2.0, pos=[0, 0, 0], rot_z_deg=0.0):
+        rect_len = max(0.1, length - 2.0 * nose_r)
+        pts = []
+        for deg in range(-90, 91, 10):
+            rad = math.radians(deg)
+            pts.append([rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
+        for deg in range(90, 271, 10):
+            rad = math.radians(deg)
+            pts.append([-rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
+        m = extrude_polygon_safe(pts, height=height)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_i_beam(depth=0.6, flange_w=0.3, web_t=0.02, flange_t=0.03, length=10.0, pos=[0, 0, 0], rot_z_deg=0.0):
+        d, b, tw, tf = depth, flange_w, web_t, flange_t
+        pts = [
+            [-b/2, -d/2], [b/2, -d/2], [b/2, -d/2 + tf], [tw/2, -d/2 + tf],
+            [tw/2, d/2 - tf], [b/2, d/2 - tf], [b/2, d/2], [-b/2, d/2],
+            [-b/2, d/2 - tf], [-tw/2, d/2 - tf], [-tw/2, -d/2 + tf], [-b/2, -d/2 + tf]
+        ]
+        m = extrude_polygon_safe(pts, height=length)
+        R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+        m.apply_transform(R)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R_rot)
+        m.apply_translation(pos)
+        return m
+
+    def add_mesh_element(mesh, name, ifc_class="IfcBuildingElementProxy", mat_name="Structural Steel", rgb=(0.5, 0.5, 0.5), transparency=0.0):
+        if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+            return None
+        import ifcopenshell.api as api
+        point_list = ifc_file.create_entity("IfcCartesianPointList3D", CoordList=mesh.vertices.tolist())
+        faces_1based = (mesh.faces + 1).tolist()
+        face_set = ifc_file.create_entity("IfcTriangulatedFaceSet", Coordinates=point_list, CoordIndex=faces_1based, Closed=True)
+        rep = ifc_file.create_entity("IfcShapeRepresentation", ContextOfItems=body_ctx, RepresentationIdentifier="Body", RepresentationType="Tessellation", Items=[face_set])
+        prod_shape = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[rep])
+        
+        pt = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        d_z = ifc_file.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0))
+        d_x = ifc_file.create_entity("IfcDirection", DirectionRatios=(1.0, 0.0, 0.0))
+        axis_place = ifc_file.create_entity("IfcAxis2Placement3D", Location=pt, Axis=d_z, RefDirection=d_x)
+        local_place = ifc_file.create_entity("IfcLocalPlacement", RelativePlacement=axis_place)
+        
+        prod = api.run("root.create_entity", ifc_file, ifc_class=ifc_class, name=name)
+        prod.Representation = prod_shape
+        prod.ObjectPlacement = local_place
+        
+        key = f"{mat_name}_{rgb}_{transparency}"
+        if key not in styles:
+            mat = api.run("material.add_material", ifc_file, name=mat_name)
+            style = api.run("style.add_style", ifc_file, name=f"Style_{mat_name}", ifc_class="IfcSurfaceStyle")
+            c_rgb = ifc_file.create_entity("IfcColourRgb", Red=float(rgb[0]), Green=float(rgb[1]), Blue=float(rgb[2]))
+            shading = ifc_file.create_entity("IfcSurfaceStyleShading", SurfaceColour=c_rgb, Transparency=float(transparency))
+            style.Styles = [shading]
+            try:
+                api.run("style.assign_material_style", ifc_file, material=mat, style=style, context=body_ctx)
+            except Exception:
+                pass
+            styles[key] = (mat, style)
+        
+        mat, style = styles[key]
+        try:
+            api.run("style.assign_representation_styles", ifc_file, shape_representation=rep, styles=[style])
+        except Exception:
+            pass
+        
+        elements.append((prod, mat))
+        return prod
+
+    def commit():
+        if not elements:
+            return 0
+        import ifcopenshell.api as api
+        prods = [p for p, _ in elements]
+        if storey:
+            try:
+                api.run("aggregate.assign_object", ifc_file, relating_object=storey, products=prods)
+            except Exception:
+                pass
+        by_mat = {}
+        for p, m in elements:
+            by_mat.setdefault(m, []).append(p)
+        for m, ps in by_mat.items():
+            try:
+                api.run("material.assign_material", ifc_file, products=ps, material=m)
+            except Exception:
+                pass
+        return len(prods)
+
+    return type("InfraStudioHarnessInstance", (), {
+        "create_box": staticmethod(create_box),
+        "create_cylinder": staticmethod(create_cylinder),
+        "create_pipe": staticmethod(create_pipe),
+        "create_corrugated_panel": staticmethod(create_corrugated_panel),
+        "create_cutwater_pier": staticmethod(create_cutwater_pier),
+        "create_i_beam": staticmethod(create_i_beam),
+        "add_mesh_element": staticmethod(add_mesh_element),
+        "commit": staticmethod(commit)
+    })()
 `;
   const sanitized = code.replace(/\.is_empty/g, '.size == 0');
   return safeHeader + '\n' + sanitized;
@@ -234,10 +499,12 @@ export async function callAstra(
   if (!key) throw new Error("EXPLABS_API_KEY is not configured.");
 
   let msgs: any[] = [{ role: "system", content: systemPrompt }];
-  if (Array.isArray(userMessage)) {
-    msgs = msgs.concat(userMessage.map((m: any) => ({ role: m.role, content: m.content || "" })));
-  } else {
+  if (Array.isArray(userMessage) && userMessage.length > 0) {
+    msgs = msgs.concat(userMessage.map((m: any) => ({ role: m.role || "user", content: m.content || "" })));
+  } else if (!Array.isArray(userMessage) && userMessage && String(userMessage).trim().length > 0) {
     msgs.push({ role: "user", content: String(userMessage) });
+  } else {
+    msgs.push({ role: "user", content: "Process according to system instructions." });
   }
 
   const payload: any = {

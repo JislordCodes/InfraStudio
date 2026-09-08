@@ -580,65 +580,103 @@ ${trimeshExamples}`;
     const toolAudit: ToolAuditEntry[] = [];
     let executionError = "";
 
+    if (payload.plan?.python_code && typeof payload.plan.python_code === "string" && payload.plan.python_code.trim().length > 20) {
+      console.log(`[build_freeform] Executing direct Python harness code from plan...`);
+      try {
+        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: payload.plan.python_code }, mcpSessionId);
+        mcpSessionId = toolRes.session;
+        executedTools.push("execute_ifc_code_tool");
+        executedMutation = true;
+      } catch (pErr: any) {
+        console.warn(`[build_freeform] Direct python_code execution failed, falling back:`, pErr);
+      }
+    }
+
     const rawComponents = payload.plan?.components || [];
-    if (Array.isArray(rawComponents) && rawComponents.length > 0) {
-      console.log(`[build_freeform] Executing ${rawComponents.length} components from architect plan...`);
-      for (const comp of rawComponents) {
-        const ifcClass = comp.ifc_class || "IfcBuildingElementProxy";
+    if (!executedMutation && Array.isArray(rawComponents) && rawComponents.length > 0) {
+      console.log(`[build_freeform] Executing ${rawComponents.length} components via InfraStudioHarness...`);
+      const scriptLines: string[] = [
+        "ifc = get_ifc_file()",
+        "storeys = ifc.by_type('IfcBuildingStorey')",
+        "storey = storeys[0] if storeys else None",
+        "h = InfraStudioHarness(ifc, storey)"
+      ];
+
+      for (let i = 0; i < rawComponents.length; i++) {
+        const comp = rawComponents[i];
+        const name = String(comp.name || `Component_${i}`).replace(/['"\\]/g, "");
+        const ifcClass = String(comp.ifc_class || "IfcBuildingElementProxy").replace(/['"\\]/g, "");
         const geomType = String(comp.geometry_type || "box").toLowerCase();
-        let code = "";
+        const mat = String(comp.material || comp.material_name || "Structural Finish").replace(/['"\\]/g, "");
+        const rgb = Array.isArray(comp.rgb) && comp.rgb.length === 3 ? comp.rgb : [0.5, 0.5, 0.5];
+        const transp = Number(comp.transparency || 0.0);
+        const pos = Array.isArray(comp.position) ? comp.position : [0, 0, 0];
+        const rotZ = Number(comp.rotation_z || comp.rot_z_deg || 0.0);
+        const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
 
         if (comp.trimesh_code && typeof comp.trimesh_code === "string" && comp.trimesh_code.trim().length > 10) {
-          code = comp.trimesh_code;
-        } else if (geomType === "cylinder" || ifcClass === "IfcReinforcingBar" || /rebar|pipe|column/i.test(comp.name)) {
-          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
-          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.015));
+          scriptLines.push(`
+def _create_custom_${i}():
+${comp.trimesh_code.split("\n").map((l: string) => "    " + l).join("\n")}
+    return result
+_m_${i} = _create_custom_${i}()
+h.add_mesh_element(_m_${i}, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})
+`);
+        } else if (geomType.includes("corrugat") || geomType.includes("sheet_pile")) {
+          const width = Number(dims.width || dims.length || 2.4);
+          const height = Number(dims.height || 12.0);
+          const depth = Number(dims.depth || 0.45);
+          const pitch = Number(dims.pitch || 0.6);
+          const thick = Number(dims.thickness || 0.04);
+          scriptLines.push(`_m = h.create_corrugated_panel(width=${width}, height=${height}, depth=${depth}, pitch=${pitch}, thickness=${thick}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("cutwater") || geomType.includes("pier")) {
+          const length = Number(dims.length || 12.0);
+          const width = Number(dims.width || 4.0);
+          const height = Number(dims.height || 8.0);
+          const noseR = Number(dims.nose_radius || dims.radius || width / 2.0);
+          scriptLines.push(`_m = h.create_cutwater_pier(length=${length}, width=${width}, height=${height}, nose_r=${noseR}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("pipe") || geomType.includes("hollow_cylinder") || geomType.includes("strut")) {
+          const outerR = Number(dims.outer_radius || dims.radius || 0.4);
+          const innerR = Number(dims.inner_radius || (outerR * 0.88));
+          const height = Number(dims.height || dims.length || 6.0);
+          const axis = Array.isArray(dims.axis) ? dims.axis : (Array.isArray(comp.axis) ? comp.axis : [0, 0, 1]);
+          scriptLines.push(`_m = h.create_pipe(outer_r=${outerR}, inner_r=${innerR}, height=${height}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("i_beam") || geomType.includes("waler") || geomType.includes("girder")) {
+          const depth = Number(dims.depth || dims.height || 0.6);
+          const flangeW = Number(dims.flange_width || dims.width || 0.3);
+          const length = Number(dims.length || 10.0);
+          scriptLines.push(`_m = h.create_i_beam(depth=${depth}, flange_w=${flangeW}, length=${length}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("cylinder") || ifcClass === "IfcReinforcingBar" || /column|pile/i.test(comp.name)) {
+          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.25));
           const height = Number(dims.height || dims.length || 3.0);
-          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
-          code = `
-result = trimesh.primitives.Cylinder(radius=${radius}, height=${height})
-result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
-`;
-        } else if (geomType === "sphere") {
-          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
-          const radius = Number(dims.radius || 1.0);
-          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, radius];
-          code = `
-result = trimesh.primitives.Sphere(radius=${radius})
-result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
-`;
+          const axis = Array.isArray(dims.axis) ? dims.axis : (Array.isArray(comp.axis) ? comp.axis : [0, 0, 1]);
+          scriptLines.push(`_m = h.create_cylinder(radius=${radius}, height=${height}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
         } else {
-          // Default: Box primitive
-          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
-          const length = Number(dims.length || 1.0);
-          const width = Number(dims.width || 1.0);
-          const height = Number(dims.height || 1.0);
-          const pos = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
-          code = `
-result = trimesh.primitives.Box(extents=[${length}, ${width}, ${height}])
-result.apply_translation([${pos[0] || 0}, ${pos[1] || 0}, ${pos[2] || 0}])
-`;
+          const length = Number(dims.length || dims.x || 1.0);
+          const width = Number(dims.width || dims.y || 1.0);
+          const height = Number(dims.height || dims.z || 1.0);
+          scriptLines.push(`_m = h.create_box(extents=[${length}, ${width}, ${height}], pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
         }
+      }
 
-        try {
-          console.log(`[build_freeform] Creating component: ${comp.name} (${ifcClass})`);
-          const gate = evaluateToolSelection("create_trimesh_ifc", {
-            ifc_class: ifcClass,
-            name: comp.name || `${ifcClass}_Component`
-          }, allTools, comp);
-          toolAudit.push(gate);
-          if (!gate.allowed) throw new Error(`${gate.reason} Use ${gate.semantic_alternative} instead.`);
-          const toolRes = await mcpCallTool("create_trimesh_ifc", {
-            trimesh_code: code,
-            ifc_class: ifcClass,
-            name: comp.name || `${ifcClass}_Component`
-          }, mcpSessionId);
-          mcpSessionId = toolRes.session;
-          executedTools.push("create_trimesh_ifc");
-          executedMutation = true;
-        } catch (cErr: any) {
-          console.warn(`[build_freeform] Non-fatal component creation error for ${comp.name}:`, cErr.message || cErr);
-        }
+      scriptLines.push("count = h.commit()");
+      scriptLines.push("save_and_load_ifc()");
+      scriptLines.push("print(f'InfraStudioHarness successfully created and committed {count} elements.')");
+
+      try {
+        const fullPython = scriptLines.join("\n");
+        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: fullPython }, mcpSessionId);
+        mcpSessionId = toolRes.session;
+        executedTools.push("execute_ifc_code_tool");
+        executedMutation = true;
+      } catch (hErr: any) {
+        console.warn("[build_freeform] Harness batch execution error:", hErr);
       }
     }
 

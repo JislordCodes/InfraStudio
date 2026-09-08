@@ -50,7 +50,10 @@ function designSeedFrom(text: string, sessionId = ""): number {
 }
 
 export async function handleInterpreter(payload: any): Promise<any> {
-  const messages = payload.messages || [];
+  const rawMessages = payload.messages || (payload.prompt ? [{ role: "user", content: String(payload.prompt) }] : (payload.text ? [{ role: "user", content: String(payload.text) }] : []));
+  const messages = Array.isArray(rawMessages) && rawMessages.length > 0
+    ? rawMessages
+    : [{ role: "user", content: typeof payload === "string" ? payload : "Create a structure" }];
   // A transport/MCP session ID exists before the first model is created.  It
   // must not be mistaken for design history, otherwise every fresh request is
   // routed as an edit and the new-building pipeline is skipped.

@@ -52761,6 +52761,271 @@ try:
     trimesh.creation.cylinder = _safe_creation_cylinder
 except Exception:
     pass
+
+try:
+    import mathutils
+except Exception:
+    mathutils = None
+
+def extrude_polygon_safe(poly, height=1.0):
+    pts = None
+    if hasattr(poly, 'exterior'):
+        pts = list(poly.exterior.coords)[:-1]
+    elif isinstance(poly, (list, tuple, np.ndarray)):
+        pts = list(poly)
+    else:
+        try:
+            pts = list(poly.vertices)
+        except Exception:
+            pts = list(poly)
+
+    pts_2d = [[float(p[0]), float(p[1])] for p in pts]
+    N = len(pts_2d)
+    bottom_v = [[p[0], p[1], 0.0] for p in pts_2d]
+    top_v = [[p[0], p[1], float(height)] for p in pts_2d]
+    all_v = np.array(bottom_v + top_v, dtype=float)
+
+    cap_tris = []
+    if mathutils is not None and hasattr(mathutils, 'geometry'):
+        try:
+            cap_tris = mathutils.geometry.tessellate_polygon([pts_2d])
+        except Exception:
+            cap_tris = []
+    if not cap_tris:
+        for i in range(1, N - 1):
+            cap_tris.append((0, i, i + 1))
+
+    faces = []
+    for (i, j, k) in cap_tris:
+        faces.append([i, k, j])
+    for (i, j, k) in cap_tris:
+        faces.append([N + i, N + j, N + k])
+    for i in range(N):
+        nxt = (i + 1) % N
+        faces.append([i, nxt, N + nxt])
+        faces.append([i, N + nxt, N + i])
+
+    m = trimesh.Trimesh(vertices=all_v, faces=np.array(faces, dtype=int), process=True)
+    return m
+
+try:
+    trimesh.creation.extrude_polygon = extrude_polygon_safe
+except Exception:
+    pass
+
+def InfraStudioHarness(ifc_file, storey=None):
+    if storey is None:
+        st = ifc_file.by_type("IfcBuildingStorey")
+        storey = st[0] if st else None
+
+    body_ctx = None
+    try:
+        contexts = ifc_file.by_type("IfcGeometricRepresentationSubContext")
+        for ctx in contexts:
+            if getattr(ctx, "ContextIdentifier", "") == "Body":
+                body_ctx = ctx
+                break
+        if body_ctx is None:
+            m_ctx = ifc_file.by_type("IfcGeometricRepresentationContext")
+            mc = m_ctx[0] if m_ctx else ifc_file.create_entity("IfcGeometricRepresentationContext", ContextType="Model", CoordinateSpaceDimension=3, Precision=1e-5)
+            body_ctx = ifc_file.create_entity("IfcGeometricRepresentationSubContext", ContextIdentifier="Body", ContextType="Model", TargetView="MODEL_VIEW", ParentContext=mc)
+    except Exception:
+        body_ctx = None
+
+    elements = []
+    styles = {}
+
+    def create_box(extents=[1, 1, 1], pos=[0, 0, 0], rot_z_deg=0.0):
+        m = trimesh.primitives.Box(extents=extents)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_cylinder(radius=0.5, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
+        m = trimesh.primitives.Cylinder(radius=radius, height=height, sections=sections)
+        ax = np.array(axis, dtype=float)
+        norm = np.linalg.norm(ax)
+        if norm > 1e-6:
+            ax = ax / norm
+            z_ax = np.array([0, 0, 1], dtype=float)
+            if not np.allclose(ax, z_ax):
+                v = np.cross(z_ax, ax)
+                c = np.dot(z_ax, ax)
+                if np.allclose(c, -1.0):
+                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
+                else:
+                    s = np.linalg.norm(v)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
+                    R = np.eye(4)
+                    R[:3, :3] = R_3x3
+                m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_pipe(outer_r=0.4, inner_r=0.35, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
+        outer = trimesh.primitives.Cylinder(radius=outer_r, height=height, sections=sections)
+        inner = trimesh.primitives.Cylinder(radius=inner_r, height=height + 0.02, sections=sections)
+        try:
+            m = outer.difference(inner)
+        except Exception:
+            m = outer
+        ax = np.array(axis, dtype=float)
+        norm = np.linalg.norm(ax)
+        if norm > 1e-6:
+            ax = ax / norm
+            z_ax = np.array([0, 0, 1], dtype=float)
+            if not np.allclose(ax, z_ax):
+                v = np.cross(z_ax, ax)
+                c = np.dot(z_ax, ax)
+                if np.allclose(c, -1.0):
+                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
+                else:
+                    s = np.linalg.norm(v)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
+                    R = np.eye(4)
+                    R[:3, :3] = R_3x3
+                m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_corrugated_panel(width=2.4, height=12.0, depth=0.45, pitch=0.6, thickness=0.04, pos=[0, 0, 0], rot_z_deg=0.0):
+        pts = []
+        n_waves = max(2, int(width / pitch))
+        for i in range(n_waves):
+            x0 = i * pitch
+            x1 = x0 + pitch * 0.25
+            x2 = x0 + pitch * 0.50
+            x3 = x0 + pitch * 0.75
+            pts.extend([[x0, 0], [x1, depth], [x2, depth], [x3, 0]])
+        pts.append([width, 0])
+        polyline = np.array(pts)
+        outward = []
+        inward = []
+        for p in polyline:
+            outward.append([p[0], p[1] + thickness / 2])
+            inward.append([p[0], p[1] - thickness / 2])
+        poly2d = outward + inward[::-1]
+        m = extrude_polygon_safe(poly2d, height=height)
+        R_align = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+        m.apply_transform(R_align)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R_rot)
+        m.apply_translation(pos)
+        return m
+
+    def create_cutwater_pier(length=12.0, width=4.0, height=8.0, nose_r=2.0, pos=[0, 0, 0], rot_z_deg=0.0):
+        rect_len = max(0.1, length - 2.0 * nose_r)
+        pts = []
+        for deg in range(-90, 91, 10):
+            rad = math.radians(deg)
+            pts.append([rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
+        for deg in range(90, 271, 10):
+            rad = math.radians(deg)
+            pts.append([-rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
+        m = extrude_polygon_safe(pts, height=height)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_i_beam(depth=0.6, flange_w=0.3, web_t=0.02, flange_t=0.03, length=10.0, pos=[0, 0, 0], rot_z_deg=0.0):
+        d, b, tw, tf = depth, flange_w, web_t, flange_t
+        pts = [
+            [-b/2, -d/2], [b/2, -d/2], [b/2, -d/2 + tf], [tw/2, -d/2 + tf],
+            [tw/2, d/2 - tf], [b/2, d/2 - tf], [b/2, d/2], [-b/2, d/2],
+            [-b/2, d/2 - tf], [-tw/2, d/2 - tf], [-tw/2, -d/2 + tf], [-b/2, -d/2 + tf]
+        ]
+        m = extrude_polygon_safe(pts, height=length)
+        R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+        m.apply_transform(R)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R_rot)
+        m.apply_translation(pos)
+        return m
+
+    def add_mesh_element(mesh, name, ifc_class="IfcBuildingElementProxy", mat_name="Structural Steel", rgb=(0.5, 0.5, 0.5), transparency=0.0):
+        if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+            return None
+        import ifcopenshell.api as api
+        point_list = ifc_file.create_entity("IfcCartesianPointList3D", CoordList=mesh.vertices.tolist())
+        faces_1based = (mesh.faces + 1).tolist()
+        face_set = ifc_file.create_entity("IfcTriangulatedFaceSet", Coordinates=point_list, CoordIndex=faces_1based, Closed=True)
+        rep = ifc_file.create_entity("IfcShapeRepresentation", ContextOfItems=body_ctx, RepresentationIdentifier="Body", RepresentationType="Tessellation", Items=[face_set])
+        prod_shape = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[rep])
+        
+        pt = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        d_z = ifc_file.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0))
+        d_x = ifc_file.create_entity("IfcDirection", DirectionRatios=(1.0, 0.0, 0.0))
+        axis_place = ifc_file.create_entity("IfcAxis2Placement3D", Location=pt, Axis=d_z, RefDirection=d_x)
+        local_place = ifc_file.create_entity("IfcLocalPlacement", RelativePlacement=axis_place)
+        
+        prod = api.run("root.create_entity", ifc_file, ifc_class=ifc_class, name=name)
+        prod.Representation = prod_shape
+        prod.ObjectPlacement = local_place
+        
+        key = f"{mat_name}_{rgb}_{transparency}"
+        if key not in styles:
+            mat = api.run("material.add_material", ifc_file, name=mat_name)
+            style = api.run("style.add_style", ifc_file, name=f"Style_{mat_name}", ifc_class="IfcSurfaceStyle")
+            c_rgb = ifc_file.create_entity("IfcColourRgb", Red=float(rgb[0]), Green=float(rgb[1]), Blue=float(rgb[2]))
+            shading = ifc_file.create_entity("IfcSurfaceStyleShading", SurfaceColour=c_rgb, Transparency=float(transparency))
+            style.Styles = [shading]
+            try:
+                api.run("style.assign_material_style", ifc_file, material=mat, style=style, context=body_ctx)
+            except Exception:
+                pass
+            styles[key] = (mat, style)
+        
+        mat, style = styles[key]
+        try:
+            api.run("style.assign_representation_styles", ifc_file, shape_representation=rep, styles=[style])
+        except Exception:
+            pass
+        
+        elements.append((prod, mat))
+        return prod
+
+    def commit():
+        if not elements:
+            return 0
+        import ifcopenshell.api as api
+        prods = [p for p, _ in elements]
+        if storey:
+            try:
+                api.run("aggregate.assign_object", ifc_file, relating_object=storey, products=prods)
+            except Exception:
+                pass
+        by_mat = {}
+        for p, m in elements:
+            by_mat.setdefault(m, []).append(p)
+        for m, ps in by_mat.items():
+            try:
+                api.run("material.assign_material", ifc_file, products=ps, material=m)
+            except Exception:
+                pass
+        return len(prods)
+
+    return type("InfraStudioHarnessInstance", (), {
+        "create_box": staticmethod(create_box),
+        "create_cylinder": staticmethod(create_cylinder),
+        "create_pipe": staticmethod(create_pipe),
+        "create_corrugated_panel": staticmethod(create_corrugated_panel),
+        "create_cutwater_pier": staticmethod(create_cutwater_pier),
+        "create_i_beam": staticmethod(create_i_beam),
+        "add_mesh_element": staticmethod(add_mesh_element),
+        "commit": staticmethod(commit)
+    })()
 `;
   const sanitized = code.replace(/\.is_empty/g, ".size == 0");
   return safeHeader + "\n" + sanitized;
@@ -52826,10 +53091,12 @@ async function callAstra(systemPrompt4, userMessage, jsonMode = false, model = "
   const key = getExplabsApiKey();
   if (!key) throw new Error("EXPLABS_API_KEY is not configured.");
   let msgs = [{ role: "system", content: systemPrompt4 }];
-  if (Array.isArray(userMessage)) {
-    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role, content: m3.content || "" })));
-  } else {
+  if (Array.isArray(userMessage) && userMessage.length > 0) {
+    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role || "user", content: m3.content || "" })));
+  } else if (!Array.isArray(userMessage) && userMessage && String(userMessage).trim().length > 0) {
     msgs.push({ role: "user", content: String(userMessage) });
+  } else {
+    msgs.push({ role: "user", content: "Process according to system instructions." });
   }
   const payload2 = {
     model: model || "gpt-6-astra",
@@ -53138,7 +53405,8 @@ function designSeedFrom(text, sessionId = "") {
   return Math.abs(hash);
 }
 async function handleInterpreter(payload2) {
-  const messages = payload2.messages || [];
+  const rawMessages = payload2.messages || (payload2.prompt ? [{ role: "user", content: String(payload2.prompt) }] : payload2.text ? [{ role: "user", content: String(payload2.text) }] : []);
+  const messages = Array.isArray(rawMessages) && rawMessages.length > 0 ? rawMessages : [{ role: "user", content: typeof payload2 === "string" ? payload2 : "Create a structure" }];
   const hasHistory = Array.isArray(messages) ? messages.slice(0, -1).some((message) => message?.role === "user" || message?.role === "assistant") : false;
   let formattedPrompt = messages;
   if (hasHistory) {
@@ -53373,8 +53641,10 @@ var WALLS = ["south", "east", "north", "west"];
 function requestedText(brief) {
   return [
     brief?.project_type,
+    brief?.client_requirements,
     ...brief?.special_features || [],
     ...brief?.constraints || [],
+    ...(brief?.component_requirements || []).map((c5) => `${c5.name || ""} ${c5.type || ""} ${c5.description || ""}`),
     ...(brief?.room_requirements || []).map((room2) => room2.name)
   ].filter(Boolean).join(" ").toLowerCase();
 }
@@ -53571,15 +53841,164 @@ function railwayProgram() {
   for (let x = 0; x <= 80; x += 1) components.push({ name: `Sleeper ${x + 1}`, ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 0.25, width: 2.8, height: 0.2 }, position: [x, 0, 0.35], material: "precast concrete" });
   return components;
 }
+function cofferdamProgram(name) {
+  const components = [];
+  const W = 16, L = 24, H_pile = 12, Z_water = 4;
+  for (let x = -L / 2; x < L / 2; x += 2.4) {
+    components.push({
+      name: `Sheet_Pile_South_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [x, -W / 2, 0],
+      rotation_z: 0,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+    components.push({
+      name: `Sheet_Pile_North_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [x + 2.4, W / 2, 0],
+      rotation_z: 180,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+  }
+  for (let y = -W / 2; y < W / 2; y += 2.4) {
+    components.push({
+      name: `Sheet_Pile_East_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [L / 2, y, 0],
+      rotation_z: 90,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+    components.push({
+      name: `Sheet_Pile_West_${components.length}`,
+      ifc_class: "IfcWall",
+      geometry_type: "corrugated_panel",
+      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
+      position: [-L / 2, y + 2.4, 0],
+      rotation_z: 270,
+      material: "Structural Steel AZ-36",
+      rgb: [0.32, 0.34, 0.36]
+    });
+  }
+  [2, 5, 8].forEach((z, tier) => {
+    components.push({
+      name: `Waler_Tier${tier + 1}_South`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: L },
+      position: [-L / 2, -W / 2 + 0.3, z],
+      rotation_z: 0,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    components.push({
+      name: `Waler_Tier${tier + 1}_North`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: L },
+      position: [-L / 2, W / 2 - 0.3, z],
+      rotation_z: 0,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    components.push({
+      name: `Waler_Tier${tier + 1}_East`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: W },
+      position: [L / 2 - 0.3, -W / 2, z],
+      rotation_z: 90,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    components.push({
+      name: `Waler_Tier${tier + 1}_West`,
+      ifc_class: "IfcBeam",
+      geometry_type: "i_beam",
+      dimensions: { depth: 0.6, flange_width: 0.3, length: W },
+      position: [-L / 2 + 0.3, -W / 2, z],
+      rotation_z: 90,
+      material: "Heavy Waler Steel W24",
+      rgb: [0.88, 0.72, 0.15]
+    });
+    [-6, 0, 6].forEach((x, si) => {
+      components.push({
+        name: `Strut_Tier${tier + 1}_S${si + 1}`,
+        ifc_class: "IfcMember",
+        geometry_type: "pipe",
+        dimensions: { outer_radius: 0.35, inner_radius: 0.3, length: W - 0.6, axis: [0, 1, 0] },
+        position: [x, 0, z + 0.3],
+        material: "Tubular Steel Strut",
+        rgb: [0.88, 0.72, 0.15]
+      });
+    });
+  });
+  components.push({
+    name: "Hydrodynamic_Cutwater_Pier",
+    ifc_class: "IfcColumn",
+    geometry_type: "cutwater_pier",
+    dimensions: { length: 14, width: 4.5, height: 11, nose_radius: 2.25 },
+    position: [0, 0, 0.8],
+    material: "High-Strength Marine Concrete C40",
+    rgb: [0.65, 0.65, 0.63]
+  });
+  components.push({
+    name: "Pier_Deep_Footing",
+    ifc_class: "IfcFooting",
+    geometry_type: "box",
+    dimensions: { length: 16, width: 6.5, height: 1.2 },
+    position: [0, 0, 0.6],
+    material: "Reinforced Concrete Footing",
+    rgb: [0.55, 0.55, 0.53]
+  });
+  components.push({
+    name: "Tremie_Concrete_Seal_Plug",
+    ifc_class: "IfcSlab",
+    geometry_type: "box",
+    dimensions: { length: L - 0.2, width: W - 0.2, height: 1.5 },
+    position: [0, 0, 0.75],
+    material: "Tremie Mass Concrete Plug",
+    rgb: [0.45, 0.46, 0.48]
+  });
+  components.push({
+    name: "River_Water_Surface",
+    ifc_class: "IfcBuildingElementProxy",
+    geometry_type: "box",
+    dimensions: { length: L + 16, width: W + 16, height: 0.1 },
+    position: [0, 0, Z_water],
+    material: "River Water Surface",
+    rgb: [0.2, 0.55, 0.7],
+    transparency: 0.55
+  });
+  return components;
+}
 function ensureInfrastructurePlan(plan, brief) {
   const text = requestedText(brief);
+  if (/cofferdam|coffer/i.test(text)) {
+    return {
+      ...plan,
+      structure_category: "infrastructure",
+      is_edit: false,
+      structure_name: brief?.project_type || "Bridge Pier Cofferdam",
+      components: cofferdamProgram(brief?.project_type || "Bridge Pier Cofferdam"),
+      quality_requirements: { minimum_components: 20, required_element_types: ["IfcWall", "IfcBeam", "IfcMember", "IfcColumn", "IfcFooting", "IfcSlab"] }
+    };
+  }
   if (/bridge/.test(text)) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Bridge", components: bridgeProgram(brief?.project_type || "Bridge"), quality_requirements: { minimum_components: 8, required_element_types: ["IfcSlab", "IfcColumn", "IfcBeam", "IfcFooting"] } };
   }
   if (/rail|railway|track/.test(text)) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Railway", components: railwayProgram(), quality_requirements: { minimum_components: 30, required_element_types: ["IfcSlab", "IfcMember"] } };
   }
-  const minimum = /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
+  const minimum = /cofferdam|coffer/i.test(text) ? 20 : /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
   if (Array.isArray(plan?.components) && plan.components.length >= minimum) return plan;
   const components = plan?.components || [];
   return { ...plan, structure_category: brief?.structure_category || "infrastructure", is_edit: false, structure_name: brief?.project_type || "InfraStudio Infrastructure", components, quality_requirements: { minimum_components: minimum } };
@@ -54130,8 +54549,10 @@ function repairPlan(plan, brief) {
   plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
   return plan;
 }
-async function handleArchitect(brief) {
-  const category = brief.structure_category || "building";
+async function handleArchitect(rawBrief) {
+  const brief = rawBrief && rawBrief.brief ? { ...rawBrief.brief, client_requirements: rawBrief.client_requirements || rawBrief.brief?.client_requirements } : rawBrief || {};
+  const textCheck = requestedText(brief);
+  const category = brief.structure_category || (/cofferdam|coffer|bridge|rail|road|pier|jetty|pier/i.test(textCheck) ? "infrastructure" : "building");
   const isBuilding = category === "building";
   const prompt = isBuilding ? systemPrompt2 : infrastructurePrompt;
   const fallbackPlan = (reason) => {
@@ -54281,10 +54702,12 @@ async function handleReviewer(payload2) {
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: true, include_transform: true }, mcpSessionId);
   const scene = parseScene(sceneInfo.resultText);
-  const deterministic = deterministicReview(scene, payload2.qualityRequirements || {}, payload2.structureCategory || "building");
+  const category = payload2.structureCategory || payload2.plan?.structure_category || payload2.brief?.structure_category || "building";
+  const qualityReqs = payload2.qualityRequirements || payload2.plan?.quality_requirements || payload2.brief?.quality_requirements || {};
+  const deterministic = deterministicReview(scene, qualityReqs, category);
   const reviewContext = {
-    structure_category: payload2.structureCategory || "building",
-    quality_requirements: payload2.qualityRequirements || {},
+    structure_category: category,
+    quality_requirements: qualityReqs,
     scene_overview: sceneInfo.resultText,
     deterministic_findings: deterministic
   };
@@ -54835,62 +55258,98 @@ ${trimeshExamples}`;
     const executedTools = [];
     const toolAudit = [];
     let executionError = "";
+    if (payload2.plan?.python_code && typeof payload2.plan.python_code === "string" && payload2.plan.python_code.trim().length > 20) {
+      console.log(`[build_freeform] Executing direct Python harness code from plan...`);
+      try {
+        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: payload2.plan.python_code }, mcpSessionId);
+        mcpSessionId = toolRes.session;
+        executedTools.push("execute_ifc_code_tool");
+        executedMutation = true;
+      } catch (pErr) {
+        console.warn(`[build_freeform] Direct python_code execution failed, falling back:`, pErr);
+      }
+    }
     const rawComponents = payload2.plan?.components || [];
-    if (Array.isArray(rawComponents) && rawComponents.length > 0) {
-      console.log(`[build_freeform] Executing ${rawComponents.length} components from architect plan...`);
-      for (const comp of rawComponents) {
-        const ifcClass = comp.ifc_class || "IfcBuildingElementProxy";
+    if (!executedMutation && Array.isArray(rawComponents) && rawComponents.length > 0) {
+      console.log(`[build_freeform] Executing ${rawComponents.length} components via InfraStudioHarness...`);
+      const scriptLines = [
+        "ifc = get_ifc_file()",
+        "storeys = ifc.by_type('IfcBuildingStorey')",
+        "storey = storeys[0] if storeys else None",
+        "h = InfraStudioHarness(ifc, storey)"
+      ];
+      for (let i5 = 0; i5 < rawComponents.length; i5++) {
+        const comp = rawComponents[i5];
+        const name = String(comp.name || `Component_${i5}`).replace(/['"\\]/g, "");
+        const ifcClass = String(comp.ifc_class || "IfcBuildingElementProxy").replace(/['"\\]/g, "");
         const geomType = String(comp.geometry_type || "box").toLowerCase();
-        let code = "";
+        const mat = String(comp.material || comp.material_name || "Structural Finish").replace(/['"\\]/g, "");
+        const rgb = Array.isArray(comp.rgb) && comp.rgb.length === 3 ? comp.rgb : [0.5, 0.5, 0.5];
+        const transp = Number(comp.transparency || 0);
+        const pos2 = Array.isArray(comp.position) ? comp.position : [0, 0, 0];
+        const rotZ = Number(comp.rotation_z || comp.rot_z_deg || 0);
+        const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
         if (comp.trimesh_code && typeof comp.trimesh_code === "string" && comp.trimesh_code.trim().length > 10) {
-          code = comp.trimesh_code;
-        } else if (geomType === "cylinder" || ifcClass === "IfcReinforcingBar" || /rebar|pipe|column/i.test(comp.name)) {
-          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
-          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.015));
+          scriptLines.push(`
+def _create_custom_${i5}():
+${comp.trimesh_code.split("\n").map((l3) => "    " + l3).join("\n")}
+    return result
+_m_${i5} = _create_custom_${i5}()
+h.add_mesh_element(_m_${i5}, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})
+`);
+        } else if (geomType.includes("corrugat") || geomType.includes("sheet_pile")) {
+          const width = Number(dims.width || dims.length || 2.4);
+          const height = Number(dims.height || 12);
+          const depth = Number(dims.depth || 0.45);
+          const pitch = Number(dims.pitch || 0.6);
+          const thick = Number(dims.thickness || 0.04);
+          scriptLines.push(`_m = h.create_corrugated_panel(width=${width}, height=${height}, depth=${depth}, pitch=${pitch}, thickness=${thick}, pos=[${pos2[0]}, ${pos2[1]}, ${pos2[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("cutwater") || geomType.includes("pier")) {
+          const length = Number(dims.length || 12);
+          const width = Number(dims.width || 4);
+          const height = Number(dims.height || 8);
+          const noseR = Number(dims.nose_radius || dims.radius || width / 2);
+          scriptLines.push(`_m = h.create_cutwater_pier(length=${length}, width=${width}, height=${height}, nose_r=${noseR}, pos=[${pos2[0]}, ${pos2[1]}, ${pos2[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("pipe") || geomType.includes("hollow_cylinder") || geomType.includes("strut")) {
+          const outerR = Number(dims.outer_radius || dims.radius || 0.4);
+          const innerR = Number(dims.inner_radius || outerR * 0.88);
+          const height = Number(dims.height || dims.length || 6);
+          const axis = Array.isArray(dims.axis) ? dims.axis : Array.isArray(comp.axis) ? comp.axis : [0, 0, 1];
+          scriptLines.push(`_m = h.create_pipe(outer_r=${outerR}, inner_r=${innerR}, height=${height}, pos=[${pos2[0]}, ${pos2[1]}, ${pos2[2]}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("i_beam") || geomType.includes("waler") || geomType.includes("girder")) {
+          const depth = Number(dims.depth || dims.height || 0.6);
+          const flangeW = Number(dims.flange_width || dims.width || 0.3);
+          const length = Number(dims.length || 10);
+          scriptLines.push(`_m = h.create_i_beam(depth=${depth}, flange_w=${flangeW}, length=${length}, pos=[${pos2[0]}, ${pos2[1]}, ${pos2[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        } else if (geomType.includes("cylinder") || ifcClass === "IfcReinforcingBar" || /column|pile/i.test(comp.name)) {
+          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.25));
           const height = Number(dims.height || dims.length || 3);
-          const pos2 = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
-          code = `
-result = trimesh.primitives.Cylinder(radius=${radius}, height=${height})
-result.apply_translation([${pos2[0] || 0}, ${pos2[1] || 0}, ${pos2[2] || 0}])
-`;
-        } else if (geomType === "sphere") {
-          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
-          const radius = Number(dims.radius || 1);
-          const pos2 = Array.isArray(comp.position) ? comp.position : [0, 0, radius];
-          code = `
-result = trimesh.primitives.Sphere(radius=${radius})
-result.apply_translation([${pos2[0] || 0}, ${pos2[1] || 0}, ${pos2[2] || 0}])
-`;
+          const axis = Array.isArray(dims.axis) ? dims.axis : Array.isArray(comp.axis) ? comp.axis : [0, 0, 1];
+          scriptLines.push(`_m = h.create_cylinder(radius=${radius}, height=${height}, pos=[${pos2[0]}, ${pos2[1]}, ${pos2[2]}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
         } else {
-          const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
-          const length = Number(dims.length || 1);
-          const width = Number(dims.width || 1);
-          const height = Number(dims.height || 1);
-          const pos2 = Array.isArray(comp.position) ? comp.position : [0, 0, height / 2];
-          code = `
-result = trimesh.primitives.Box(extents=[${length}, ${width}, ${height}])
-result.apply_translation([${pos2[0] || 0}, ${pos2[1] || 0}, ${pos2[2] || 0}])
-`;
+          const length = Number(dims.length || dims.x || 1);
+          const width = Number(dims.width || dims.y || 1);
+          const height = Number(dims.height || dims.z || 1);
+          scriptLines.push(`_m = h.create_box(extents=[${length}, ${width}, ${height}], pos=[${pos2[0]}, ${pos2[1]}, ${pos2[2]}], rot_z_deg=${rotZ})`);
+          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
         }
-        try {
-          console.log(`[build_freeform] Creating component: ${comp.name} (${ifcClass})`);
-          const gate = evaluateToolSelection("create_trimesh_ifc", {
-            ifc_class: ifcClass,
-            name: comp.name || `${ifcClass}_Component`
-          }, allTools, comp);
-          toolAudit.push(gate);
-          if (!gate.allowed) throw new Error(`${gate.reason} Use ${gate.semantic_alternative} instead.`);
-          const toolRes = await mcpCallTool("create_trimesh_ifc", {
-            trimesh_code: code,
-            ifc_class: ifcClass,
-            name: comp.name || `${ifcClass}_Component`
-          }, mcpSessionId);
-          mcpSessionId = toolRes.session;
-          executedTools.push("create_trimesh_ifc");
-          executedMutation = true;
-        } catch (cErr) {
-          console.warn(`[build_freeform] Non-fatal component creation error for ${comp.name}:`, cErr.message || cErr);
-        }
+      }
+      scriptLines.push("count = h.commit()");
+      scriptLines.push("save_and_load_ifc()");
+      scriptLines.push("print(f'InfraStudioHarness successfully created and committed {count} elements.')");
+      try {
+        const fullPython = scriptLines.join("\n");
+        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: fullPython }, mcpSessionId);
+        mcpSessionId = toolRes.session;
+        executedTools.push("execute_ifc_code_tool");
+        executedMutation = true;
+      } catch (hErr) {
+        console.warn("[build_freeform] Harness batch execution error:", hErr);
       }
     }
     if (!executedMutation) {

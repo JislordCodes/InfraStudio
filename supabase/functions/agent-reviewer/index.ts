@@ -81,10 +81,12 @@ export async function handleReviewer(payload: any): Promise<any> {
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: true, include_transform: true }, mcpSessionId);
   const scene = parseScene(sceneInfo.resultText);
-  const deterministic = deterministicReview(scene, payload.qualityRequirements || {}, payload.structureCategory || "building");
+  const category = payload.structureCategory || payload.plan?.structure_category || payload.brief?.structure_category || "building";
+  const qualityReqs = payload.qualityRequirements || payload.plan?.quality_requirements || payload.brief?.quality_requirements || {};
+  const deterministic = deterministicReview(scene, qualityReqs, category);
   const reviewContext = {
-    structure_category: payload.structureCategory || "building",
-    quality_requirements: payload.qualityRequirements || {},
+    structure_category: category,
+    quality_requirements: qualityReqs,
     scene_overview: sceneInfo.resultText,
     deterministic_findings: deterministic
   };
