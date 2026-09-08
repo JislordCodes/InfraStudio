@@ -52813,10 +52813,19 @@ try:
 except Exception:
     pass
 
-def InfraStudioHarness(ifc_file, storey=None):
-    if storey is None:
-        st = ifc_file.by_type("IfcBuildingStorey")
-        storey = st[0] if st else None
+def InfraStudioHarness(ifc_file=None, storey=None):
+    if ifc_file is None:
+        try:
+            ifc_file = get_ifc_file()
+        except Exception:
+            ifc_file = None
+
+    if storey is None and ifc_file is not None:
+        try:
+            st = ifc_file.by_type("IfcBuildingStorey")
+            storey = st[0] if st else None
+        except Exception:
+            storey = None
 
     body_ctx = None
     try:
@@ -53417,9 +53426,37 @@ ${historyText}
 
 Task: Parse the LATEST user message in context of conversation history. If the user wants to add to, modify, paint, adjust, or edit the existing model, set "is_edit": true.`;
   }
-  const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
-  const result = cleanJsonResponse(res);
+  let result = null;
   const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+  try {
+    const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
+    result = cleanJsonResponse(res);
+  } catch (err) {
+    console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
+    const textLower = String(latestText).toLowerCase();
+    const isInfra = /cofferdam|coffer|bridge|rail|road|pier|jetty|dam|tunnel/i.test(textLower);
+    const projType = isInfra ? /cofferdam|coffer/i.test(textLower) ? "Bridge Pier Cofferdam" : /bridge/i.test(textLower) ? "Bridge" : "Infrastructure Structure" : /apartment/i.test(textLower) ? "Apartment Building" : "Modern House";
+    result = {
+      is_edit: false,
+      edit_instructions: [],
+      structure_category: isInfra ? "infrastructure" : "building",
+      project_type: projType,
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2 }],
+      room_requirements: isInfra ? [] : [
+        { name: "Living Room", suggested_area: 25 },
+        { name: "Kitchen", suggested_area: 15 },
+        { name: "Bedroom", suggested_area: 18 },
+        { name: "Bathroom", suggested_area: 8 }
+      ],
+      component_requirements: [],
+      special_features: [],
+      material_requirements: [],
+      style_preferences: [],
+      constraints: [],
+      needs_clarification: false,
+      confidence_score: 0.95
+    };
+  }
   const priorAssistantText = Array.isArray(messages) ? messages.slice(0, -1).filter((message) => message?.role === "assistant").map((message) => String(message.content || "")).join(" ").toLowerCase() : "";
   const followsClarification = /could you provide more details|please describe|what should i design|clarifying|layout.*additional rooms/i.test(priorAssistantText);
   const startsNewDesign = /\b(create|build|design|make)\b.*\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText));
@@ -53580,60 +53617,56 @@ Expected JSON Schema:
   "structural_notes": ["string"]
 }`;
 var infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
-Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
+Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (cofferdams, bridge piers, structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
 
-STRUCTURAL FRAMES & COLUMN GRIDS (CRITICAL MATHEMATICAL RULES):
- 1. CENTER POSITIONING RULES (trimesh Box extents=[length, width, height] is centered at position [x,y,z]):
-    - For vertical columns of height H starting at elevation Z_start:
-      Position Z_center = Z_start + H / 2.
-    - For pad bases/footings (IfcFooting) under columns at ground level (Z=0):
-      Dimensions e.g. { length: 1.5, width: 1.5, height: 0.6 }.
-      Position Z_center = 0.3m (or -0.3m if below ground).
-    - For longitudinal beams along X (length L = spacing along X, e.g. 5m):
-      Position X_center = X_start + L / 2.
-    - For transverse beams along Y (width W = spacing along Y, e.g. 5m):
-      Position Y_center = Y_start + W / 2.
+INFRASTRUCTURE GEOMETRIES & HARNESS PRIMITIVES:
+You have access to specialized InfraStudio parametric engineering primitives via geometry_type:
+- "corrugated_panel": Interlocking sheet piles (AZ-36). Dimensions: { width, height, depth, pitch, thickness }.
+- "cutwater_pier": Hydrodynamic piers with curved upstream/downstream noses. Dimensions: { length, width, height, nose_radius }.
+- "i_beam": Steel beams/walers/girders with I-profile. Dimensions: { depth, flange_width, length, web_thickness, flange_thickness }.
+- "pipe": Tubular circular hollow struts/piles. Dimensions: { outer_radius, inner_radius, height, axis: [x,y,z] }.
+- "cylinder": Solid columns/piles. Dimensions: { radius, height, axis: [x,y,z] }.
+- "box": Slabs, footings, caps, water planes. Dimensions: { length, width, height }.
+- "custom_trimesh": You can supply a "trimesh_code" Python string returning 'result = mesh'.
 
- 2. GRID COMPUTATION EXAMPLE (e.g. 4 columns in X row x 5 columns in Y col, 3 storeys):
-    - Grid X coordinates: [0, 5, 10, 15] (4 columns = 3 bays of 5m = 15m span).
-    - Grid Y coordinates: [0, 5, 10, 15, 20] (5 columns = 4 bays of 5m = 20m span).
-    - Storey heights: 3m per storey (Storey 1: Z=0 to 3m; Storey 2: Z=3 to 6m; Storey 3: Z=6 to 9m).
-    - Step 1: Create Pad Bases (IfcFooting) at Z=0.3m under each grid intersection (X, Y).
-    - Step 2: Create Columns (IfcColumn) per storey:
-      * Storey 1 columns at Z_center = 1.5m (from 0 to 3m).
-      * Storey 2 columns at Z_center = 4.5m (from 3 to 6m).
-      * Storey 3 columns at Z_center = 7.5m (from 6 to 9m).
-    - Step 3: Create Beams (IfcBeam) connecting columns at each storey top (Z=3m, Z=6m, Z=9m):
-      * X-Beams: length=5m, centered at (X + 2.5, Y, Z_level).
-      * Y-Beams: width=5m, centered at (X, Y + 2.5, Z_level).
-
- 3. DO NOT OMIT COMPONENTS: Generate EVERY single column, beam, and footing required to form a fully connected, complete structural frame.
+STRUCTURAL ACCURACY RULES:
+1. For cofferdams: Enclose the perimeter with "corrugated_panel" sheet piles, add horizontal "i_beam" waler rings at multiple depth tiers, span "pipe" compression cross struts, and position a central "cutwater_pier" on an "IfcFooting" inside.
+2. For bridges: Span deck slabs across multiple pier supports with footings, main girders, and safety parapets.
+3. For column frames: Place pad footings at Z=0, columns ascending in Z, and beam networks connecting them at each storey level.
+4. Set realistic PBR material names ("Structural Steel AZ-36", "High-Strength Marine Concrete", "River Water Surface") and rgb colors [r, g, b] (between 0.0 and 1.0). For water, set "transparency": 0.55.
 
 Strict Restrictions:
- * Return ONLY raw JSON.
- * Do NOT include rooms, doors, or windows.
- * Start output immediately with '{'.
+* Return ONLY raw JSON.
+* Do NOT include rooms, doors, or windows.
+* Start output immediately with '{'.
 
 Expected JSON Schema:
 {
   "structure_category": "infrastructure" | "mep" | "custom",
   "is_edit": false,
   "structure_name": "string",
+  "python_code": "optional full python script using InfraStudioHarness if generating direct code",
   "components": [
     {
       "name": "string",
-      "ifc_class": "IfcColumn | IfcBeam | IfcFooting | IfcSlab | IfcMember | IfcBuildingElementProxy",
-      "geometry_type": "box | cylinder | sphere | custom_trimesh",
-      "dimensions": { "length": number, "width": number, "height": number },
+      "ifc_class": "IfcColumn | IfcBeam | IfcFooting | IfcSlab | IfcMember | IfcWall | IfcBuildingElementProxy",
+      "geometry_type": "corrugated_panel | cutwater_pier | i_beam | pipe | cylinder | box | custom_trimesh",
+      "dimensions": {
+        "length": number, "width": number, "height": number,
+        "depth": number, "pitch": number, "thickness": number,
+        "outer_radius": number, "inner_radius": number, "nose_radius": number
+      },
       "position": [number, number, number],
-      "rotation": [number, number, number],
-      "material": "string"
+      "rotation_z": number,
+      "material": "string",
+      "rgb": [number, number, number],
+      "transparency": number
     }
   ],
   "material_palette": {
-    "primary": "reinforced structural concrete",
-    "secondary": "structural steel S355",
-    "accent": "galvanized steel"
+    "primary": "string",
+    "secondary": "string",
+    "accent": "string"
   },
   "structural_notes": ["string"]
 }`;
@@ -53982,7 +54015,32 @@ function cofferdamProgram(name) {
 }
 function ensureInfrastructurePlan(plan, brief) {
   const text = requestedText(brief);
-  if (/cofferdam|coffer/i.test(text)) {
+  const isCofferdam = /cofferdam|coffer/i.test(text);
+  const isBridge = /bridge/i.test(text);
+  const isRail = /rail|railway|track/i.test(text);
+  const minimum = isCofferdam ? 20 : isBridge ? 8 : isRail ? 30 : 4;
+  if (typeof plan?.python_code === "string" && plan.python_code.trim().length > 20) {
+    return {
+      ...plan,
+      structure_category: "infrastructure",
+      is_edit: false,
+      structure_name: plan.structure_name || brief?.project_type || "Infrastructure Structure",
+      python_code: plan.python_code,
+      components: Array.isArray(plan?.components) ? plan.components : [],
+      quality_requirements: { minimum_components: minimum }
+    };
+  }
+  if (Array.isArray(plan?.components) && plan.components.length >= minimum) {
+    return {
+      ...plan,
+      structure_category: "infrastructure",
+      is_edit: false,
+      structure_name: plan.structure_name || brief?.project_type || "Infrastructure Structure",
+      components: plan.components,
+      quality_requirements: { minimum_components: minimum }
+    };
+  }
+  if (isCofferdam) {
     return {
       ...plan,
       structure_category: "infrastructure",
@@ -53992,14 +54050,12 @@ function ensureInfrastructurePlan(plan, brief) {
       quality_requirements: { minimum_components: 20, required_element_types: ["IfcWall", "IfcBeam", "IfcMember", "IfcColumn", "IfcFooting", "IfcSlab"] }
     };
   }
-  if (/bridge/.test(text)) {
+  if (isBridge) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Bridge", components: bridgeProgram(brief?.project_type || "Bridge"), quality_requirements: { minimum_components: 8, required_element_types: ["IfcSlab", "IfcColumn", "IfcBeam", "IfcFooting"] } };
   }
-  if (/rail|railway|track/.test(text)) {
+  if (isRail) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Railway", components: railwayProgram(), quality_requirements: { minimum_components: 30, required_element_types: ["IfcSlab", "IfcMember"] } };
   }
-  const minimum = /cofferdam|coffer/i.test(text) ? 20 : /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
-  if (Array.isArray(plan?.components) && plan.components.length >= minimum) return plan;
   const components = plan?.components || [];
   return { ...plan, structure_category: brief?.structure_category || "infrastructure", is_edit: false, structure_name: brief?.project_type || "InfraStudio Infrastructure", components, quality_requirements: { minimum_components: minimum } };
 }
@@ -54711,8 +54767,21 @@ async function handleReviewer(payload2) {
     scene_overview: sceneInfo.resultText,
     deterministic_findings: deterministic
   };
-  const res = await callQwen(systemPrompt3, JSON.stringify(reviewContext), true, "qwen3.8-max");
-  const result = cleanJsonResponse(res);
+  let result = null;
+  try {
+    const res = await callQwen(systemPrompt3, JSON.stringify(reviewContext), true, "qwen3.8-max");
+    result = cleanJsonResponse(res);
+  } catch (err) {
+    console.warn("[handleReviewer] LLM unavailable, using deterministic review results:", err);
+    result = {
+      status: deterministic.issues.length ? "FAIL" : "PASS",
+      issues: deterministic.issues,
+      severity_levels: deterministic.issues.map(() => "warning"),
+      entity_ids_flagged: [],
+      fix_recommendations: deterministic.fixes,
+      retry_required: deterministic.issues.length > 0
+    };
+  }
   result.issues = [.../* @__PURE__ */ new Set([...deterministic.issues || [], ...result.issues || []])];
   result.fix_recommendations = [.../* @__PURE__ */ new Set([...deterministic.fixes || [], ...result.fix_recommendations || []])];
   if (deterministic.issues.length) {
@@ -55159,25 +55228,53 @@ save_and_load_ifc()`
       const dims = comp.dimensions || {};
       const pos2 = comp.position || [0, 0, 0];
       const x = Number(pos2[0] || 0), y = Number(pos2[1] || 0), z = Number(pos2[2] || 0);
+      const rotZ = Number(comp.rotation_z || comp.rot_z_deg || 0);
       let code = "";
-      if (geomType === "cylinder") {
-        const r5 = Number(dims.radius || 1);
-        const h5 = Number(dims.height || 5);
-        code = `c = trimesh.primitives.Cylinder(radius=${r5}, height=${h5})
-c.apply_translation([${x}, ${y}, ${z}])
-result = c`;
+      if (geomType.includes("corrugat") || geomType.includes("sheet_pile")) {
+        const width = Number(dims.width || dims.length || 2.4);
+        const height = Number(dims.height || 12);
+        const depth = Number(dims.depth || 0.45);
+        const pitch = Number(dims.pitch || 0.6);
+        const thick = Number(dims.thickness || 0.04);
+        code = `h = InfraStudioHarness(None)
+result = h.create_corrugated_panel(width=${width}, height=${height}, depth=${depth}, pitch=${pitch}, thickness=${thick}, pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
+      } else if (geomType.includes("cutwater") || geomType.includes("pier")) {
+        const length = Number(dims.length || 12);
+        const width = Number(dims.width || 4);
+        const height = Number(dims.height || 8);
+        const noseR = Number(dims.nose_radius || dims.radius || width / 2);
+        code = `h = InfraStudioHarness(None)
+result = h.create_cutwater_pier(length=${length}, width=${width}, height=${height}, nose_r=${noseR}, pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
+      } else if (geomType.includes("pipe") || geomType.includes("hollow_cylinder") || geomType.includes("strut")) {
+        const outerR = Number(dims.outer_radius || dims.radius || 0.4);
+        const innerR = Number(dims.inner_radius || outerR * 0.88);
+        const height = Number(dims.height || dims.length || 6);
+        const axis = Array.isArray(dims.axis) ? dims.axis : Array.isArray(comp.axis) ? comp.axis : [0, 0, 1];
+        code = `h = InfraStudioHarness(None)
+result = h.create_pipe(outer_r=${outerR}, inner_r=${innerR}, height=${height}, pos=[${x}, ${y}, ${z}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`;
+      } else if (geomType.includes("i_beam") || geomType.includes("waler") || geomType.includes("girder")) {
+        const depth = Number(dims.depth || dims.height || 0.6);
+        const flangeW = Number(dims.flange_width || dims.width || 0.3);
+        const length = Number(dims.length || 10);
+        code = `h = InfraStudioHarness(None)
+result = h.create_i_beam(depth=${depth}, flange_w=${flangeW}, length=${length}, pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
+      } else if (geomType.includes("cylinder")) {
+        const r5 = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 1));
+        const h5 = Number(dims.height || dims.length || 5);
+        const axis = Array.isArray(dims.axis) ? dims.axis : Array.isArray(comp.axis) ? comp.axis : [0, 0, 1];
+        code = `h = InfraStudioHarness(None)
+result = h.create_cylinder(radius=${r5}, height=${h5}, pos=[${x}, ${y}, ${z}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`;
       } else if (geomType === "sphere") {
         const r5 = Number(dims.radius || 1);
         code = `s = trimesh.primitives.Sphere(radius=${r5})
 s.apply_translation([${x}, ${y}, ${z}])
 result = s`;
       } else {
-        const l3 = Number(dims.length || 5);
-        const w = Number(dims.width || 2);
-        const h5 = Number(dims.height || 1);
-        code = `b = trimesh.primitives.Box(extents=[${l3}, ${w}, ${h5}])
-b.apply_translation([${x}, ${y}, ${z}])
-result = b`;
+        const l3 = Number(dims.length || dims.x || 5);
+        const w = Number(dims.width || dims.y || 2);
+        const h5 = Number(dims.height || dims.z || 1);
+        code = `h = InfraStudioHarness(None)
+result = h.create_box(extents=[${l3}, ${w}, ${h5}], pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
       }
       args = {
         trimesh_code: code,

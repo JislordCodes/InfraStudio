@@ -90,8 +90,22 @@ export async function handleReviewer(payload: any): Promise<any> {
     scene_overview: sceneInfo.resultText,
     deterministic_findings: deterministic
   };
-  const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, "qwen3.8-max");
-  const result = cleanJsonResponse(res);
+  let result: any = null;
+  try {
+    const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, "qwen3.8-max");
+    result = cleanJsonResponse(res);
+  } catch (err) {
+    console.warn("[handleReviewer] LLM unavailable, using deterministic review results:", err);
+    result = {
+      status: deterministic.issues.length ? "FAIL" : "PASS",
+      issues: deterministic.issues,
+      severity_levels: deterministic.issues.map(() => "warning"),
+      entity_ids_flagged: [],
+      fix_recommendations: deterministic.fixes,
+      retry_required: deterministic.issues.length > 0
+    };
+  }
+
   result.issues = [...new Set([...(deterministic.issues || []), ...(result.issues || [])])];
   result.fix_recommendations = [...new Set([...(deterministic.fixes || []), ...(result.fix_recommendations || [])])];
   if (deterministic.issues.length) {
@@ -120,4 +134,3 @@ if (typeof Deno !== "undefined" && Deno.serve) {
     }
   });
 }
-

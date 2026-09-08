@@ -474,20 +474,46 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       const dims = comp.dimensions || {};
       const pos = comp.position || [0, 0, 0];
       const x = Number(pos[0] || 0), y = Number(pos[1] || 0), z = Number(pos[2] || 0);
+      const rotZ = Number(comp.rotation_z || comp.rot_z_deg || 0.0);
 
       let code = "";
-      if (geomType === "cylinder") {
-        const r = Number(dims.radius || 1.0);
-        const h = Number(dims.height || 5.0);
-        code = `c = trimesh.primitives.Cylinder(radius=${r}, height=${h})\nc.apply_translation([${x}, ${y}, ${z}])\nresult = c`;
+      if (geomType.includes("corrugat") || geomType.includes("sheet_pile")) {
+        const width = Number(dims.width || dims.length || 2.4);
+        const height = Number(dims.height || 12.0);
+        const depth = Number(dims.depth || 0.45);
+        const pitch = Number(dims.pitch || 0.6);
+        const thick = Number(dims.thickness || 0.04);
+        code = `h = InfraStudioHarness(None)\nresult = h.create_corrugated_panel(width=${width}, height=${height}, depth=${depth}, pitch=${pitch}, thickness=${thick}, pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
+      } else if (geomType.includes("cutwater") || geomType.includes("pier")) {
+        const length = Number(dims.length || 12.0);
+        const width = Number(dims.width || 4.0);
+        const height = Number(dims.height || 8.0);
+        const noseR = Number(dims.nose_radius || dims.radius || width / 2.0);
+        code = `h = InfraStudioHarness(None)\nresult = h.create_cutwater_pier(length=${length}, width=${width}, height=${height}, nose_r=${noseR}, pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
+      } else if (geomType.includes("pipe") || geomType.includes("hollow_cylinder") || geomType.includes("strut")) {
+        const outerR = Number(dims.outer_radius || dims.radius || 0.4);
+        const innerR = Number(dims.inner_radius || (outerR * 0.88));
+        const height = Number(dims.height || dims.length || 6.0);
+        const axis = Array.isArray(dims.axis) ? dims.axis : (Array.isArray(comp.axis) ? comp.axis : [0, 0, 1]);
+        code = `h = InfraStudioHarness(None)\nresult = h.create_pipe(outer_r=${outerR}, inner_r=${innerR}, height=${height}, pos=[${x}, ${y}, ${z}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`;
+      } else if (geomType.includes("i_beam") || geomType.includes("waler") || geomType.includes("girder")) {
+        const depth = Number(dims.depth || dims.height || 0.6);
+        const flangeW = Number(dims.flange_width || dims.width || 0.3);
+        const length = Number(dims.length || 10.0);
+        code = `h = InfraStudioHarness(None)\nresult = h.create_i_beam(depth=${depth}, flange_w=${flangeW}, length=${length}, pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
+      } else if (geomType.includes("cylinder")) {
+        const r = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 1.0));
+        const h = Number(dims.height || dims.length || 5.0);
+        const axis = Array.isArray(dims.axis) ? dims.axis : (Array.isArray(comp.axis) ? comp.axis : [0, 0, 1]);
+        code = `h = InfraStudioHarness(None)\nresult = h.create_cylinder(radius=${r}, height=${h}, pos=[${x}, ${y}, ${z}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`;
       } else if (geomType === "sphere") {
         const r = Number(dims.radius || 1.0);
         code = `s = trimesh.primitives.Sphere(radius=${r})\ns.apply_translation([${x}, ${y}, ${z}])\nresult = s`;
       } else {
-        const l = Number(dims.length || 5.0);
-        const w = Number(dims.width || 2.0);
-        const h = Number(dims.height || 1.0);
-        code = `b = trimesh.primitives.Box(extents=[${l}, ${w}, ${h}])\nb.apply_translation([${x}, ${y}, ${z}])\nresult = b`;
+        const l = Number(dims.length || dims.x || 5.0);
+        const w = Number(dims.width || dims.y || 2.0);
+        const h = Number(dims.height || dims.z || 1.0);
+        code = `h = InfraStudioHarness(None)\nresult = h.create_box(extents=[${l}, ${w}, ${h}], pos=[${x}, ${y}, ${z}], rot_z_deg=${rotZ})`;
       }
 
       args = {

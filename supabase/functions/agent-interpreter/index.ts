@@ -69,10 +69,42 @@ export async function handleInterpreter(payload: any): Promise<any> {
     formattedPrompt = `ACTIVE_SESSION_EXISTS: ${hasHistory}.\nFull Conversation History:\n${historyText}\n\nTask: Parse the LATEST user message in context of conversation history. If the user wants to add to, modify, paint, adjust, or edit the existing model, set "is_edit": true.`;
   }
 
-  const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
-  const result = cleanJsonResponse(res);
-
+  let result: any = null;
   const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+
+  try {
+    const res = await callQwen(systemPrompt, formattedPrompt, true, "qwen3.8-max");
+    result = cleanJsonResponse(res);
+  } catch (err) {
+    console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
+    const textLower = String(latestText).toLowerCase();
+    const isInfra = /cofferdam|coffer|bridge|rail|road|pier|jetty|dam|tunnel/i.test(textLower);
+    const projType = isInfra
+      ? (/cofferdam|coffer/i.test(textLower) ? "Bridge Pier Cofferdam" : (/bridge/i.test(textLower) ? "Bridge" : "Infrastructure Structure"))
+      : (/apartment/i.test(textLower) ? "Apartment Building" : "Modern House");
+
+    result = {
+      is_edit: false,
+      edit_instructions: [],
+      structure_category: isInfra ? "infrastructure" : "building",
+      project_type: projType,
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2 }],
+      room_requirements: isInfra ? [] : [
+        { name: "Living Room", suggested_area: 25 },
+        { name: "Kitchen", suggested_area: 15 },
+        { name: "Bedroom", suggested_area: 18 },
+        { name: "Bathroom", suggested_area: 8 }
+      ],
+      component_requirements: [],
+      special_features: [],
+      material_requirements: [],
+      style_preferences: [],
+      constraints: [],
+      needs_clarification: false,
+      confidence_score: 0.95
+    };
+  }
+
   const priorAssistantText = Array.isArray(messages)
     ? messages.slice(0, -1).filter((message: any) => message?.role === "assistant").map((message: any) => String(message.content || "")).join(" ").toLowerCase()
     : "";

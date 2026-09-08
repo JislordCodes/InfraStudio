@@ -169,10 +169,19 @@ try:
 except Exception:
     pass
 
-def InfraStudioHarness(ifc_file, storey=None):
-    if storey is None:
-        st = ifc_file.by_type("IfcBuildingStorey")
-        storey = st[0] if st else None
+def InfraStudioHarness(ifc_file=None, storey=None):
+    if ifc_file is None:
+        try:
+            ifc_file = get_ifc_file()
+        except Exception:
+            ifc_file = None
+
+    if storey is None and ifc_file is not None:
+        try:
+            st = ifc_file.by_type("IfcBuildingStorey")
+            storey = st[0] if st else None
+        except Exception:
+            storey = None
 
     body_ctx = None
     try:

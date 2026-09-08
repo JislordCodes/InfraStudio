@@ -112,60 +112,56 @@ Expected JSON Schema:
 }`;
 
 const infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
-Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
+Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (cofferdams, bridge piers, structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
 
-STRUCTURAL FRAMES & COLUMN GRIDS (CRITICAL MATHEMATICAL RULES):
- 1. CENTER POSITIONING RULES (trimesh Box extents=[length, width, height] is centered at position [x,y,z]):
-    - For vertical columns of height H starting at elevation Z_start:
-      Position Z_center = Z_start + H / 2.
-    - For pad bases/footings (IfcFooting) under columns at ground level (Z=0):
-      Dimensions e.g. { length: 1.5, width: 1.5, height: 0.6 }.
-      Position Z_center = 0.3m (or -0.3m if below ground).
-    - For longitudinal beams along X (length L = spacing along X, e.g. 5m):
-      Position X_center = X_start + L / 2.
-    - For transverse beams along Y (width W = spacing along Y, e.g. 5m):
-      Position Y_center = Y_start + W / 2.
+INFRASTRUCTURE GEOMETRIES & HARNESS PRIMITIVES:
+You have access to specialized InfraStudio parametric engineering primitives via geometry_type:
+- "corrugated_panel": Interlocking sheet piles (AZ-36). Dimensions: { width, height, depth, pitch, thickness }.
+- "cutwater_pier": Hydrodynamic piers with curved upstream/downstream noses. Dimensions: { length, width, height, nose_radius }.
+- "i_beam": Steel beams/walers/girders with I-profile. Dimensions: { depth, flange_width, length, web_thickness, flange_thickness }.
+- "pipe": Tubular circular hollow struts/piles. Dimensions: { outer_radius, inner_radius, height, axis: [x,y,z] }.
+- "cylinder": Solid columns/piles. Dimensions: { radius, height, axis: [x,y,z] }.
+- "box": Slabs, footings, caps, water planes. Dimensions: { length, width, height }.
+- "custom_trimesh": You can supply a "trimesh_code" Python string returning 'result = mesh'.
 
- 2. GRID COMPUTATION EXAMPLE (e.g. 4 columns in X row x 5 columns in Y col, 3 storeys):
-    - Grid X coordinates: [0, 5, 10, 15] (4 columns = 3 bays of 5m = 15m span).
-    - Grid Y coordinates: [0, 5, 10, 15, 20] (5 columns = 4 bays of 5m = 20m span).
-    - Storey heights: 3m per storey (Storey 1: Z=0 to 3m; Storey 2: Z=3 to 6m; Storey 3: Z=6 to 9m).
-    - Step 1: Create Pad Bases (IfcFooting) at Z=0.3m under each grid intersection (X, Y).
-    - Step 2: Create Columns (IfcColumn) per storey:
-      * Storey 1 columns at Z_center = 1.5m (from 0 to 3m).
-      * Storey 2 columns at Z_center = 4.5m (from 3 to 6m).
-      * Storey 3 columns at Z_center = 7.5m (from 6 to 9m).
-    - Step 3: Create Beams (IfcBeam) connecting columns at each storey top (Z=3m, Z=6m, Z=9m):
-      * X-Beams: length=5m, centered at (X + 2.5, Y, Z_level).
-      * Y-Beams: width=5m, centered at (X, Y + 2.5, Z_level).
-
- 3. DO NOT OMIT COMPONENTS: Generate EVERY single column, beam, and footing required to form a fully connected, complete structural frame.
+STRUCTURAL ACCURACY RULES:
+1. For cofferdams: Enclose the perimeter with "corrugated_panel" sheet piles, add horizontal "i_beam" waler rings at multiple depth tiers, span "pipe" compression cross struts, and position a central "cutwater_pier" on an "IfcFooting" inside.
+2. For bridges: Span deck slabs across multiple pier supports with footings, main girders, and safety parapets.
+3. For column frames: Place pad footings at Z=0, columns ascending in Z, and beam networks connecting them at each storey level.
+4. Set realistic PBR material names ("Structural Steel AZ-36", "High-Strength Marine Concrete", "River Water Surface") and rgb colors [r, g, b] (between 0.0 and 1.0). For water, set "transparency": 0.55.
 
 Strict Restrictions:
- * Return ONLY raw JSON.
- * Do NOT include rooms, doors, or windows.
- * Start output immediately with '{'.
+* Return ONLY raw JSON.
+* Do NOT include rooms, doors, or windows.
+* Start output immediately with '{'.
 
 Expected JSON Schema:
 {
   "structure_category": "infrastructure" | "mep" | "custom",
   "is_edit": false,
   "structure_name": "string",
+  "python_code": "optional full python script using InfraStudioHarness if generating direct code",
   "components": [
     {
       "name": "string",
-      "ifc_class": "IfcColumn | IfcBeam | IfcFooting | IfcSlab | IfcMember | IfcBuildingElementProxy",
-      "geometry_type": "box | cylinder | sphere | custom_trimesh",
-      "dimensions": { "length": number, "width": number, "height": number },
+      "ifc_class": "IfcColumn | IfcBeam | IfcFooting | IfcSlab | IfcMember | IfcWall | IfcBuildingElementProxy",
+      "geometry_type": "corrugated_panel | cutwater_pier | i_beam | pipe | cylinder | box | custom_trimesh",
+      "dimensions": {
+        "length": number, "width": number, "height": number,
+        "depth": number, "pitch": number, "thickness": number,
+        "outer_radius": number, "inner_radius": number, "nose_radius": number
+      },
       "position": [number, number, number],
-      "rotation": [number, number, number],
-      "material": "string"
+      "rotation_z": number,
+      "material": "string",
+      "rgb": [number, number, number],
+      "transparency": number
     }
   ],
   "material_palette": {
-    "primary": "reinforced structural concrete",
-    "secondary": "structural steel S355",
-    "accent": "galvanized steel"
+    "primary": "string",
+    "secondary": "string",
+    "accent": "string"
   },
   "structural_notes": ["string"]
 }`;
@@ -535,7 +531,38 @@ function cofferdamProgram(name: string): any[] {
 
 function ensureInfrastructurePlan(plan: any, brief: any): any {
   const text = requestedText(brief);
-  if (/cofferdam|coffer/i.test(text)) {
+  const isCofferdam = /cofferdam|coffer/i.test(text);
+  const isBridge = /bridge/i.test(text);
+  const isRail = /rail|railway|track/i.test(text);
+  const minimum = isCofferdam ? 20 : isBridge ? 8 : isRail ? 30 : 4;
+
+  // 1. If Astra generated custom python_code, preserve Astra's code
+  if (typeof plan?.python_code === "string" && plan.python_code.trim().length > 20) {
+    return {
+      ...plan,
+      structure_category: "infrastructure",
+      is_edit: false,
+      structure_name: plan.structure_name || brief?.project_type || "Infrastructure Structure",
+      python_code: plan.python_code,
+      components: Array.isArray(plan?.components) ? plan.components : [],
+      quality_requirements: { minimum_components: minimum }
+    };
+  }
+
+  // 2. If Astra generated a sufficiently detailed list of components, preserve Astra's design!
+  if (Array.isArray(plan?.components) && plan.components.length >= minimum) {
+    return {
+      ...plan,
+      structure_category: "infrastructure",
+      is_edit: false,
+      structure_name: plan.structure_name || brief?.project_type || "Infrastructure Structure",
+      components: plan.components,
+      quality_requirements: { minimum_components: minimum }
+    };
+  }
+
+  // 3. Fallback to programmatic engineering generator if Astra didn't produce enough components
+  if (isCofferdam) {
     return {
       ...plan,
       structure_category: "infrastructure",
@@ -545,14 +572,13 @@ function ensureInfrastructurePlan(plan: any, brief: any): any {
       quality_requirements: { minimum_components: 20, required_element_types: ["IfcWall", "IfcBeam", "IfcMember", "IfcColumn", "IfcFooting", "IfcSlab"] }
     };
   }
-  if (/bridge/.test(text)) {
+  if (isBridge) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Bridge", components: bridgeProgram(brief?.project_type || "Bridge"), quality_requirements: { minimum_components: 8, required_element_types: ["IfcSlab", "IfcColumn", "IfcBeam", "IfcFooting"] } };
   }
-  if (/rail|railway|track/.test(text)) {
+  if (isRail) {
     return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Railway", components: railwayProgram(), quality_requirements: { minimum_components: 30, required_element_types: ["IfcSlab", "IfcMember"] } };
   }
-  const minimum = /cofferdam|coffer/i.test(text) ? 20 : /bridge/.test(text) ? 8 : /rail|railway|track/.test(text) ? 30 : 4;
-  if (Array.isArray(plan?.components) && plan.components.length >= minimum) return plan;
+
   const components = plan?.components || [];
   return { ...plan, structure_category: brief?.structure_category || "infrastructure", is_edit: false, structure_name: brief?.project_type || "InfraStudio Infrastructure", components, quality_requirements: { minimum_components: minimum } };
 }

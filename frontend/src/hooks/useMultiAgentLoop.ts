@@ -179,43 +179,15 @@ export async function runMultiAgentLoop(
 
     } else if (isInfrastructureNew) {
       // ═══ NEW INFRASTRUCTURE/MEP/CUSTOM MODE ═══
-      const components = plan.components || [];
-      if (components.length > 0) {
-        pushStep(`BIM Agent: Infrastructure mode — ${components.length} components planned. Beginning chunked generation...`);
-        pushStep("BIM Agent: Initializing infrastructure project...");
-        let bimRes = await callEdge('agent-bim', { action: 'initialize', projectName: plan.structure_name || 'InfraStudio Infrastructure', mcpSessionId: sessionId });
-        sessionId = bimRes.mcpSessionId;
-
-        for (let i = 0; i < components.length; i++) {
-          const comp = components[i];
-          pushStep(`BIM Agent: Building ${comp.name || 'Component'} (${i + 1}/${components.length})...`);
-          bimRes = await callEdge('agent-bim', {
-            action: 'build_component',
-            component: comp,
-            mcpSessionId: sessionId
-          });
-          sessionId = bimRes.mcpSessionId;
-        }
-
-        if (plan.material_palette) {
-          pushStep("BIM Agent: Applying material finishes...");
-          bimRes = await callEdge('agent-bim', { action: 'apply_materials', mcpSessionId: sessionId });
-          if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
-        }
-
-        pushStep("BIM Agent: All components generated. Exporting IFC...");
-        const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
-        ifc_url = exportRes.ifc_url;
-      } else {
-        pushStep("BIM Agent: Infrastructure mode — letting BIM agent decide freeform tools...");
-        const bimRes = await callEdge('agent-bim', {
-          action: 'build_freeform',
-          plan: plan,
-          mcpSessionId: sessionId
-        });
-        ifc_url = bimRes.ifc_url;
-        sessionId = bimRes.mcpSessionId;
-      }
+      const compCount = plan.components?.length || 0;
+      pushStep(`BIM Agent: Infrastructure mode (${compCount} components) — generating structure with InfraStudioHarness...`);
+      const bimRes = await callEdge('agent-bim', {
+        action: 'build_freeform',
+        plan: plan,
+        mcpSessionId: sessionId
+      });
+      ifc_url = bimRes.ifc_url;
+      sessionId = bimRes.mcpSessionId;
 
     } else {
       // ═══ EDIT MODE (BUILD UPON ACTIVE MODEL - DO NOT INITIALIZE / ERASE) ═══
