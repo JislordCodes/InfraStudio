@@ -1,9 +1,9 @@
 diff --git a/frontend/tests/clash-clearance-matrix.test.ts b/frontend/tests/clash-clearance-matrix.test.ts
 new file mode 100644
-index 0000000..c6d89dd
+index 0000000..23e2754
 --- /dev/null
 +++ b/frontend/tests/clash-clearance-matrix.test.ts
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,187 @@
 +import { describe, it, expect } from 'vitest';
 +import {
 +  createAxisAlignedBoundingBox,
@@ -12,7 +12,7 @@ index 0000000..c6d89dd
 +  SpatialElement,
 +  ClearanceMatrixResult
 +} from '../src/spatial';
-+
++//
 +describe('Spatial Clearance Analysis & Distance Matrix', () => {
 +  it('Clearance Calculation: computes exact Euclidean distance between separated elements', () => {
 +    const elem1: SpatialElement = {
@@ -31,7 +31,7 @@ index 0000000..c6d89dd
 +    expect(clearance.distance).toBeCloseTo(3.0);
 +    expect(clearance.hasConflict).toBe(false);
 +  });
-+
++//
 +  it('Clearance Calculation: computes zero distance for overlapping elements', () => {
 +    const elem1: SpatialElement = {
 +      id: 'box-1',
@@ -49,7 +49,7 @@ index 0000000..c6d89dd
 +    expect(clearance.distance).toBe(0);
 +    expect(clearance.hasConflict).toBe(true);
 +  });
-+
++//
 +  it('Clearance Calculation: returns closest coordinate points between separated bounding boxes', () => {
 +    const elem1: SpatialElement = {
 +      id: 'b1',
@@ -68,7 +68,7 @@ index 0000000..c6d89dd
 +    expect(clearance.closestPoints.pointB).toEqual([5, 6, 1]);
 +    expect(clearance.distance).toBeCloseTo(5.0);
 +  });
-+
++//
 +  it('Clearance Calculation: correctly determines conflict status based on required clearance', () => {
 +    const elem1: SpatialElement = {
 +      id: 'e1',
@@ -89,7 +89,7 @@ index 0000000..c6d89dd
 +    expect(conflictCheck.distance).toBeCloseTo(1.0);
 +    expect(conflictCheck.hasConflict).toBe(true);
 +  });
-+
++//
 +  it('Clearance Distance Matrix: builds symmetric NxN distance matrix across all elements', () => {
 +    const elements: SpatialElement[] = [
 +      { id: 'A', name: 'Item A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) },
@@ -97,17 +97,23 @@ index 0000000..c6d89dd
 +      { id: 'C', name: 'Item C', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 5, 0], [1, 6, 1]) }
 +    ];
 +    const matrixRes = buildClearanceMatrix(elements, 1.0);
-+    expect(matrixRes.elementIds).toEqual(['A', 'B', 'C']);
++    // elementIds must be *some* permutation of the input ids -- the matrix
++    // is still fully specified via elementIds[i]/[j] <-> matrix[i][j], so an
++    // implementation is free to order rows/columns however it likes.
++    expect([...matrixRes.elementIds].sort()).toEqual(['A', 'B', 'C']);
 +    expect(matrixRes.matrix.length).toBe(3);
-+    expect(matrixRes.matrix[0][0]).toBe(0);
-+    expect(matrixRes.matrix[1][1]).toBe(0);
-+    expect(matrixRes.matrix[2][2]).toBe(0);
-+    expect(matrixRes.matrix[0][1]).toBeCloseTo(2.0);
-+    expect(matrixRes.matrix[1][0]).toBeCloseTo(2.0);
-+    expect(matrixRes.matrix[0][2]).toBeCloseTo(4.0);
-+    expect(matrixRes.matrix[2][0]).toBeCloseTo(4.0);
++    const ia = matrixRes.elementIds.indexOf('A');
++    const ib = matrixRes.elementIds.indexOf('B');
++    const ic = matrixRes.elementIds.indexOf('C');
++    expect(matrixRes.matrix[ia][ia]).toBe(0);
++    expect(matrixRes.matrix[ib][ib]).toBe(0);
++    expect(matrixRes.matrix[ic][ic]).toBe(0);
++    expect(matrixRes.matrix[ia][ib]).toBeCloseTo(2.0);
++    expect(matrixRes.matrix[ib][ia]).toBeCloseTo(2.0);
++    expect(matrixRes.matrix[ia][ic]).toBeCloseTo(4.0);
++    expect(matrixRes.matrix[ic][ia]).toBeCloseTo(4.0);
 +  });
-+
++//
 +  it('Clearance Distance Matrix: identifies all pair-wise clearance violations', () => {
 +    const elements: SpatialElement[] = [
 +      { id: 'A', name: 'Tray A', discipline: 'electrical', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) },
@@ -116,12 +122,13 @@ index 0000000..c6d89dd
 +    ];
 +    const matrixRes = buildClearanceMatrix(elements, 1.0);
 +    expect(matrixRes.violations.length).toBe(1);
-+    expect(matrixRes.violations[0].elementA).toBe('A');
-+    expect(matrixRes.violations[0].elementB).toBe('B');
++    // The violating pair is A and B in some order -- which one an
++    // implementation labels elementA vs elementB is not part of the contract.
++    expect([matrixRes.violations[0].elementA, matrixRes.violations[0].elementB].sort()).toEqual(['A', 'B']);
 +    expect(matrixRes.violations[0].distance).toBeCloseTo(0.5);
 +    expect(matrixRes.violations[0].requiredClearance).toBe(1.0);
 +  });
-+
++//
 +  it('Clearance Distance Matrix: respects maxDistanceCutoff by assigning Infinity to distant pairs', () => {
 +    const elements: SpatialElement[] = [
 +      { id: 'A', name: 'Origin Element', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) },
@@ -129,64 +136,84 @@ index 0000000..c6d89dd
 +      { id: 'C', name: 'Distant Element', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([100, 0, 0], [101, 1, 1]) }
 +    ];
 +    const matrixRes = buildClearanceMatrix(elements, 1.0, 50.0);
-+    expect(matrixRes.matrix[0][1]).toBeCloseTo(2.0);
-+    expect(matrixRes.matrix[0][2]).toBe(Infinity);
-+    expect(matrixRes.matrix[2][0]).toBe(Infinity);
++    // Row/column order follows elementIds, not necessarily the input array
++    // order -- look each id's row up rather than assuming a fixed position.
++    const ia = matrixRes.elementIds.indexOf('A');
++    const ib = matrixRes.elementIds.indexOf('B');
++    const ic = matrixRes.elementIds.indexOf('C');
++    expect(matrixRes.matrix[ia][ib]).toBeCloseTo(2.0);
++    expect(matrixRes.matrix[ia][ic]).toBe(Infinity);
++    expect(matrixRes.matrix[ic][ia]).toBe(Infinity);
 +  });
-+
++//
 +  it('Spatial Clearance Edge Case Suite 2A: evaluates zero required clearance', () => {
 +    const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
 +    const elem2 = { id: '2', name: 'B', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([2, 0, 0], [3, 1, 1]) };
 +    const res = calculateClearance(elem1, elem2, 0);
 +    expect(res.hasConflict).toBe(false);
 +  });
-+
++//
 +  it('Spatial Clearance Edge Case Suite 2B: evaluates diagonal offset distance', () => {
 +    const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
 +    const elem2 = { id: '2', name: 'B', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([4, 5, 1], [5, 6, 2]) };
 +    const res = calculateClearance(elem1, elem2, 10);
 +    expect(res.distance).toBeCloseTo(5.0);
 +  });
-+
++//
 +  it('Spatial Clearance Edge Case Suite 2C: builds empty clearance matrix safely', () => {
 +    const res = buildClearanceMatrix([], 1.0);
 +    expect(res.matrix).toEqual([]);
 +    expect(res.violations).toEqual([]);
 +  });
-+
++//
 +  it('Spatial Clearance Edge Case Suite 2D: builds single-element clearance matrix safely', () => {
 +    const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
 +    const res = buildClearanceMatrix([elem1], 1.0);
 +    expect(res.matrix).toEqual([[0]]);
 +    expect(res.violations).toEqual([]);
 +  });
-+
++//
 +  it('Spatial Clearance Edge Case Suite 2E: validates cutoff below minimum separation', () => {
 +    const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
 +    const elem2 = { id: '2', name: 'B', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([5, 0, 0], [6, 1, 1]) };
 +    const res = buildClearanceMatrix([elem1, elem2], 1.0, 2.0);
 +    expect(res.matrix[0][1]).toBe(Infinity);
 +  });
++//
++  it('Spatial Clearance Edge Case Suite 2F: distance exactly equal to requiredClearance does not conflict', () => {
++    // hasConflict is strictly `distance < requiredClearance`, so a distance
++    // that exactly meets the requirement must not count as a violation.
++    const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
++    const elem2 = { id: '2', name: 'B', discipline: 'mechanical' as const, boundingBox: createAxisAlignedBoundingBox([3, 0, 0], [4, 1, 1]) };
++    const res = calculateClearance(elem1, elem2, 2.0);
++    expect(res.distance).toBeCloseTo(2.0);
++    expect(res.hasConflict).toBe(false);
++  });
 +});
++//
 diff --git a/frontend/tests/clash-detection.test.ts b/frontend/tests/clash-detection.test.ts
 new file mode 100644
-index 0000000..d21ce7e
+index 0000000..8bbe596
 --- /dev/null
 +++ b/frontend/tests/clash-detection.test.ts
-@@ -0,0 +1,456 @@
+@@ -0,0 +1,715 @@
 +import { describe, it, expect } from 'vitest';
 +import {
 +  createAxisAlignedBoundingBox,
 +  detectClashes,
 +  groupClashes,
 +  exportClashReport,
++  suggestResolution,
++  worstCluster,
++  rankClusters,
++  createClashSession,
 +  SpatialElement,
 +  ClashOptions,
 +  ClashResult,
 +  ClashRecord,
 +  AxisAlignedBoundingBox
 +} from '../src/spatial';
-+
++//
 +describe('Spatial Bounding Box & Clash Detection Engine', () => {
 +  it('Spatial Bounding Box: correctly creates a 3D AABB with valid min and max coordinates', () => {
 +    const box = createAxisAlignedBoundingBox([0, 0, 0], [10, 20, 30]);
@@ -196,7 +223,7 @@ index 0000000..d21ce7e
 +    expect(box.size).toEqual([10, 20, 30]);
 +    expect(box.center).toEqual([5, 10, 15]);
 +  });
-+
++//
 +  it('Spatial Bounding Box: calculates correct size vector across X, Y, and Z dimensions', () => {
 +    const box1 = createAxisAlignedBoundingBox([-5, -10, -15], [5, 10, 15]);
 +    expect(box1.size).toEqual([10, 20, 30]);
@@ -205,14 +232,14 @@ index 0000000..d21ce7e
 +    expect(box2.size[1]).toBeCloseTo(5.0);
 +    expect(box2.size[2]).toBeCloseTo(5.0);
 +  });
-+
++//
 +  it('Spatial Bounding Box: calculates accurate center coordinates of the bounding box', () => {
 +    const box = createAxisAlignedBoundingBox([10, 20, 30], [20, 40, 50]);
 +    expect(box.center).toEqual([15, 30, 40]);
 +    const offsetBox = createAxisAlignedBoundingBox([-10, -20, -30], [10, 20, 30]);
 +    expect(offsetBox.center).toEqual([0, 0, 0]);
 +  });
-+
++//
 +  it('Spatial Bounding Box: throws descriptive error on invalid min greater than max coordinates', () => {
 +    expect(() => {
 +      createAxisAlignedBoundingBox([10, 0, 0], [5, 10, 10]);
@@ -224,7 +251,7 @@ index 0000000..d21ce7e
 +      createAxisAlignedBoundingBox([0, 0, 30], [10, 10, 10]);
 +    }).toThrowError(/Invalid bounding box coordinates/);
 +  });
-+
++//
 +  it('Spatial Bounding Box: correctly computes volume of a 3D bounding box', () => {
 +    const box = createAxisAlignedBoundingBox([0, 0, 0], [2, 3, 4]);
 +    const volume = box.size[0] * box.size[1] * box.size[2];
@@ -232,7 +259,7 @@ index 0000000..d21ce7e
 +    const unitBox = createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]);
 +    expect(unitBox.size[0] * unitBox.size[1] * unitBox.size[2]).toBe(1);
 +  });
-+
++//
 +  it('Spatial Bounding Box: detects point containment inside the bounding box', () => {
 +    const box = createAxisAlignedBoundingBox([0, 0, 0], [10, 10, 10]);
 +    const insidePoint: [number, number, number] = [5, 5, 5];
@@ -242,7 +269,7 @@ index 0000000..d21ce7e
 +      insidePoint[2] >= box.min[2] && insidePoint[2] <= box.max[2];
 +    expect(isContained).toBe(true);
 +  });
-+
++//
 +  it('Spatial Bounding Box: detects non-containment for points outside bounding volume', () => {
 +    const box = createAxisAlignedBoundingBox([0, 0, 0], [10, 10, 10]);
 +    const outsidePoint: [number, number, number] = [15, 5, 5];
@@ -252,13 +279,14 @@ index 0000000..d21ce7e
 +      outsidePoint[2] >= box.min[2] && outsidePoint[2] <= box.max[2];
 +    expect(isContained).toBe(false);
 +  });
-+
++//
 +  it('Spatial Clash Detection: identifies hard collision between overlapping elements', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
 +      name: 'Structural Column A',
 +      discipline: 'structural',
-+      boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 5])
++      boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 5]),
++      properties: { material: 'concrete', loadBearing: true }
 +    };
 +    const elem2: SpatialElement = {
 +      id: 'elem-2',
@@ -269,11 +297,33 @@ index 0000000..d21ce7e
 +    const result = detectClashes([elem1, elem2]);
 +    expect(result.summary.total).toBe(1);
 +    expect(result.summary.hard).toBe(1);
++    expect(result.summary.processedElements).toBe(2);
++    expect(result.clashes[0].id).toBeDefined();
 +    expect(result.clashes[0].type).toBe('hard');
-+    expect(result.clashes[0].elementA.id).toBe('elem-1');
-+    expect(result.clashes[0].elementB.id).toBe('elem-2');
++    expect(result.clashes[0].severity).toBe('critical');
++    expect(result.clashes[0].distance).toBe(0);
++    // Which of the pair an implementation labels elementA vs elementB is not
++    // part of the contract -- only that both participants are present, and
++    // as FULL SpatialElement objects (name, discipline, boundingBox), not
++    // just their ids.
++    const participants = [result.clashes[0].elementA, result.clashes[0].elementB];
++    const foundCol = participants.find(p => p.id === 'elem-1');
++    const foundDuct = participants.find(p => p.id === 'elem-2');
++    expect(foundCol).toBeDefined();
++    expect(foundDuct).toBeDefined();
++    expect(foundCol.name).toBe('Structural Column A');
++    expect(foundCol.discipline).toBe('structural');
++    expect(foundCol.boundingBox.min).toEqual([0, 0, 0]);
++    expect(foundCol.boundingBox.max).toEqual([2, 2, 5]);
++    // The optional `properties` bag on a SpatialElement must survive
++    // untouched onto the participant object inside the clash record too.
++    expect(foundCol.properties).toEqual({ material: 'concrete', loadBearing: true });
++    expect(foundDuct.name).toBe('HVAC Duct B');
++    expect(foundDuct.discipline).toBe('mechanical');
++    expect(foundDuct.boundingBox.min).toEqual([1, 1, 2]);
++    expect(foundDuct.boundingBox.max).toEqual([4, 4, 3]);
 +  });
-+
++//
 +  it('Spatial Clash Detection: computes exact 3D intersection volume and bounding box', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -295,7 +345,7 @@ index 0000000..d21ce7e
 +    expect(clash.intersectionBox!.max).toEqual([6, 2, 2]);
 +    expect(clash.intersectionBox!.size).toEqual([2, 2, 1]);
 +  });
-+
++//
 +  it('Spatial Clash Detection: computes correct minimum-axis penetration depth', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -313,7 +363,7 @@ index 0000000..d21ce7e
 +    expect(result.clashes.length).toBe(1);
 +    expect(result.clashes[0].penetrationDepth).toBeCloseTo(0.5);
 +  });
-+
++//
 +  it('Spatial Clash Detection: detects proximity clearance clashes within specified tolerance', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -332,7 +382,7 @@ index 0000000..d21ce7e
 +    expect(result.clashes[0].type).toBe('clearance');
 +    expect(result.clashes[0].distance).toBeCloseTo(0.2);
 +  });
-+
++//
 +  it('Spatial Clash Detection: distinguishes hard clashes from clearance clashes by severity', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -360,7 +410,27 @@ index 0000000..d21ce7e
 +    expect(hardClash?.severity).toBe('critical');
 +    expect(clearanceClash?.severity).toBe('high');
 +  });
-+
++//
++  it('Spatial Clash Detection: distance exactly half the tolerance is medium, not high', () => {
++    // Severity is strictly `distance < tolerance / 2`, so a distance that
++    // exactly equals half the tolerance must fall to 'medium', not 'high'.
++    const elem1: SpatialElement = {
++      id: 'elem-1',
++      name: 'Duct D1',
++      discipline: 'mechanical',
++      boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1])
++    };
++    const elem2: SpatialElement = {
++      id: 'elem-2',
++      name: 'Duct D2',
++      discipline: 'mechanical',
++      boundingBox: createAxisAlignedBoundingBox([1.5, 0, 0], [2.5, 1, 1])
++    };
++    const result = detectClashes([elem1, elem2], { tolerance: 1.0 });
++    expect(result.clashes[0].distance).toBeCloseTo(0.5);
++    expect(result.clashes[0].severity).toBe('medium');
++  });
++//
 +  it('Spatial Clash Detection: respects includeTouching flag for zero-distance face contacts', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -378,8 +448,13 @@ index 0000000..d21ce7e
 +    expect(resultWithoutTouching.summary.total).toBe(0);
 +    const resultWithTouching = detectClashes([elem1, elem2], { includeTouching: true, tolerance: 0.1 });
 +    expect(resultWithTouching.summary.total).toBe(1);
++    // includeTouching defaults to false -- omitting it entirely (no options
++    // at all, and with other options present but includeTouching left out)
++    // must behave the same as passing includeTouching: false explicitly.
++    expect(detectClashes([elem1, elem2]).summary.total).toBe(0);
++    expect(detectClashes([elem1, elem2], { tolerance: 0.1 }).summary.total).toBe(0);
 +  });
-+
++//
 +  it('Spatial Clash Detection: ignores clearance breaches exceeding configured tolerance', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -397,7 +472,7 @@ index 0000000..d21ce7e
 +    expect(result.summary.total).toBe(0);
 +    expect(result.clashes.length).toBe(0);
 +  });
-+
++//
 +  it('Spatial Clash Detection: filters collisions by discipline when filterDisciplines is provided', () => {
 +    const elem1: SpatialElement = {
 +      id: 'elem-1',
@@ -418,36 +493,70 @@ index 0000000..d21ce7e
 +      boundingBox: createAxisAlignedBoundingBox([2, 0, 0], [4, 2, 2])
 +    };
 +    const result = detectClashes([elem1, elem2, elem3], { filterDisciplines: ['structural', 'mechanical'] });
++    expect(result.clashes.length).toBe(1);
++    expect([result.clashes[0].elementA.id, result.clashes[0].elementB.id].sort()).toEqual(['elem-1', 'elem-3']);
 +    expect(result.clashes.every(c =>
 +      (c.elementA.discipline === 'structural' && c.elementB.discipline === 'mechanical') ||
 +      (c.elementA.discipline === 'mechanical' && c.elementB.discipline === 'structural')
 +    )).toBe(true);
++    // A single-entry filterDisciplines list is not a special case: a pair
++    // is kept only when both participants' disciplines appear in the list,
++    // so with one entry that means both sides must share that discipline.
++    const elem4: SpatialElement = {
++      id: 'elem-4',
++      name: 'Str Column',
++      discipline: 'structural',
++      boundingBox: createAxisAlignedBoundingBox([0.5, 0, 0], [2, 2, 2])
++    };
++    const singleFilterResult = detectClashes([elem1, elem2, elem3, elem4], { filterDisciplines: ['structural'] });
++    expect(singleFilterResult.clashes.length).toBe(1);
++    expect([singleFilterResult.clashes[0].elementA.id, singleFilterResult.clashes[0].elementB.id].sort()).toEqual(['elem-1', 'elem-4']);
++    // An empty filterDisciplines list is "no filter", not "match nothing":
++    // every clash detected with no options at all must still appear.
++    const emptyFilterResult = detectClashes([elem1, elem2, elem3, elem4], { filterDisciplines: [] });
++    expect(emptyFilterResult.clashes.length).toBe(5);
 +  });
-+
++//
 +  it('Spatial Clash Detection: filters results by minSeverity threshold', () => {
-+    const elem1: SpatialElement = {
-+      id: 'elem-1',
-+      name: 'Base Column',
-+      discipline: 'structural',
-+      boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 4])
-+    };
-+    const elem2: SpatialElement = {
-+      id: 'elem-2',
-+      name: 'Hard Collision Beam',
-+      discipline: 'structural',
-+      boundingBox: createAxisAlignedBoundingBox([1, 0, 1], [3, 2, 3])
-+    };
-+    const elem3: SpatialElement = {
-+      id: 'elem-3',
-+      name: 'Close Proximity Duct',
-+      discipline: 'mechanical',
-+      boundingBox: createAxisAlignedBoundingBox([2.1, 0, 0], [3, 1, 1])
-+    };
-+    const result = detectClashes([elem1, elem2, elem3], { tolerance: 0.5, minSeverity: 'critical' });
-+    expect(result.clashes.every(c => c.severity === 'critical')).toBe(true);
-+    expect(result.clashes.length).toBe(1);
++    // Three independent, spatially isolated pairs -- one of each severity
++    // tier -- so minSeverity's ordering (critical > high > medium > low)
++    // is actually exercised, not just an exact-match on the top tier.
++    const critA: SpatialElement = { id: 'crit-a', name: 'Overlap A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const critB: SpatialElement = { id: 'crit-b', name: 'Overlap B', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const highA: SpatialElement = { id: 'high-a', name: 'Close A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([10, 0, 0], [12, 2, 2]) };
++    const highB: SpatialElement = { id: 'high-b', name: 'Close B', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([12.2, 0, 0], [14, 2, 2]) };
++    const medA: SpatialElement = { id: 'med-a', name: 'Far A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([20, 0, 0], [22, 2, 2]) };
++    const medB: SpatialElement = { id: 'med-b', name: 'Far B', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([22.7, 0, 0], [24, 2, 2]) };
++    const all = [critA, critB, highA, highB, medA, medB];
++    const full = detectClashes(all, { tolerance: 1.0 });
++    expect(full.clashes.length).toBe(3);
++    const critical = detectClashes(all, { tolerance: 1.0, minSeverity: 'critical' });
++    expect(critical.clashes.length).toBe(1);
++    expect(critical.clashes.every(c => c.severity === 'critical')).toBe(true);
++    const high = detectClashes(all, { tolerance: 1.0, minSeverity: 'high' });
++    expect(high.clashes.length).toBe(2);
++    expect(high.clashes.every(c => c.severity === 'critical' || c.severity === 'high')).toBe(true);
++    const medium = detectClashes(all, { tolerance: 1.0, minSeverity: 'medium' });
++    expect(medium.clashes.length).toBe(3);
++    // 'low' is the bottom of the rank order, so it must behave as no filter
++    // at all -- every clash from any tier still comes through.
++    const low = detectClashes(all, { tolerance: 1.0, minSeverity: 'low' });
++    expect(low.clashes.length).toBe(3);
 +  });
-+
++//
++  it('Spatial Edge Case Suite 1F: distance exactly equal to tolerance still clashes', () => {
++    // Clearance is `distance <= tolerance`, inclusive, so a gap that exactly
++    // meets the tolerance must still be reported (as 'medium', since it is
++    // not under half the tolerance).
++    const elem1: SpatialElement = { id: 'e1', name: 'Panel E1', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
++    const elem2: SpatialElement = { id: 'e2', name: 'Panel E2', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([2, 0, 0], [3, 1, 1]) };
++    const result = detectClashes([elem1, elem2], { tolerance: 1.0 });
++    expect(result.clashes.length).toBe(1);
++    expect(result.clashes[0].distance).toBeCloseTo(1.0);
++    expect(result.clashes[0].type).toBe('clearance');
++    expect(result.clashes[0].severity).toBe('medium');
++  });
++//
 +  it('Spatial Clash Detection: handles empty element lists safely without throwing errors', () => {
 +    const result = detectClashes([]);
 +    expect(result.clashes).toEqual([]);
@@ -456,7 +565,7 @@ index 0000000..d21ce7e
 +    expect(result.summary.clearance).toBe(0);
 +    expect(result.summary.processedElements).toBe(0);
 +  });
-+
++//
 +  it('Spatial Clash Detection: handles single element safely with zero clashes returned', () => {
 +    const elem: SpatialElement = {
 +      id: 'solo-elem',
@@ -469,7 +578,149 @@ index 0000000..d21ce7e
 +    expect(result.summary.total).toBe(0);
 +    expect(result.summary.processedElements).toBe(1);
 +  });
-+
++//
++  it('Spatial Clash Resolution: suggests the minimum-penetration axis and push direction', () => {
++    // A pushed axis-0 overlap with elementB to the positive side of elementA.
++    const a1: SpatialElement = { id: 'A', name: 'Wall A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const b1: SpatialElement = { id: 'B', name: 'Wall B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1.5, 0, 0], [3.5, 2, 2]) };
++    const r1 = detectClashes([a1, b1]);
++    expect(suggestResolution(r1.clashes[0])).toEqual({ axis: 0, direction: 1, distance: 0.5 });
++    // Same axis, but elementB now sits on the negative side -- direction flips.
++    const a2: SpatialElement = { id: 'A2', name: 'Wall A2', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([2, 0, 0], [4, 2, 2]) };
++    const b2: SpatialElement = { id: 'B2', name: 'Wall B2', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2.5, 2, 2]) };
++    const r2 = detectClashes([a2, b2]);
++    expect(suggestResolution(r2.clashes[0])).toEqual({ axis: 0, direction: -1, distance: 0.5 });
++    // A tighter overlap on the Y axis than X or Z picks axis 1, not axis 0.
++    const a3: SpatialElement = { id: 'A3', name: 'Slab A3', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [5, 2, 5]) };
++    const b3: SpatialElement = { id: 'B3', name: 'Slab B3', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 1.5, 0], [5, 3.5, 5]) };
++    const r3 = detectClashes([a3, b3]);
++    expect(suggestResolution(r3.clashes[0])).toEqual({ axis: 1, direction: 1, distance: 0.5 });
++  });
++//
++  it('Spatial Clash Resolution: suggestResolution throws on a non-hard clash', () => {
++    // intersectionBox/penetrationDepth only exist on hard clashes -- calling
++    // suggestResolution on a clearance clash must fail deliberately, not
++    // crash on an undefined field.
++    const a: SpatialElement = { id: 'A', name: 'Panel A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
++    const b: SpatialElement = { id: 'B', name: 'Panel B', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([1.5, 0, 0], [2.5, 1, 1]) };
++    const r = detectClashes([a, b], { tolerance: 1 });
++    expect(r.clashes[0].type).toBe('clearance');
++    expect(() => suggestResolution(r.clashes[0])).toThrowError(/suggestResolution requires a hard clash/);
++  });
++//
++  it('Spatial Clash Resolution: worstCluster picks the cluster with the highest severity', () => {
++    // A hard (critical) two-element cluster must outrank a clearance-only
++    // (high) cluster, even though findClashClusters would return both.
++    const A: SpatialElement = { id: 'A', name: 'Col A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const B: SpatialElement = { id: 'B', name: 'Col B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const C: SpatialElement = { id: 'C', name: 'Duct C', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([20, 0, 0], [21, 1, 1]) };
++    const D: SpatialElement = { id: 'D', name: 'Duct D', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([21.1, 0, 0], [22.1, 1, 1]) };
++    const r1 = detectClashes([A, B, C, D], { tolerance: 1 });
++    expect(worstCluster(r1.clashes)).toEqual({ elementIds: ['A', 'B'], clashCount: 1 });
++  });
++//
++  it('Spatial Clash Resolution: worstCluster ties on severity break toward more clashes', () => {
++    const E: SpatialElement = { id: 'E', name: 'Wall E', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const F: SpatialElement = { id: 'F', name: 'Wall F', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const G: SpatialElement = { id: 'G', name: 'Wall G', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([30, 0, 0], [32, 2, 2]) };
++    const H: SpatialElement = { id: 'H', name: 'Wall H', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([31, 0, 0], [33, 2, 2]) };
++    const I: SpatialElement = { id: 'I', name: 'Wall I', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([32.5, 0, 0], [34.5, 2, 2]) };
++    const r2 = detectClashes([E, F, G, H, I]);
++    // E-F and G-H-I are both all-critical clusters; G-H-I has more clashes.
++    expect(worstCluster(r2.clashes)).toEqual({ elementIds: ['G', 'H', 'I'], clashCount: 2 });
++  });
++//
++  it('Spatial Clash Resolution: worstCluster full ties break toward the smallest elementId', () => {
++    const J: SpatialElement = { id: 'J', name: 'Beam J', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const K: SpatialElement = { id: 'K', name: 'Beam K', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const L: SpatialElement = { id: 'L', name: 'Beam L', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([50, 0, 0], [52, 2, 2]) };
++    const M: SpatialElement = { id: 'M', name: 'Beam M', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([51, 0, 0], [53, 2, 2]) };
++    const r3 = detectClashes([J, K, L, M]);
++    expect(worstCluster(r3.clashes)).toEqual({ elementIds: ['J', 'K'], clashCount: 1 });
++    expect(worstCluster([])).toBe(null);
++  });
++//
++  it('Spatial Clash Resolution: rankClusters orders every cluster worst-severity-first', () => {
++    const A: SpatialElement = { id: 'A', name: 'Col A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const B: SpatialElement = { id: 'B', name: 'Col B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const C: SpatialElement = { id: 'C', name: 'Duct C', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([20, 0, 0], [21, 1, 1]) };
++    const D: SpatialElement = { id: 'D', name: 'Duct D', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([21.3, 0, 0], [22.3, 1, 1]) };
++    const E: SpatialElement = { id: 'E', name: 'Pipe E', discipline: 'plumbing', boundingBox: createAxisAlignedBoundingBox([40, 0, 0], [41, 1, 1]) };
++    const F: SpatialElement = { id: 'F', name: 'Pipe F', discipline: 'plumbing', boundingBox: createAxisAlignedBoundingBox([41.7, 0, 0], [42.7, 1, 1]) };
++    const r = detectClashes([A, B, C, D, E, F], { tolerance: 1 });
++    const ranked = rankClusters(r.clashes);
++    expect(ranked.length).toBe(3);
++    expect(ranked[0]).toEqual({ elementIds: ['A', 'B'], clashCount: 1 });
++    expect(ranked[1]).toEqual({ elementIds: ['C', 'D'], clashCount: 1 });
++    expect(ranked[2]).toEqual({ elementIds: ['E', 'F'], clashCount: 1 });
++    // worstCluster must always agree with rankClusters' own first element.
++    expect(worstCluster(r.clashes)).toEqual(ranked[0]);
++    expect(rankClusters([])).toEqual([]);
++  });
++//
++  it('Spatial Clash Session: add and remove are chainable and drive results()', () => {
++    const A: SpatialElement = { id: 'A', name: 'Slab A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const B: SpatialElement = { id: 'B', name: 'Slab B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const session = createClashSession();
++    expect(session.add(A)).toBe(session);
++    expect(session.add(B)).toBe(session);
++    expect(session.results().summary.total).toBe(1);
++    expect(session.remove('B')).toBe(session);
++    expect(session.results().summary.total).toBe(0);
++    // Re-adding restores the clash: state accumulates across calls.
++    session.add(B);
++    expect(session.results().summary.total).toBe(1);
++  });
++//
++  it('Spatial Clash Session: delta() reports changes since the last results() snapshot', () => {
++    const A: SpatialElement = { id: 'A', name: 'Beam A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const B: SpatialElement = { id: 'B', name: 'Beam B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const C: SpatialElement = { id: 'C', name: 'Duct C', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([1.5, 0, 0], [3.5, 2, 2]) };
++    const session = createClashSession();
++    session.add(A).add(B);
++    // No results() call yet, so there is no snapshot to compare against.
++    expect(session.delta()).toEqual({ added: [], removed: [] });
++    expect(session.results().summary.total).toBe(1);
++    // Immediately after results(), current state matches the snapshot.
++    expect(session.delta()).toEqual({ added: [], removed: [] });
++    // C clashes with both A and B: two new clash ids appear.
++    session.add(C);
++    const afterAdd = session.delta();
++    expect(afterAdd.added.length).toBe(2);
++    expect(afterAdd.removed.length).toBe(0);
++    expect([...afterAdd.added].sort()).toEqual(afterAdd.added);
++    // Re-snapshot, then drop B: the two clashes B took part in disappear.
++    expect(session.results().summary.total).toBe(3);
++    session.remove('B');
++    const afterRemove = session.delta();
++    expect(afterRemove.added.length).toBe(0);
++    expect(afterRemove.removed.length).toBe(2);
++    expect([...afterRemove.removed].sort()).toEqual(afterRemove.removed);
++  });
++//
++  it('Spatial Clash Session: honors options passed at creation, not just results() defaults', () => {
++    const A: SpatialElement = { id: 'A', name: 'Duct A', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const B: SpatialElement = { id: 'B', name: 'Duct B', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([2.5, 0, 0], [4.5, 2, 2]) };
++    // Gap of 0.5 between A and B: with no tolerance, this is not a clash at all.
++    const bare = createClashSession();
++    bare.add(A).add(B);
++    expect(bare.results().summary.total).toBe(0);
++    // The same pair, with tolerance:1 supplied at session creation (not to
++    // results()), must surface the clearance clash -- proving the session
++    // actually threads its constructor options into every detectClashes run.
++    const toleranced = createClashSession({ tolerance: 1 });
++    toleranced.add(A).add(B);
++    const result = toleranced.results();
++    expect(result.summary.total).toBe(1);
++    expect(result.clashes[0].type).toBe('clearance');
++    // Gap 0.5 is exactly half of tolerance 1, so severity is medium, not high.
++    expect(result.clashes[0].severity).toBe('medium');
++    // minSeverity:'critical' at creation must filter the clearance clash out.
++    const filtered = createClashSession({ tolerance: 1, minSeverity: 'critical' });
++    filtered.add(A).add(B);
++    expect(filtered.results().summary.total).toBe(0);
++  });
++//
 +  it('Spatial Clash Grouping & Reporting: groups detected clashes by severity level', () => {
 +    const elem1: SpatialElement = {
 +      id: 'e1',
@@ -497,11 +748,18 @@ index 0000000..d21ce7e
 +    };
 +    const clashRes = detectClashes([elem1, elem2, elem3, elem4], { tolerance: 0.5 });
 +    const grouped = groupClashes(clashRes.clashes, 'severity');
-+    expect(grouped['critical']).toBeDefined();
-+    expect(grouped['high']).toBeDefined();
-+    expect(grouped['medium']).toBeDefined();
++    // Verify each key's actual array contents, not just presence -- an
++    // implementation returning the right keys with empty or wrong arrays
++    // must not pass.
++    const pairOf = (c: ClashRecord) => [c.elementA.id, c.elementB.id].sort();
++    expect(grouped['critical']?.length).toBe(2);
++    expect(grouped['critical'].map(pairOf).sort()).toEqual([['e1', 'e2'], ['e3', 'e4']]);
++    expect(grouped['high']?.length).toBe(1);
++    expect(pairOf(grouped['high'][0])).toEqual(['e1', 'e3']);
++    expect(grouped['medium']?.length).toBe(1);
++    expect(pairOf(grouped['medium'][0])).toEqual(['e1', 'e4']);
 +  });
-+
++//
 +  it('Spatial Clash Grouping & Reporting: groups detected clashes by participating element IDs', () => {
 +    const elem1: SpatialElement = {
 +      id: 'core-col',
@@ -523,9 +781,15 @@ index 0000000..d21ce7e
 +    };
 +    const clashRes = detectClashes([elem1, elem2, elem3]);
 +    const grouped = groupClashes(clashRes.clashes, 'element');
++    // Each clash must be mapped under BOTH of its participant ids, not just
++    // whichever one an implementation happens to call elementA.
 +    expect(grouped['core-col'].length).toBe(2);
++    expect(grouped['duct-1'].length).toBe(1);
++    expect(grouped['duct-2'].length).toBe(1);
++    expect([grouped['duct-1'][0].elementA.id, grouped['duct-1'][0].elementB.id].sort()).toEqual(['core-col', 'duct-1']);
++    expect([grouped['duct-2'][0].elementA.id, grouped['duct-2'][0].elementB.id].sort()).toEqual(['core-col', 'duct-2']);
 +  });
-+
++//
 +  it('Spatial Clash Grouping & Reporting: groups detected clashes by discipline pair', () => {
 +    const elem1: SpatialElement = {
 +      id: 'e1',
@@ -541,9 +805,26 @@ index 0000000..d21ce7e
 +    };
 +    const clashRes = detectClashes([elem1, elem2]);
 +    const grouped = groupClashes(clashRes.clashes, 'discipline');
-+    expect(grouped['mechanical-structural']).toBeDefined();
++    expect(grouped['mechanical-structural']?.length).toBe(1);
++    expect([grouped['mechanical-structural'][0].elementA.id, grouped['mechanical-structural'][0].elementB.id].sort()).toEqual(['e1', 'e2']);
 +  });
-+
++//
++  it("Spatial Clash Grouping & Reporting: groups detected clashes by findClashClusters' transitive cluster", () => {
++    // groupBy: 'cluster' keys each clash by its transitive cluster (from
++    // findClashClusters), not just the pair -- so a chain A-B, B-C groups
++    // both clashes under one key, distinct from an unrelated D-E pair.
++    const A: SpatialElement = { id: 'A', name: 'Beam A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const B: SpatialElement = { id: 'B', name: 'Beam B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const C: SpatialElement = { id: 'C', name: 'Beam C', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([2.5, 0, 0], [4.5, 2, 2]) };
++    const D: SpatialElement = { id: 'D', name: 'Pipe D', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([20, 0, 0], [22, 2, 2]) };
++    const E: SpatialElement = { id: 'E', name: 'Pipe E', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([21, 0, 0], [23, 2, 2]) };
++    const clashRes = detectClashes([A, B, C, D, E]);
++    const grouped = groupClashes(clashRes.clashes, 'cluster');
++    expect(Object.keys(grouped).sort()).toEqual(['A', 'D']);
++    expect(grouped['A'].length).toBe(2);
++    expect(grouped['D'].length).toBe(1);
++  });
++//
 +  it('Spatial Clash Grouping & Reporting: exports valid structured JSON report', () => {
 +    const elem1: SpatialElement = {
 +      id: 'e1',
@@ -565,7 +846,7 @@ index 0000000..d21ce7e
 +    expect(parsed.summary.total).toBe(1);
 +    expect(parsed.clashes[0].type).toBe('hard');
 +  });
-+
++//
 +  it('Spatial Clash Grouping & Reporting: exports formatted summary text with SPATIAL CLASH DETECTION REPORT header', () => {
 +    const elem1: SpatialElement = {
 +      id: 'e1',
@@ -585,14 +866,14 @@ index 0000000..d21ce7e
 +    expect(textReport).toContain('Total Clashes: 1');
 +    expect(textReport).toContain('Hard Clashes: 1');
 +  });
-+
++//
 +  it('Spatial Edge Case Suite 1A: verifies scaling of boundary extents', () => {
 +    const box = createAxisAlignedBoundingBox([0, 0, 0], [5, 5, 5]);
 +    expect(box.size[0]).toBe(5);
 +    expect(box.size[1]).toBe(5);
 +    expect(box.size[2]).toBe(5);
 +  });
-+
++//
 +  it('Spatial Edge Case Suite 1B: verifies non-overlapping collinear elements', () => {
 +    const box1 = createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]);
 +    const box2 = createAxisAlignedBoundingBox([10, 0, 0], [12, 2, 2]);
@@ -602,7 +883,7 @@ index 0000000..d21ce7e
 +    ]);
 +    expect(res.summary.total).toBe(0);
 +  });
-+
++//
 +  it('Spatial Edge Case Suite 1C: verifies multiple hard collisions in a cluster', () => {
 +    const box1 = createAxisAlignedBoundingBox([0, 0, 0], [4, 4, 4]);
 +    const box2 = createAxisAlignedBoundingBox([1, 1, 1], [3, 3, 3]);
@@ -614,7 +895,7 @@ index 0000000..d21ce7e
 +    ]);
 +    expect(res.summary.hard).toBe(3);
 +  });
-+
++//
 +  it('Spatial Edge Case Suite 1D: verifies high tolerance capturing multiple proximity pairs', () => {
 +    const box1 = createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]);
 +    const box2 = createAxisAlignedBoundingBox([2.5, 0, 0], [4.5, 2, 2]);
@@ -624,175 +905,419 @@ index 0000000..d21ce7e
 +    ], { tolerance: 1.0 });
 +    expect(res.summary.clearance).toBe(1);
 +  });
-+
++//
 +  it('Spatial Edge Case Suite 1E: verifies zero elements input stability', () => {
 +    const res = detectClashes([], { tolerance: 2.0 });
 +    expect(res.summary.total).toBe(0);
 +  });
 +});
++//
 diff --git a/frontend/tests/existing-regression.test.ts b/frontend/tests/existing-regression.test.ts
 new file mode 100644
-index 0000000..7e87a6d
+index 0000000..75cc223
 --- /dev/null
 +++ b/frontend/tests/existing-regression.test.ts
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,180 @@
 +import { describe, it, expect } from 'vitest';
-+
-+describe('Existing Repository Regression Test Suite', () => {
-+  it('ThreeViewer: renders canvas element without crashing', () => {
-+    expect(true).toBe(true);
++//
++describe('Deterministic Baseline Regression Suite', () => {
++  it('Array Operations: sorts numbers in ascending order', () => {
++    expect([3, 1, 2].sort((a, b) => a - b)).toEqual([1, 2, 3]);
 +  });
-+  it('ThreeViewer: initializes WebGL context successfully', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: filters even numbers from a mixed list', () => {
++    expect([1, 2, 3, 4, 5, 6].filter(n => n % 2 === 0)).toEqual([2, 4, 6]);
 +  });
-+  it('ThreeViewer: handles window resize events', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: maps values through a transform function', () => {
++    expect([1, 2, 3].map(n => n * 2)).toEqual([2, 4, 6]);
 +  });
-+  it('ThreeViewer: cleans up resources on unmount', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: reduces a list to its sum', () => {
++    expect([1, 2, 3, 4].reduce((a, b) => a + b, 0)).toBe(10);
 +  });
-+  it('ThreeViewer: loads standard geometry into scene', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: flattens a nested array one level deep', () => {
++    expect([[1, 2], [3], [4, 5]].flat()).toEqual([1, 2, 3, 4, 5]);
 +  });
-+  it('ThreeViewer: toggles element visibility correctly', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: removes duplicate values via Set conversion', () => {
++    expect([...new Set([1, 1, 2, 2, 3])]).toEqual([1, 2, 3]);
 +  });
-+  it('ThreeViewer: sets background color accurately', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: finds the index of a matching element', () => {
++    expect([10, 20, 30].findIndex(n => n === 20)).toBe(1);
 +  });
-+  it('ThreeViewer: updates camera position on reset', () => {
-+    expect(true).toBe(true);
++  it('Array Operations: slices a subrange without mutating the source', () => {
++    const arr = [1, 2, 3, 4, 5];
++    expect(arr.slice(1, 3)).toEqual([2, 3]);
++    expect(arr).toEqual([1, 2, 3, 4, 5]);
 +  });
-+  it('BIM Parser: parses IFC entity headers accurately', () => {
-+    expect(true).toBe(true);
++  it('String Operations: trims surrounding whitespace', () => {
++    expect('  hi  '.trim()).toBe('hi');
 +  });
-+  it('BIM Parser: handles empty entity list gracefully', () => {
-+    expect(true).toBe(true);
++  it('String Operations: splits a comma-separated list', () => {
++    expect('a,b,c'.split(',')).toEqual(['a', 'b', 'c']);
 +  });
-+  it('BIM Parser: extracts geometry vertices from coordinate lists', () => {
-+    expect(true).toBe(true);
++  it('String Operations: converts to upper and lower case', () => {
++    expect('MixedCase'.toLowerCase()).toBe('mixedcase');
++    expect('MixedCase'.toUpperCase()).toBe('MIXEDCASE');
 +  });
-+  it('BIM Parser: handles malformed IFC syntax without uncaught exceptions', () => {
-+    expect(true).toBe(true);
++  it('String Operations: replaces the first matching substring', () => {
++    expect('foo bar foo'.replace('foo', 'baz')).toBe('baz bar foo');
 +  });
-+  it('BIM Parser: assigns unique identifiers to parsed elements', () => {
-+    expect(true).toBe(true);
++  it('String Operations: pads a numeric string to fixed width', () => {
++    expect('7'.padStart(3, '0')).toBe('007');
 +  });
-+  it('BIM Parser: computes bounding box extents for standard meshes', () => {
-+    expect(true).toBe(true);
++  it('String Operations: checks substring containment', () => {
++    expect('hello world'.includes('world')).toBe(true);
 +  });
-+  it('BIM Parser: extracts element property sets correctly', () => {
-+    expect(true).toBe(true);
++  it('String Operations: joins an array into a delimited string', () => {
++    expect(['a', 'b', 'c'].join('-')).toBe('a-b-c');
 +  });
-+  it('BIM Parser: normalizes coordinate units to meters', () => {
-+    expect(true).toBe(true);
++  it('String Operations: extracts a substring by index range', () => {
++    expect('abcdef'.slice(2, 4)).toBe('cd');
 +  });
-+  it('Element Store: adds new elements to state', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: rounds to the nearest integer', () => {
++    expect(Math.round(4.6)).toBe(5);
 +  });
-+  it('Element Store: removes elements by ID', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: computes absolute value of negatives', () => {
++    expect(Math.abs(-9)).toBe(9);
 +  });
-+  it('Element Store: updates element properties', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: clamps a value using min/max', () => {
++    expect(Math.min(10, Math.max(0, -5))).toBe(0);
 +  });
-+  it('Element Store: retrieves elements by spatial query', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: parses an integer from a string', () => {
++    expect(parseInt('42', 10)).toBe(42);
 +  });
-+  it('Element Store: clears all elements on project reset', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: formats a float to fixed decimal places', () => {
++    expect((1 / 3).toFixed(2)).toBe('0.33');
 +  });
-+  it('Element Store: maintains element selection state', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: identifies NaN correctly', () => {
++    expect(Number.isNaN(NaN)).toBe(true);
++    expect(Number.isNaN(5)).toBe(false);
 +  });
-+  it('Element Store: batches multiple element additions', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: computes power and square root', () => {
++    expect(Math.pow(2, 10)).toBe(1024);
++    expect(Math.sqrt(64)).toBe(8);
 +  });
-+  it('Element Store: emits change events on state mutations', () => {
-+    expect(true).toBe(true);
++  it('Numeric Operations: sums a floating point series within tolerance', () => {
++    expect(0.1 + 0.2).toBeCloseTo(0.3);
 +  });
-+  it('UI Components: renders navigation sidebar', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: serializes and parses a round trip', () => {
++    expect(JSON.parse(JSON.stringify({ a: 1, b: [1, 2] }))).toEqual({ a: 1, b: [1, 2] });
 +  });
-+  it('UI Components: toggles hierarchy tree view', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: merges two objects with Object.assign', () => {
++    expect(Object.assign({}, { a: 1 }, { b: 2 })).toEqual({ a: 1, b: 2 });
 +  });
-+  it('UI Components: displays property inspector panel', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: lists own enumerable keys', () => {
++    expect(Object.keys({ x: 1, y: 2 })).toEqual(['x', 'y']);
 +  });
-+  it('UI Components: handles theme switching', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: spreads properties with override semantics', () => {
++    expect({ ...{ a: 1, b: 2 }, b: 3 }).toEqual({ a: 1, b: 3 });
 +  });
-+  it('UI Components: renders modal dialogs with correct backdrop', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: freezes an object against mutation', () => {
++    const o = Object.freeze({ v: 1 });
++    try { (o as any).v = 2; } catch (e) { /* strict-mode environments throw; ignore */ }
++    expect(o.v).toBe(1);
 +  });
-+  it('UI Components: binds keyboard shortcuts accurately', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: checks own-property existence', () => {
++    expect(Object.prototype.hasOwnProperty.call({ a: 1 }, 'a')).toBe(true);
 +  });
-+  it('UI Components: renders toolbar action buttons', () => {
-+    expect(true).toBe(true);
++  it('Object & JSON Operations: converts entries back into an object', () => {
++    expect(Object.fromEntries([['a', 1], ['b', 2]])).toEqual({ a: 1, b: 2 });
 +  });
-+  it('UI Components: updates status bar message indicators', () => {
-+    expect(true).toBe(true);
++  it('Date & Time Operations: constructs a UTC date from components', () => {
++    expect(new Date(Date.UTC(2024, 0, 15)).getUTCFullYear()).toBe(2024);
 +  });
-+  it('Geometry Utilities: computes dot product of 3D vectors', () => {
-+    expect(true).toBe(true);
++  it('Date & Time Operations: computes day-of-week for a fixed date', () => {
++    expect(new Date(Date.UTC(2024, 0, 1)).getUTCDay()).toBe(1);
 +  });
-+  it('Geometry Utilities: computes cross product of 3D vectors', () => {
-+    expect(true).toBe(true);
++  it('Date & Time Operations: adds milliseconds correctly', () => {
++    expect(new Date(1000 + 500).getTime()).toBe(1500);
 +  });
-+  it('Geometry Utilities: normalizes non-zero 3D vectors', () => {
-+    expect(true).toBe(true);
++  it('Date & Time Operations: formats an ISO date string', () => {
++    expect(new Date(Date.UTC(2024, 5, 1)).toISOString()).toBe('2024-06-01T00:00:00.000Z');
 +  });
-+  it('Geometry Utilities: handles zero vector normalization safely', () => {
-+    expect(true).toBe(true);
++  it('Date & Time Operations: compares two dates by timestamp', () => {
++    expect(new Date(2000) > new Date(1000)).toBe(true);
 +  });
-+  it('Geometry Utilities: computes Euclidean distance between 3D points', () => {
-+    expect(true).toBe(true);
++  it('Date & Time Operations: computes elapsed days between two dates', () => {
++    expect(Math.round((Date.UTC(2024, 0, 11) - Date.UTC(2024, 0, 1)) / 86400000)).toBe(10);
 +  });
-+  it('Geometry Utilities: linearly interpolates between coordinates', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: adds and checks Set membership', () => {
++    const s = new Set();
++    s.add(1);
++    expect(s.has(1)).toBe(true);
 +  });
-+  it('Geometry Utilities: rotates vectors around primary axes', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: deduplicates via Set size', () => {
++    expect(new Set([1, 1, 2, 3, 3]).size).toBe(3);
 +  });
-+  it('Geometry Utilities: scales vectors by scalar multipliers', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: stores and retrieves Map values', () => {
++    const m = new Map();
++    m.set('k', 'v');
++    expect(m.get('k')).toBe('v');
 +  });
-+  it('Color Utilities: parses hex color codes to RGB triples', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: converts a Map to an array of entries', () => {
++    expect([...new Map([['a', 1], ['b', 2]])]).toEqual([['a', 1], ['b', 2]]);
 +  });
-+  it('Color Utilities: formats RGB triples to CSS hex strings', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: computes Set intersection', () => {
++    const a = new Set([1, 2, 3]);
++    const b = new Set([2, 3, 4]);
++    expect([...a].filter(x => b.has(x))).toEqual([2, 3]);
 +  });
-+  it('Color Utilities: blends two colors with alpha weighting', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: deletes an entry from a Map', () => {
++    const m = new Map([['a', 1]]);
++    m.delete('a');
++    expect(m.has('a')).toBe(false);
 +  });
-+  it('Color Utilities: generates distinct categorical color palettes', () => {
-+    expect(true).toBe(true);
++  it('Collection Operations: iterates Map keys in insertion order', () => {
++    expect([...new Map([['x', 1], ['y', 2]]).keys()]).toEqual(['x', 'y']);
 +  });
-+  it('Export Utilities: serializes project metadata to JSON', () => {
-+    expect(true).toBe(true);
++  it('Boolean & Logic Operations: short-circuits logical AND', () => {
++    expect(0 && 'x').toBe(0);
++    expect(1 && 'x').toBe('x');
 +  });
-+  it('Export Utilities: formats dimension values with unit suffixes', () => {
-+    expect(true).toBe(true);
++  it('Boolean & Logic Operations: short-circuits logical OR', () => {
++    expect('' || 'default').toBe('default');
 +  });
-+  it('Export Utilities: validates export schema compliance', () => {
-+    expect(true).toBe(true);
++  it('Boolean & Logic Operations: evaluates nullish coalescing', () => {
++    expect(null ?? 'fallback').toBe('fallback');
++    expect(0 ?? 'fallback').toBe(0);
 +  });
-+  it('Export Utilities: sanitizes filenames for cross-platform downloads', () => {
-+    expect(true).toBe(true);
++  it('Boolean & Logic Operations: negates truthy and falsy values', () => {
++    expect(!0).toBe(true);
++    expect(!1).toBe(false);
 +  });
-+  it('Validation Utilities: validates non-empty string fields', () => {
-+    expect(true).toBe(true);
++  it('Regex & Pattern Operations: tests a simple pattern match', () => {
++    expect(/^\d+$/.test('12345')).toBe(true);
 +  });
-+  it('Validation Utilities: validates numeric bounds and constraints', () => {
-+    expect(true).toBe(true);
++  it('Regex & Pattern Operations: extracts capture groups', () => {
++    const m = '2024-06-01'.match(/^(\d{4})-(\d{2})-(\d{2})$/);
++    expect(m![1]).toBe('2024');
++    expect(m![2]).toBe('06');
 +  });
-+  it('Validation Utilities: validates 3D coordinate array structures', () => {
-+    expect(true).toBe(true);
++  it('Regex & Pattern Operations: replaces using a global pattern', () => {
++    expect('a1b2c3'.replace(/\d/g, '#')).toBe('a#b#c#');
 +  });
-+  it('Validation Utilities: checks mandatory property presence in element payloads', () => {
-+    expect(true).toBe(true);
++  it('Regex & Pattern Operations: splits a string on whitespace runs', () => {
++    expect('  a   b  c '.trim().split(/\s+/)).toEqual(['a', 'b', 'c']);
++  });
++});
+diff --git a/frontend/tests/clash-clustering.test.ts b/frontend/tests/clash-clustering.test.ts
+new file mode 100644
+index 0000000..1b3b101
+--- /dev/null
++++ b/frontend/tests/clash-clustering.test.ts
+@@ -0,0 +1,75 @@
++import { describe, it, expect } from 'vitest';
++import {
++  createAxisAlignedBoundingBox,
++  detectClashes,
++  findClashClusters,
++  SpatialElement
++} from '../src/spatial';
++//
++describe('Spatial Clash Clustering', () => {
++  it('Clash Clustering: groups a single clashing pair into one two-element cluster', () => {
++    const a: SpatialElement = { id: 'A', name: 'Beam A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const b: SpatialElement = { id: 'B', name: 'Beam B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const result = detectClashes([a, b]);
++    const clusters = findClashClusters(result.clashes);
++    expect(clusters.length).toBe(1);
++    expect(clusters[0].elementIds).toEqual(['A', 'B']);
++    expect(clusters[0].clashCount).toBe(1);
++  });
++//
++  it('Clash Clustering: transitively merges a three-element chain into a single cluster', () => {
++    const a: SpatialElement = { id: 'A', name: 'Duct A', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const b: SpatialElement = { id: 'B', name: 'Duct B', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const c: SpatialElement = { id: 'C', name: 'Duct C', discipline: 'mechanical', boundingBox: createAxisAlignedBoundingBox([2.5, 0, 0], [4.5, 2, 2]) };
++    // A overlaps B, B overlaps C, but A does not overlap C directly.
++    const result = detectClashes([a, b, c]);
++    const clusters = findClashClusters(result.clashes);
++    expect(clusters.length).toBe(1);
++    expect(clusters[0].elementIds).toEqual(['A', 'B', 'C']);
++    expect(clusters[0].clashCount).toBe(2);
++  });
++//
++  it('Clash Clustering: keeps unrelated clash pairs in separate clusters', () => {
++    const a: SpatialElement = { id: 'A', name: 'Wall A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const b: SpatialElement = { id: 'B', name: 'Wall B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const d: SpatialElement = { id: 'D', name: 'Pipe D', discipline: 'plumbing', boundingBox: createAxisAlignedBoundingBox([20, 0, 0], [22, 2, 2]) };
++    const e: SpatialElement = { id: 'E', name: 'Pipe E', discipline: 'plumbing', boundingBox: createAxisAlignedBoundingBox([21, 0, 0], [23, 2, 2]) };
++    const result = detectClashes([a, b, d, e]);
++    const clusters = findClashClusters(result.clashes).slice().sort((x, y) => x.elementIds[0].localeCompare(y.elementIds[0]));
++    expect(clusters.length).toBe(2);
++    expect(clusters[0].elementIds).toEqual(['A', 'B']);
++    expect(clusters[0].clashCount).toBe(1);
++    expect(clusters[1].elementIds).toEqual(['D', 'E']);
++    expect(clusters[1].clashCount).toBe(1);
++  });
++//
++  it('Clash Clustering: merges a mutually-overlapping triangle into one cluster with every edge counted', () => {
++    const a: SpatialElement = { id: 'A', name: 'Slab A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [3, 3, 3]) };
++    const b: SpatialElement = { id: 'B', name: 'Slab B', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 1, 0], [4, 4, 3]) };
++    const c: SpatialElement = { id: 'C', name: 'Slab C', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0.5, 2, 0], [3.5, 5, 3]) };
++    const result = detectClashes([a, b, c]);
++    const clusters = findClashClusters(result.clashes);
++    expect(clusters.length).toBe(1);
++    expect(clusters[0].elementIds).toEqual(['A', 'B', 'C']);
++    expect(clusters[0].clashCount).toBe(3);
++  });
++//
++  it('Clash Clustering: sorts elementIds ascending regardless of clash discovery order', () => {
++    const z: SpatialElement = { id: 'Z', name: 'Item Z', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) };
++    const m: SpatialElement = { id: 'M', name: 'Item M', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1, 0, 0], [3, 2, 2]) };
++    const a2: SpatialElement = { id: 'A2', name: 'Item A2', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([1.5, 0, 0], [3.5, 2, 2]) };
++    const result = detectClashes([z, m, a2]);
++    const clusters = findClashClusters(result.clashes);
++    expect(clusters.length).toBe(1);
++    expect(clusters[0].elementIds).toEqual(['A2', 'M', 'Z']);
++  });
++//
++  it('Clash Clustering: excludes elements that never clash and handles an empty list safely', () => {
++    const iso1: SpatialElement = { id: 'i1', name: 'Solo 1', discipline: 'generic', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
++    const iso2: SpatialElement = { id: 'i2', name: 'Solo 2', discipline: 'generic', boundingBox: createAxisAlignedBoundingBox([50, 0, 0], [51, 1, 1]) };
++    const result = detectClashes([iso1, iso2]);
++    expect(findClashClusters(result.clashes)).toEqual([]);
++    expect(findClashClusters([])).toEqual([]);
++  });
++});
++//
+diff --git a/frontend/tests/clash-analytics.test.ts b/frontend/tests/clash-analytics.test.ts
+new file mode 100644
+index 0000000..e34dc43
+--- /dev/null
++++ b/frontend/tests/clash-analytics.test.ts
+@@ -0,0 +1,136 @@
++import { describe, it, expect } from 'vitest';
++import {
++  createAxisAlignedBoundingBox,
++  detectClashes,
++  createClashJournal,
++  analyzeHotspots,
++  SpatialElement,
++  ClashResult
++} from '../src/spatial';
++//
++function box(x0: number, x1: number): SpatialElement['boundingBox'] {
++  return createAxisAlignedBoundingBox([x0, 0, 0], [x1, 2, 2]);
++}
++function elem(id: string, x0: number, x1: number): SpatialElement {
++  return { id, name: id, discipline: 'structural', boundingBox: box(x0, x1) };
++}
++//
++describe('Spatial Clash Journal & Hotspot Analytics', () => {
++  it('Spatial Clash Journal: record is chainable and stamps sequential auto-timestamps when omitted', () => {
++    const result: ClashResult = detectClashes([elem('A', 0, 2)]);
++    const journal = createClashJournal();
++    expect(journal.record(result)).toBe(journal);
++    journal.record(result);
++    journal.record(result);
++    const history = journal.history();
++    expect(history.length).toBe(3);
++    expect(history.map(s => s.timestamp)).toEqual([0, 1, 2]);
++  });
++//
++  it('Spatial Clash Journal: an explicit timestamp is stored as-is, and history() never re-sorts by it', () => {
++    const result: ClashResult = detectClashes([elem('A', 0, 2)]);
++    const journal = createClashJournal();
++    journal.record(result, 100);
++    journal.record(result, 50);
++    const history = journal.history();
++    expect(history.map(s => s.timestamp)).toEqual([100, 50]);
++  });
++//
++  it('Spatial Clash Journal: since(timestamp) keeps only snapshots strictly after it, in recorded order', () => {
++    const result: ClashResult = detectClashes([elem('A', 0, 2)]);
++    const journal = createClashJournal();
++    journal.record(result).record(result).record(result);
++    expect(journal.since(0).map(s => s.timestamp)).toEqual([1, 2]);
++    expect(journal.since(2)).toEqual([]);
++  });
++//
++  it('Spatial Hotspot Analysis: an empty journal produces no hotspots', () => {
++    expect(analyzeHotspots(createClashJournal())).toEqual([]);
++  });
++//
++  it('Spatial Hotspot Analysis: occurrences count distinct snapshots, not clashes within a snapshot', () => {
++    // A overlaps both B and C in the SAME detectClashes call: two clash
++    // records, but A should only count as appearing in one snapshot.
++    const result = detectClashes([elem('A', 0, 4), elem('B', 3, 5), elem('C', -1, 1)]);
++    expect(result.summary.hard).toBe(2);
++    const journal = createClashJournal().record(result);
++    const a = analyzeHotspots(journal).find(h => h.elementId === 'A');
++    expect(a).toBeDefined();
++    expect(a!.occurrences).toBe(1);
++  });
++//
++  it('Spatial Hotspot Analysis: worstSeverity is the highest severity ever recorded, across every snapshot', () => {
++    const journal = createClashJournal();
++    // Snapshot 0: gap of 1 with tolerance 2 -> clearance/medium.
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 3, 5)], { tolerance: 2 }));
++    // Snapshot 1: overlapping -> hard/critical.
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)]));
++    const a = analyzeHotspots(journal).find(h => h.elementId === 'A')!;
++    expect(a.worstSeverity).toBe('critical');
++  });
++//
++  it('Spatial Hotspot Analysis: trend is worsening when the last appearance outranks the first', () => {
++    const journal = createClashJournal();
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 3, 5)], { tolerance: 2 })); // medium
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)])); // critical
++    const a = analyzeHotspots(journal).find(h => h.elementId === 'A')!;
++    expect(a.trend).toBe('worsening');
++  });
++//
++  it('Spatial Hotspot Analysis: trend is improving when the last appearance ranks below the first', () => {
++    const journal = createClashJournal();
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)])); // critical
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 3, 5)], { tolerance: 2 })); // medium
++    const a = analyzeHotspots(journal).find(h => h.elementId === 'A')!;
++    expect(a.trend).toBe('improving');
++  });
++//
++  it('Spatial Hotspot Analysis: trend compares only the first and last appearance, not anything between', () => {
++    const journal = createClashJournal();
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 3, 5)], { tolerance: 2 })); // medium
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)])); // critical (worse, but not last)
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 3, 5)], { tolerance: 2 })); // medium again
++    const a = analyzeHotspots(journal).find(h => h.elementId === 'A')!;
++    expect(a.trend).toBe('stable');
++    expect(a.worstSeverity).toBe('critical');
++  });
++//
++  it('Spatial Hotspot Analysis: a single appearance is always stable', () => {
++    const journal = createClashJournal().record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)]));
++    const a = analyzeHotspots(journal).find(h => h.elementId === 'A')!;
++    expect(a.trend).toBe('stable');
++  });
++//
++  it('Spatial Hotspot Analysis: sorts by occurrences desc, then worst severity desc, then elementId asc', () => {
++    const journal = createClashJournal();
++    // Snapshot 0: A clashes with B (critical) and C clashes with D (critical).
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3), elem('C', 10, 12), elem('D', 11, 13)]));
++    // Snapshot 1: only A clashes again (now with E) -- A now has 2 occurrences, C/D still have 1.
++    journal.record(detectClashes([elem('A', 0, 2), elem('E', 1, 3)]));
++    const ranked = analyzeHotspots(journal);
++    // A has 2 occurrences (highest, sorts first); the rest have 1 and tie on
++    // severity, so they fall back to ascending elementId.
++    expect(ranked[0].elementId).toBe('A');
++    expect(ranked[0].occurrences).toBe(2);
++    expect(ranked.slice(1).map(h => h.elementId)).toEqual(['B', 'C', 'D', 'E']);
++  });
++//
++  it('Spatial Hotspot Analysis: minOccurrences filters out elements below the threshold', () => {
++    const journal = createClashJournal();
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)]));
++    journal.record(detectClashes([elem('A', 0, 2), elem('B', 1, 3)]));
++    journal.record(detectClashes([elem('C', 20, 22), elem('D', 21, 23)]));
++    const all = analyzeHotspots(journal);
++    expect(all.map(h => h.elementId).sort()).toEqual(['A', 'B', 'C', 'D']);
++    const frequent = analyzeHotspots(journal, { minOccurrences: 2 });
++    expect(frequent.map(h => h.elementId).sort()).toEqual(['A', 'B']);
++  });
++//
++  it('Spatial Hotspot Analysis: limit truncates the ranked list, and limit 0 returns none', () => {
++    const journal = createClashJournal().record(
++      detectClashes([elem('A', 0, 2), elem('B', 1, 3), elem('C', 10, 12), elem('D', 11, 13)])
++    );
++    expect(analyzeHotspots(journal, { limit: 1 }).length).toBe(1);
++    expect(analyzeHotspots(journal, { limit: 0 })).toEqual([]);
 +  });
 +});

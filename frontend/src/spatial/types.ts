@@ -1,10 +1,8 @@
+/**
+ * TypeScript definitions and data structures for 3D BIM spatial analysis
+ */
+
 export type Vector3D = [number, number, number];
-
-export type DisciplineType = 'architectural' | 'structural' | 'mechanical' | 'electrical' | 'plumbing' | 'generic';
-
-export type ClashSeverity = 'critical' | 'high' | 'medium' | 'low';
-
-export type ClashType = 'hard' | 'clearance';
 
 export interface AxisAlignedBoundingBox {
   min: Vector3D;
@@ -13,20 +11,24 @@ export interface AxisAlignedBoundingBox {
   center: Vector3D;
 }
 
+export type DisciplineType =
+  | 'architectural'
+  | 'structural'
+  | 'mechanical'
+  | 'electrical'
+  | 'plumbing'
+  | 'generic';
+
 export interface SpatialElement {
   id: string;
   name: string;
   discipline: DisciplineType;
   boundingBox: AxisAlignedBoundingBox;
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
 }
 
-export interface ClashOptions {
-  tolerance?: number;
-  minSeverity?: ClashSeverity;
-  includeTouching?: boolean;
-  filterDisciplines?: DisciplineType[];
-}
+export type ClashType = 'hard' | 'clearance' | 'duplicate';
+export type ClashSeverity = 'critical' | 'high' | 'medium' | 'low';
 
 export interface ClashRecord {
   id: string;
@@ -51,6 +53,13 @@ export interface ClashResult {
   summary: ClashSummary;
 }
 
+export interface ClashOptions {
+  tolerance?: number;
+  minSeverity?: ClashSeverity;
+  includeTouching?: boolean;
+  filterDisciplines?: DisciplineType[];
+}
+
 export interface ClearanceInfo {
   distance: number;
   hasConflict: boolean;
@@ -71,9 +80,4 @@ export interface ClearanceMatrixResult {
   elementIds: string[];
   matrix: number[][];
   violations: ClearanceViolation[];
-}
-
-export interface Ray3D {
-  origin: Vector3D;
-  direction: Vector3D;
 }

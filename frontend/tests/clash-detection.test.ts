@@ -10,7 +10,7 @@ import {
   ClashRecord,
   AxisAlignedBoundingBox
 } from '../src/spatial';
-
+//
 describe('Spatial Bounding Box & Clash Detection Engine', () => {
   it('Spatial Bounding Box: correctly creates a 3D AABB with valid min and max coordinates', () => {
     const box = createAxisAlignedBoundingBox([0, 0, 0], [10, 20, 30]);
@@ -20,7 +20,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(box.size).toEqual([10, 20, 30]);
     expect(box.center).toEqual([5, 10, 15]);
   });
-
+//
   it('Spatial Bounding Box: calculates correct size vector across X, Y, and Z dimensions', () => {
     const box1 = createAxisAlignedBoundingBox([-5, -10, -15], [5, 10, 15]);
     expect(box1.size).toEqual([10, 20, 30]);
@@ -29,14 +29,14 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(box2.size[1]).toBeCloseTo(5.0);
     expect(box2.size[2]).toBeCloseTo(5.0);
   });
-
+//
   it('Spatial Bounding Box: calculates accurate center coordinates of the bounding box', () => {
     const box = createAxisAlignedBoundingBox([10, 20, 30], [20, 40, 50]);
     expect(box.center).toEqual([15, 30, 40]);
     const offsetBox = createAxisAlignedBoundingBox([-10, -20, -30], [10, 20, 30]);
     expect(offsetBox.center).toEqual([0, 0, 0]);
   });
-
+//
   it('Spatial Bounding Box: throws descriptive error on invalid min greater than max coordinates', () => {
     expect(() => {
       createAxisAlignedBoundingBox([10, 0, 0], [5, 10, 10]);
@@ -48,7 +48,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
       createAxisAlignedBoundingBox([0, 0, 30], [10, 10, 10]);
     }).toThrowError(/Invalid bounding box coordinates/);
   });
-
+//
   it('Spatial Bounding Box: correctly computes volume of a 3D bounding box', () => {
     const box = createAxisAlignedBoundingBox([0, 0, 0], [2, 3, 4]);
     const volume = box.size[0] * box.size[1] * box.size[2];
@@ -56,7 +56,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     const unitBox = createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]);
     expect(unitBox.size[0] * unitBox.size[1] * unitBox.size[2]).toBe(1);
   });
-
+//
   it('Spatial Bounding Box: detects point containment inside the bounding box', () => {
     const box = createAxisAlignedBoundingBox([0, 0, 0], [10, 10, 10]);
     const insidePoint: [number, number, number] = [5, 5, 5];
@@ -66,7 +66,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
       insidePoint[2] >= box.min[2] && insidePoint[2] <= box.max[2];
     expect(isContained).toBe(true);
   });
-
+//
   it('Spatial Bounding Box: detects non-containment for points outside bounding volume', () => {
     const box = createAxisAlignedBoundingBox([0, 0, 0], [10, 10, 10]);
     const outsidePoint: [number, number, number] = [15, 5, 5];
@@ -76,7 +76,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
       outsidePoint[2] >= box.min[2] && outsidePoint[2] <= box.max[2];
     expect(isContained).toBe(false);
   });
-
+//
   it('Spatial Clash Detection: identifies hard collision between overlapping elements', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -97,7 +97,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.clashes[0].elementA.id).toBe('elem-1');
     expect(result.clashes[0].elementB.id).toBe('elem-2');
   });
-
+//
   it('Spatial Clash Detection: computes exact 3D intersection volume and bounding box', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -119,7 +119,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(clash.intersectionBox!.max).toEqual([6, 2, 2]);
     expect(clash.intersectionBox!.size).toEqual([2, 2, 1]);
   });
-
+//
   it('Spatial Clash Detection: computes correct minimum-axis penetration depth', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -137,7 +137,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.clashes.length).toBe(1);
     expect(result.clashes[0].penetrationDepth).toBeCloseTo(0.5);
   });
-
+//
   it('Spatial Clash Detection: detects proximity clearance clashes within specified tolerance', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -156,7 +156,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.clashes[0].type).toBe('clearance');
     expect(result.clashes[0].distance).toBeCloseTo(0.2);
   });
-
+//
   it('Spatial Clash Detection: distinguishes hard clashes from clearance clashes by severity', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -184,7 +184,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(hardClash?.severity).toBe('critical');
     expect(clearanceClash?.severity).toBe('high');
   });
-
+//
   it('Spatial Clash Detection: respects includeTouching flag for zero-distance face contacts', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -203,7 +203,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     const resultWithTouching = detectClashes([elem1, elem2], { includeTouching: true, tolerance: 0.1 });
     expect(resultWithTouching.summary.total).toBe(1);
   });
-
+//
   it('Spatial Clash Detection: ignores clearance breaches exceeding configured tolerance', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -221,7 +221,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.summary.total).toBe(0);
     expect(result.clashes.length).toBe(0);
   });
-
+//
   it('Spatial Clash Detection: filters collisions by discipline when filterDisciplines is provided', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -247,7 +247,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
       (c.elementA.discipline === 'mechanical' && c.elementB.discipline === 'structural')
     )).toBe(true);
   });
-
+//
   it('Spatial Clash Detection: filters results by minSeverity threshold', () => {
     const elem1: SpatialElement = {
       id: 'elem-1',
@@ -271,7 +271,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.clashes.every(c => c.severity === 'critical')).toBe(true);
     expect(result.clashes.length).toBe(1);
   });
-
+//
   it('Spatial Clash Detection: handles empty element lists safely without throwing errors', () => {
     const result = detectClashes([]);
     expect(result.clashes).toEqual([]);
@@ -280,7 +280,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.summary.clearance).toBe(0);
     expect(result.summary.processedElements).toBe(0);
   });
-
+//
   it('Spatial Clash Detection: handles single element safely with zero clashes returned', () => {
     const elem: SpatialElement = {
       id: 'solo-elem',
@@ -293,7 +293,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(result.summary.total).toBe(0);
     expect(result.summary.processedElements).toBe(1);
   });
-
+//
   it('Spatial Clash Grouping & Reporting: groups detected clashes by severity level', () => {
     const elem1: SpatialElement = {
       id: 'e1',
@@ -325,7 +325,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(grouped['high']).toBeDefined();
     expect(grouped['medium']).toBeDefined();
   });
-
+//
   it('Spatial Clash Grouping & Reporting: groups detected clashes by participating element IDs', () => {
     const elem1: SpatialElement = {
       id: 'core-col',
@@ -349,7 +349,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     const grouped = groupClashes(clashRes.clashes, 'element');
     expect(grouped['core-col'].length).toBe(2);
   });
-
+//
   it('Spatial Clash Grouping & Reporting: groups detected clashes by discipline pair', () => {
     const elem1: SpatialElement = {
       id: 'e1',
@@ -367,7 +367,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     const grouped = groupClashes(clashRes.clashes, 'discipline');
     expect(grouped['mechanical-structural']).toBeDefined();
   });
-
+//
   it('Spatial Clash Grouping & Reporting: exports valid structured JSON report', () => {
     const elem1: SpatialElement = {
       id: 'e1',
@@ -389,7 +389,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(parsed.summary.total).toBe(1);
     expect(parsed.clashes[0].type).toBe('hard');
   });
-
+//
   it('Spatial Clash Grouping & Reporting: exports formatted summary text with SPATIAL CLASH DETECTION REPORT header', () => {
     const elem1: SpatialElement = {
       id: 'e1',
@@ -409,14 +409,14 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     expect(textReport).toContain('Total Clashes: 1');
     expect(textReport).toContain('Hard Clashes: 1');
   });
-
+//
   it('Spatial Edge Case Suite 1A: verifies scaling of boundary extents', () => {
     const box = createAxisAlignedBoundingBox([0, 0, 0], [5, 5, 5]);
     expect(box.size[0]).toBe(5);
     expect(box.size[1]).toBe(5);
     expect(box.size[2]).toBe(5);
   });
-
+//
   it('Spatial Edge Case Suite 1B: verifies non-overlapping collinear elements', () => {
     const box1 = createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]);
     const box2 = createAxisAlignedBoundingBox([10, 0, 0], [12, 2, 2]);
@@ -426,7 +426,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     ]);
     expect(res.summary.total).toBe(0);
   });
-
+//
   it('Spatial Edge Case Suite 1C: verifies multiple hard collisions in a cluster', () => {
     const box1 = createAxisAlignedBoundingBox([0, 0, 0], [4, 4, 4]);
     const box2 = createAxisAlignedBoundingBox([1, 1, 1], [3, 3, 3]);
@@ -438,7 +438,7 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     ]);
     expect(res.summary.hard).toBe(3);
   });
-
+//
   it('Spatial Edge Case Suite 1D: verifies high tolerance capturing multiple proximity pairs', () => {
     const box1 = createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]);
     const box2 = createAxisAlignedBoundingBox([2.5, 0, 0], [4.5, 2, 2]);
@@ -448,9 +448,10 @@ describe('Spatial Bounding Box & Clash Detection Engine', () => {
     ], { tolerance: 1.0 });
     expect(res.summary.clearance).toBe(1);
   });
-
+//
   it('Spatial Edge Case Suite 1E: verifies zero elements input stability', () => {
     const res = detectClashes([], { tolerance: 2.0 });
     expect(res.summary.total).toBe(0);
   });
 });
+//

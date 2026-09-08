@@ -218,7 +218,64 @@ async function mintAccessToken(saJson: any): Promise<string> {
   return data.access_token;
 }
 
+export function getExplabsApiKey(): string | undefined {
+  return typeof Deno !== "undefined"
+    ? Deno.env.get("EXPLABS_API_KEY")
+    : process.env.EXPLABS_API_KEY;
+}
+
+export async function callAstra(
+  systemPrompt: string,
+  userMessage: string | any[],
+  jsonMode: boolean = false,
+  model: string = "gpt-6-astra"
+): Promise<string> {
+  const key = getExplabsApiKey();
+  if (!key) throw new Error("EXPLABS_API_KEY is not configured.");
+
+  let msgs: any[] = [{ role: "system", content: systemPrompt }];
+  if (Array.isArray(userMessage)) {
+    msgs = msgs.concat(userMessage.map((m: any) => ({ role: m.role, content: m.content || "" })));
+  } else {
+    msgs.push({ role: "user", content: String(userMessage) });
+  }
+
+  const payload: any = {
+    model: model || "gpt-6-astra",
+    messages: msgs
+  };
+  if (jsonMode) {
+    payload.response_format = { type: "json_object" };
+  }
+
+  const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`[Experiential Labs Astra ${res.status}]: ${errText}`);
+  }
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
 export async function callGemini(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gemini-3.6-flash"): Promise<string> {
+  const explabsKey = getExplabsApiKey();
+  if (explabsKey) {
+    try {
+      return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
+    } catch (err) {
+      console.warn("[callGemini] Fallback from Astra error:", err);
+    }
+  }
+
   const saRaw = typeof Deno !== "undefined" ? Deno.env.get("GCP_SERVICE_ACCOUNT_JSON") : process.env.GCP_SERVICE_ACCOUNT_JSON;
   const geminiKey = typeof Deno !== "undefined" ? Deno.env.get("GEMINI_API_KEY") : process.env.GEMINI_API_KEY;
 
@@ -343,6 +400,15 @@ function getQwenEndpoints(): string[] {
 }
 
 export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "glm-5.1"): Promise<string> {
+  const explabsKey = getExplabsApiKey();
+  if (explabsKey) {
+    try {
+      return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
+    } catch (err) {
+      console.warn("[callQwen] Fallback from Astra error:", err);
+    }
+  }
+
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -371,8 +437,6 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          // Qwen3.8 Max is a thinking model; DashScope documents 0.6 as its
-          // minimum temperature and xhigh as the maximum reasoning effort.
           temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
           reasoning_effort: targetModel === "qwen3.8-max" ? "medium" : undefined,
           max_tokens: 4096,
@@ -383,9 +447,6 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
-        // Qwen3.8 Max Preview requires a separate DashScope Token Plan. Keep
-        // it as the preferred model, but do not take production generation
-        // down when the account has not been granted that entitlement yet.
         lastError = new Error(`Qwen Error (${res.status}): ${errText}`);
         continue;
       }
@@ -406,6 +467,38 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
 }
 
 export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "qwen3.8-max"): Promise<any> {
+  const explabsKey = getExplabsApiKey();
+  if (explabsKey) {
+    try {
+      const msgs = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ];
+      const payload: any = {
+        model: "gpt-6-astra",
+        messages: msgs
+      };
+      if (tools && tools.length > 0) {
+        payload.tools = tools;
+      }
+      const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${explabsKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices?.[0]?.message;
+      }
+      console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
+    } catch (err) {
+      console.warn("[callGLM Astra] Fallback on error:", err);
+    }
+  }
+
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");

@@ -175,67 +175,61 @@ async function applyDefaultMaterials(mcpSessionId: string): Promise<{ session: s
   const errors: string[] = [];
   const summary: Record<string, number> = {};
 
-  const sceneRes = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: false, include_transform: false }, session);
-  session = sceneRes.session;
-  const scene = parseJson(sceneRes.resultText);
-  const byClass = guidsByClass(scene);
+  const harnessPython = `
+import ifcopenshell
+import ifcopenshell.api as api
 
-  const styleRun = Date.now();
-  const styles = [
-    {
-      name: `InfraStudio_Plaster_${styleRun}`,
-      color: [0.86, 0.84, 0.78],
-      transparency: 0,
-      classes: ["IfcWall", "IfcWallStandardCase"],
-    },
-    {
-      name: `InfraStudio_ConcreteFloor_${styleRun}`,
-      color: [0.48, 0.48, 0.46],
-      transparency: 0,
-      classes: ["IfcSlab", "IfcRoof"],
-    },
-    {
-      name: `InfraStudio_WoodDoor_${styleRun}`,
-      color: [0.45, 0.28, 0.14],
-      transparency: 0,
-      classes: ["IfcDoor"],
-    },
-    {
-      name: `InfraStudio_Glass_${styleRun}`,
-      color: [0.62, 0.82, 0.92],
-      transparency: 0.55,
-      classes: ["IfcWindow"],
-    },
-    {
-      name: `InfraStudio_StairConcrete_${styleRun}`,
-      color: [0.58, 0.58, 0.56],
-      transparency: 0,
-      classes: ["IfcStair", "IfcStairFlight"],
-    },
-  ];
+ifc = get_ifc_file()
+body_ctx = get_or_create_body_context(ifc)
 
-  for (const style of styles) {
-    const targetGuids = style.classes.flatMap((cls) => byClass[cls] || []);
-    summary[style.name] = targetGuids.length;
-    if (targetGuids.length === 0) continue;
+material_configs = [
+    ("IfcWall", "Architectural Wall Render", "Style_Wall_Render", (0.88, 0.86, 0.82), 0.0),
+    ("IfcWallStandardCase", "Architectural Wall Render", "Style_Wall_Render", (0.88, 0.86, 0.82), 0.0),
+    ("IfcSlab", "Structural Concrete Slab", "Style_Concrete_Slab", (0.55, 0.55, 0.56), 0.0),
+    ("IfcDoor", "Hardwood Timber Door", "Style_Timber_Door", (0.45, 0.28, 0.14), 0.0),
+    ("IfcWindow", "Double-Glazed Vision Glass", "Style_Vision_Glass", (0.60, 0.82, 0.94), 0.60),
+    ("IfcRoof", "Weatherproof Roofing Membrane", "Style_Roof_Membrane", (0.32, 0.33, 0.35), 0.0),
+    ("IfcColumn", "Structural Column Steel/Concrete", "Style_Column_Anthracite", (0.28, 0.30, 0.32), 0.0),
+    ("IfcBeam", "Structural Framing Steel", "Style_Steel_Framing", (0.92, 0.75, 0.10), 0.0),
+    ("IfcFooting", "Reinforced Concrete Foundation", "Style_Concrete_Footing", (0.60, 0.62, 0.64), 0.0),
+    ("IfcPile", "Deep Foundation Steel Casing", "Style_Foundation_Pile", (0.35, 0.36, 0.38), 0.0),
+    ("IfcStair", "Architectural Concrete Stair", "Style_Stair_Concrete", (0.65, 0.66, 0.68), 0.0),
+    ("IfcStairFlight", "Architectural Concrete Stair Flight", "Style_Stair_Concrete", (0.65, 0.66, 0.68), 0.0),
+    ("IfcRailing", "Stainless Steel Safety Railing", "Style_Safety_Railing", (0.90, 0.78, 0.10), 0.0),
+    ("IfcBuildingElementProxy", "Engineered Infrastructure Element", "Style_Infra_Proxy", (0.75, 0.76, 0.78), 0.0)
+]
 
-    try {
-      const created = await mcpCallTool("create_surface_style", {
-        name: style.name,
-        color: style.color,
-        transparency: style.transparency,
-        style_type: "rendering",
-      }, session);
-      session = created.session;
+applied_count = 0
+for ifc_class, mat_name, style_name, (r, g, b), transp in material_configs:
+    elements = ifc.by_type(ifc_class)
+    if not elements:
+        continue
+    mat = api.run("material.add_material", ifc, name=mat_name)
+    style = api.run("style.add_style", ifc, name=style_name, ifc_class="IfcSurfaceStyle")
+    rgb = ifc.create_entity("IfcColourRgb", Red=r, Green=g, Blue=b)
+    shading = ifc.create_entity("IfcSurfaceStyleShading", SurfaceColour=rgb, Transparency=transp)
+    style.Styles = [shading]
+    api.run("style.assign_material_style", ifc, material=mat, style=style, context=body_ctx)
+    api.run("material.assign_material", ifc, products=elements, material=mat)
+    for el in elements:
+        if el.Representation:
+            for rep in el.Representation.Representations:
+                try:
+                    api.run("style.assign_representation_styles", ifc, shape_representation=rep, styles=[style])
+                except Exception:
+                    pass
+    applied_count += len(elements)
 
-      const applied = await mcpCallTool("apply_style_to_object", {
-        object_guids: targetGuids,
-        style_name: style.name,
-      }, session);
-      session = applied.session;
-    } catch (err) {
-      errors.push(`${style.name}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+save_and_load_ifc()
+print(f"Harness Applied PBR Styles & Materials to {applied_count} objects!")
+`;
+
+  try {
+    const res = await mcpCallTool("execute_ifc_code_tool", { code: harnessPython }, session);
+    session = res.session;
+    summary["harness_pbr_styled"] = 1;
+  } catch (err) {
+    errors.push(`Harness Material Styling Error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   return { session, summary, errors };

@@ -6,7 +6,7 @@ import {
   SpatialElement,
   ClearanceMatrixResult
 } from '../src/spatial';
-
+//
 describe('Spatial Clearance Analysis & Distance Matrix', () => {
   it('Clearance Calculation: computes exact Euclidean distance between separated elements', () => {
     const elem1: SpatialElement = {
@@ -25,7 +25,7 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(clearance.distance).toBeCloseTo(3.0);
     expect(clearance.hasConflict).toBe(false);
   });
-
+//
   it('Clearance Calculation: computes zero distance for overlapping elements', () => {
     const elem1: SpatialElement = {
       id: 'box-1',
@@ -43,7 +43,7 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(clearance.distance).toBe(0);
     expect(clearance.hasConflict).toBe(true);
   });
-
+//
   it('Clearance Calculation: returns closest coordinate points between separated bounding boxes', () => {
     const elem1: SpatialElement = {
       id: 'b1',
@@ -62,7 +62,7 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(clearance.closestPoints.pointB).toEqual([5, 6, 1]);
     expect(clearance.distance).toBeCloseTo(5.0);
   });
-
+//
   it('Clearance Calculation: correctly determines conflict status based on required clearance', () => {
     const elem1: SpatialElement = {
       id: 'e1',
@@ -83,7 +83,7 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(conflictCheck.distance).toBeCloseTo(1.0);
     expect(conflictCheck.hasConflict).toBe(true);
   });
-
+//
   it('Clearance Distance Matrix: builds symmetric NxN distance matrix across all elements', () => {
     const elements: SpatialElement[] = [
       { id: 'A', name: 'Item A', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) },
@@ -101,7 +101,7 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(matrixRes.matrix[0][2]).toBeCloseTo(4.0);
     expect(matrixRes.matrix[2][0]).toBeCloseTo(4.0);
   });
-
+//
   it('Clearance Distance Matrix: identifies all pair-wise clearance violations', () => {
     const elements: SpatialElement[] = [
       { id: 'A', name: 'Tray A', discipline: 'electrical', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [2, 2, 2]) },
@@ -115,7 +115,7 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(matrixRes.violations[0].distance).toBeCloseTo(0.5);
     expect(matrixRes.violations[0].requiredClearance).toBe(1.0);
   });
-
+//
   it('Clearance Distance Matrix: respects maxDistanceCutoff by assigning Infinity to distant pairs', () => {
     const elements: SpatialElement[] = [
       { id: 'A', name: 'Origin Element', discipline: 'structural', boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) },
@@ -127,34 +127,34 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(matrixRes.matrix[0][2]).toBe(Infinity);
     expect(matrixRes.matrix[2][0]).toBe(Infinity);
   });
-
+//
   it('Spatial Clearance Edge Case Suite 2A: evaluates zero required clearance', () => {
     const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
     const elem2 = { id: '2', name: 'B', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([2, 0, 0], [3, 1, 1]) };
     const res = calculateClearance(elem1, elem2, 0);
     expect(res.hasConflict).toBe(false);
   });
-
+//
   it('Spatial Clearance Edge Case Suite 2B: evaluates diagonal offset distance', () => {
     const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
     const elem2 = { id: '2', name: 'B', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([4, 5, 1], [5, 6, 2]) };
     const res = calculateClearance(elem1, elem2, 10);
     expect(res.distance).toBeCloseTo(5.0);
   });
-
+//
   it('Spatial Clearance Edge Case Suite 2C: builds empty clearance matrix safely', () => {
     const res = buildClearanceMatrix([], 1.0);
     expect(res.matrix).toEqual([]);
     expect(res.violations).toEqual([]);
   });
-
+//
   it('Spatial Clearance Edge Case Suite 2D: builds single-element clearance matrix safely', () => {
     const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
     const res = buildClearanceMatrix([elem1], 1.0);
     expect(res.matrix).toEqual([[0]]);
     expect(res.violations).toEqual([]);
   });
-
+//
   it('Spatial Clearance Edge Case Suite 2E: validates cutoff below minimum separation', () => {
     const elem1 = { id: '1', name: 'A', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([0, 0, 0], [1, 1, 1]) };
     const elem2 = { id: '2', name: 'B', discipline: 'structural' as const, boundingBox: createAxisAlignedBoundingBox([5, 0, 0], [6, 1, 1]) };
@@ -162,3 +162,4 @@ describe('Spatial Clearance Analysis & Distance Matrix', () => {
     expect(res.matrix[0][1]).toBe(Infinity);
   });
 });
+//

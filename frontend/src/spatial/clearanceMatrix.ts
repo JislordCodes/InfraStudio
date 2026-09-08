@@ -1,19 +1,31 @@
-import {
+/**
+ * Clearance analysis and distance matrix generation for spatial components
+ */
+
+import type {
   SpatialElement,
   ClearanceInfo,
   ClearanceMatrixResult,
-  ClearanceViolation,
-  Vector3D
+  ClearanceViolation
 } from './types';
 import { calculateAABBDistance, getClosestPointsAABB } from './geometryUtils';
 
+/**
+ * Calculates clearance distance and conflict status between two elements.
+ */
 export function calculateClearance(
   elemA: SpatialElement,
   elemB: SpatialElement,
   requiredClearance: number
 ): ClearanceInfo {
-  const distance = calculateAABBDistance(elemA.boundingBox, elemB.boundingBox);
-  const closestPoints = getClosestPointsAABB(elemA.boundingBox, elemB.boundingBox);
+  const distance = calculateAABBDistance(
+    elemA.boundingBox,
+    elemB.boundingBox
+  );
+  const closestPoints = getClosestPointsAABB(
+    elemA.boundingBox,
+    elemB.boundingBox
+  );
 
   return {
     distance,
@@ -22,6 +34,9 @@ export function calculateClearance(
   };
 }
 
+/**
+ * Builds a symmetric NxN clearance distance matrix and identifies all pairwise violations.
+ */
 export function buildClearanceMatrix(
   elements: SpatialElement[],
   requiredClearance: number,
@@ -39,7 +54,10 @@ export function buildClearanceMatrix(
       } else {
         const elemA = elements[i];
         const elemB = elements[j];
-        let dist = calculateAABBDistance(elemA.boundingBox, elemB.boundingBox);
+        let dist = calculateAABBDistance(
+          elemA.boundingBox,
+          elemB.boundingBox
+        );
 
         if (maxDistanceCutoff !== undefined && dist > maxDistanceCutoff) {
           dist = Infinity;

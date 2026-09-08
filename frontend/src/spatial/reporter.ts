@@ -1,5 +1,12 @@
-import { ClashRecord, ClashResult, ClashSeverity, DisciplineType } from './types';
+/**
+ * Spatial clash grouping and text/JSON export formatting
+ */
 
+import type { ClashRecord, ClashResult } from './types';
+
+/**
+ * Groups an array of clash records by severity, element ID, or discipline pair.
+ */
 export function groupClashes(
   clashes: ClashRecord[],
   groupBy: 'severity' | 'element' | 'discipline'
@@ -33,6 +40,9 @@ export function groupClashes(
   return grouped;
 }
 
+/**
+ * Exports clash detection results as JSON or formatted summary text.
+ */
 export function exportClashReport(
   result: ClashResult,
   format: 'json' | 'summary_text'
@@ -56,7 +66,9 @@ export function exportClashReport(
   } else {
     for (let i = 0; i < result.clashes.length; i++) {
       const c = result.clashes[i];
-      lines.push(`${i + 1}. [${c.type.toUpperCase()}] (${c.severity.toUpperCase()}) ${c.elementA.name} <-> ${c.elementB.name}`);
+      lines.push(
+        `${i + 1}. [${c.type.toUpperCase()}] (${c.severity.toUpperCase()}) ${c.elementA.name} <-> ${c.elementB.name}`
+      );
       if (c.penetrationDepth !== undefined && c.penetrationDepth > 0) {
         lines.push(`   Penetration Depth: ${c.penetrationDepth.toFixed(3)}m`);
       } else if (c.distance > 0) {

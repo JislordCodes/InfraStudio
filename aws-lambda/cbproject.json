@@ -1,0 +1,30 @@
+{
+  "name": "infrastudio-mcp-build",
+  "description": "Builds ifc-bonsai-mcp container and pushes to ECR",
+  "source": {
+    "type": "GITHUB",
+    "location": "https://github.com/JislordCodes/InfraStudio.git",
+    "buildspec": "buildspec.yml"
+  },
+  "artifacts": {
+    "type": "NO_ARTIFACTS"
+  },
+  "environment": {
+    "type": "LINUX_CONTAINER",
+    "image": "aws/codebuild/standard:7.0",
+    "computeType": "BUILD_GENERAL1_LARGE",
+    "privilegedMode": true,
+    "environmentVariables": [
+      {
+        "name": "AWS_DEFAULT_REGION",
+        "value": "us-east-1"
+      },
+      {
+        "name": "ECR_URI",
+        "value": "906548968040.dkr.ecr.us-east-1.amazonaws.com/ifc-bonsai-mcp"
+      }
+    ]
+  },
+  "serviceRole": "arn:aws:iam::906548968040:role/CodeBuildECRRole",
+  "timeoutInMinutes": 30
+}
