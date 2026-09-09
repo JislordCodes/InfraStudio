@@ -58,7 +58,7 @@ function deterministicReview(scene: any, requirements: any, category: string) {
 
   const solids = objects.filter((object: any) => {
     const cls = String(object?.ifc_class || object?.type || "");
-    return !/IfcDoor|IfcWindow|IfcOpeningElement/.test(cls) && boundsOf(object);
+    return !/IfcDoor|IfcWindow|IfcOpeningElement|IfcRailing/.test(cls) && boundsOf(object);
   });
   for (let i = 0; i < solids.length; i++) {
     for (let j = i + 1; j < solids.length; j++) {

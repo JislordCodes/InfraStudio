@@ -32,21 +32,24 @@ h = InfraStudioHarness(ifc, storey)
 
 # AVAILABLE HARNESS METHODS:
 # 1. h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
-# 2. h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0) -> trimesh.Trimesh
-# 3. h.create_stairs(start_pt=[x,y,z], length=3.5, width=1.2, height=3.2, num_steps=16) -> trimesh.Trimesh
-# 4. h.create_roof(footprint_2d, roof_type="gable|flat|shed|hip", height=2.5, z_elevation=3.2, thickness=0.3) -> trimesh.Trimesh
-# 5. h.create_cylinder(radius=0.25, height=3.5, pos=[x,y,z], axis=[0,0,1]) -> trimesh.Trimesh (columns)
-# 6. h.create_i_beam(depth=0.5, flange_w=0.25, web_t=0.02, flange_t=0.03, length=8.0, pos=[x,y,z], rot_z_deg=0.0) -> trimesh.Trimesh (beams)
-# 7. h.create_box(extents=[l,w,h], pos=[x,y,z], rot_z_deg=0.0) -> trimesh.Trimesh (curtain walls, glass panels, parapets)
-# 8. h.add_mesh_element(mesh, name, ifc_class="IfcWall|IfcSlab|IfcRoof|IfcColumn|IfcBeam|IfcStair|IfcDoor|IfcWindow|IfcFooting", mat_name="...", rgb=(r,g,b), transparency=0.0)
+# 2. h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[{"offset": float, "width": float, "height": float, "sill_height": float}]) -> trimesh.Trimesh (creates watertight walls with actual opening voids!)
+# 3. h.add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window") -> adds dark aluminum frame and low-e glass pane
+# 4. h.add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door") -> adds door frame and wood veneer leaf
+# 5. h.add_column(pos=[x,y], height=3.2, radius=0.2, z_bottom=0.0, shape="round|square", name="Column") -> adds structural concrete column
+# 6. h.add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam") -> adds structural beam
+# 7. h.add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Railing") -> adds balcony or stair safety railing
+# 8. h.create_stairs(start_pt=[x,y,z], length=3.6, width=1.2, height=3.2, num_steps=18) -> trimesh.Trimesh
+# 9. h.create_roof(footprint_2d, roof_type="gable|flat|shed|hip", height=2.5, z_elevation=3.2, thickness=0.3) -> trimesh.Trimesh
+# 10. h.add_mesh_element(mesh, name, ifc_class="IfcWall|IfcSlab|IfcRoof|IfcColumn|IfcBeam|IfcStair|IfcDoor|IfcWindow|IfcRailing", mat_name="...", rgb=(r,g,b), transparency=0.0)
 
 # Build:
-# 1. Ground floor slab & upper slabs
-# 2. Exterior facade walls & interior partitions (avoid duplicate overlapping walls)
-# 3. Floor-to-ceiling glass curtain walls or picture windows (use ifc_class="IfcWindow", mat_name="Low-E Glass", rgb=(0.85, 0.92, 0.98), transparency=0.7)
-# 4. Monolithic staircases for multi-storey buildings (ifc_class="IfcStair", mat_name="Timber Tread", rgb=(0.76, 0.58, 0.38))
-# 5. Structural columns/beams for large open spans
-# 6. Ceiling slabs & Roof structure (pitched gable, hip, shed, or flat parapet)
+# 1. Continuous ground podium slab & upper floor plates with cantilevered balconies
+# 2. Structural column grid at spans/corners
+# 3. Exterior & interior walls with genuine window/door opening voids via openings=[...]
+# 4. Framed windows & panel doors inserted directly into the wall openings
+# 5. Safety railings along balcony edges and staircases
+# 6. Roof structure with eaves overhangs or capped parapets
+# 7. Monolithic staircases for multi-storey buildings
 
 count = h.commit()
 save_and_load_ifc()
@@ -1144,31 +1147,95 @@ export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
       }
     }
 
-    // 1. Floor Slabs
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      totalMinX = Math.min(totalMinX, rb.x);
-      totalMinY = Math.min(totalMinY, rb.y);
-      totalMaxX = Math.max(totalMaxX, rb.x + rb.w);
-      totalMaxY = Math.max(totalMaxY, rb.y + rb.l);
+    // 1. Unified Continuous Floor Slab & Cantilever Balcony
+    const pad = 0.3;
+    const isGround = sIdx === 0;
+    const isUpper = sIdx > 0;
+    const balcDepth = isUpper ? 1.2 : 0.0;
 
-      const fp = `[[${rb.x}, ${rb.y}], [${rb.x + rb.w}, ${rb.y}], [${rb.x + rb.w}, ${rb.y + rb.l}], [${rb.x}, ${rb.y + rb.l}]]`;
-      const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
-      lines.push(`_slab_${sIdx}_${rIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.25, z_elevation=${elev - 0.25})`);
-      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}_${rIdx}, "${sName}_${cleanName}_Floor_Slab", ifc_class="IfcSlab", mat_name="Polished Architectural Concrete", rgb=(0.78, 0.78, 0.76))`);
+    const sMinX = Math.min(...rBounds.map(r => r.x));
+    const sMinY = Math.min(...rBounds.map(r => r.y));
+    const sMaxX = Math.max(...rBounds.map(r => r.x + r.w));
+    const sMaxY = Math.max(...rBounds.map(r => r.y + r.l));
+
+    totalMinX = Math.min(totalMinX, sMinX);
+    totalMinY = Math.min(totalMinY, sMinY - balcDepth);
+    totalMaxX = Math.max(totalMaxX, sMaxX);
+    totalMaxY = Math.max(totalMaxY, sMaxY);
+
+    if (isGround) {
+      lines.push(`# Ground Floor Continuous Podium Slab`);
+      const fp = `[[${(sMinX - pad).toFixed(2)}, ${(sMinY - pad).toFixed(2)}], [${(sMaxX + pad).toFixed(2)}, ${(sMinY - pad).toFixed(2)}], [${(sMaxX + pad).toFixed(2)}, ${(sMaxY + pad).toFixed(2)}], [${(sMinX - pad).toFixed(2)}, ${(sMaxY + pad).toFixed(2)}]]`;
+      lines.push(`_slab_${sIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.30, z_elevation=${(elev - 0.30).toFixed(2)})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}, "${sName}_Ground_Podium_Slab", ifc_class="IfcSlab", mat_name="Cast-in-Place Structural Concrete", rgb=(0.76, 0.76, 0.74))`);
+    } else {
+      lines.push(`# Upper Level Continuous Floor Plate with Cantilever Balcony`);
+      const fp = `[[${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMaxY.toFixed(2)}], [${sMinX.toFixed(2)}, ${sMaxY.toFixed(2)}]]`;
+      lines.push(`_slab_${sIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.25, z_elevation=${(elev - 0.25).toFixed(2)})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}, "${sName}_Cantilever_Floor_Plate", ifc_class="IfcSlab", mat_name="Post-Tensioned Architectural Concrete", rgb=(0.80, 0.80, 0.78))`);
+      lines.push(`h_${sIdx}.add_railing([${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_Front_Railing", rgb=(0.20, 0.20, 0.22))`);
+      lines.push(`h_${sIdx}.add_railing([${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMinX.toFixed(2)}, ${sMinY.toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_West_Railing", rgb=(0.20, 0.20, 0.22))`);
+      lines.push(`h_${sIdx}.add_railing([${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMinY.toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_East_Railing", rgb=(0.20, 0.20, 0.22))`);
     }
     lines.push("");
 
-    // 2. Walls with deduplication at shared boundaries
-    const rawSegments: { p1: [number, number]; p2: [number, number]; roomName: string }[] = [];
+    // 2. Structural Column Grid along room corners
+    lines.push(`# Structural Framing: Columns`);
+    const rawCorners: [number, number][] = [];
     for (const rb of rBounds) {
-      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x + rb.w, rb.y], roomName: rb.name });
-      rawSegments.push({ p1: [rb.x + rb.w, rb.y], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name });
-      rawSegments.push({ p1: [rb.x + rb.w, rb.y + rb.l], p2: [rb.x, rb.y + rb.l], roomName: rb.name });
-      rawSegments.push({ p1: [rb.x, rb.y + rb.l], p2: [rb.x, rb.y], roomName: rb.name });
+      rawCorners.push([rb.x, rb.y]);
+      rawCorners.push([rb.x + rb.w, rb.y]);
+      rawCorners.push([rb.x + rb.w, rb.y + rb.l]);
+      rawCorners.push([rb.x, rb.y + rb.l]);
+    }
+    const uniqueCols: [number, number][] = [];
+    for (const pt of rawCorners) {
+      if (!uniqueCols.some(c => Math.hypot(c[0] - pt[0], c[1] - pt[1]) < 1.4)) {
+        uniqueCols.push(pt);
+      }
+    }
+    for (let cIdx = 0; cIdx < uniqueCols.length; cIdx++) {
+      const [colX, colY] = uniqueCols[cIdx];
+      lines.push(`h_${sIdx}.add_column([${colX.toFixed(2)}, ${colY.toFixed(2)}], height=${height.toFixed(2)}, radius=0.18, z_bottom=${elev.toFixed(2)}, shape="round", name="${sName}_Column_${cIdx + 1}", rgb=(0.84, 0.84, 0.82))`);
+    }
+    lines.push("");
+
+    // 3. Wall Segments with Genuine Window & Door Opening Voids
+    interface RawSeg {
+      p1: [number, number];
+      p2: [number, number];
+      roomName: string;
+      windows: any[];
+      doors: any[];
+    }
+    const rawSegments: RawSeg[] = [];
+    for (const rb of rBounds) {
+      const sWins = rb.windows.filter((w: any) => String(w.wall || "south").toLowerCase() === "south");
+      const sDoors = rb.doors.filter((d: any) => String(d.wall || "south").toLowerCase() === "south");
+      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x + rb.w, rb.y], roomName: rb.name, windows: sWins, doors: sDoors });
+
+      const nWins = rb.windows.filter((w: any) => String(w.wall).toLowerCase() === "north");
+      const nDoors = rb.doors.filter((d: any) => String(d.wall).toLowerCase() === "north");
+      rawSegments.push({ p1: [rb.x, rb.y + rb.l], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name, windows: nWins, doors: nDoors });
+
+      const eWins = rb.windows.filter((w: any) => String(w.wall).toLowerCase() === "east");
+      const eDoors = rb.doors.filter((d: any) => String(d.wall).toLowerCase() === "east");
+      rawSegments.push({ p1: [rb.x + rb.w, rb.y], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name, windows: eWins, doors: eDoors });
+
+      const wWins = rb.windows.filter((w: any) => String(w.wall).toLowerCase() === "west");
+      const wDoors = rb.doors.filter((d: any) => String(d.wall).toLowerCase() === "west");
+      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x, rb.y + rb.l], roomName: rb.name, windows: wWins, doors: wDoors });
     }
 
-    const uniqueWalls: { p1: [number, number]; p2: [number, number]; isShared: boolean; name: string }[] = [];
+    interface UWall {
+      p1: [number, number];
+      p2: [number, number];
+      isShared: boolean;
+      name: string;
+      windows: any[];
+      doors: any[];
+    }
+    const uniqueWalls: UWall[] = [];
     for (const seg of rawSegments) {
       const [ax1, ay1] = seg.p1;
       const [ax2, ay2] = seg.p2;
@@ -1181,113 +1248,78 @@ export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
         if (Math.hypot(uw.p1[0] - sp1[0], uw.p1[1] - sp1[1]) < 0.15 &&
             Math.hypot(uw.p2[0] - sp2[0], uw.p2[1] - sp2[1]) < 0.15) {
           uw.isShared = true;
+          uw.windows.push(...seg.windows);
+          uw.doors.push(...seg.doors);
           found = true;
           break;
         }
       }
       if (!found) {
-        uniqueWalls.push({ p1: sp1, p2: sp2, isShared: false, name: seg.roomName });
+        uniqueWalls.push({ p1: sp1, p2: sp2, isShared: false, name: seg.roomName, windows: [...seg.windows], doors: [...seg.doors] });
       }
     }
 
-    lines.push(`# Walls for ${sName}`);
+    lines.push(`# Walls with Framed Opening Voids for ${sName}`);
     for (let wIdx = 0; wIdx < uniqueWalls.length; wIdx++) {
       const uw = uniqueWalls[wIdx];
+      const wallLen = Math.hypot(uw.p2[0] - uw.p1[0], uw.p2[1] - uw.p1[1]);
       const thick = uw.isShared ? 0.15 : 0.25;
       const mat = uw.isShared ? "Interior Partition Drywall" : "Smooth Architectural Stucco";
       const rgb = uw.isShared ? "(0.90, 0.90, 0.88)" : "(0.95, 0.95, 0.92)";
       const wName = `${sName}_${uw.isShared ? 'Interior' : 'Perimeter'}_Wall_${wIdx + 1}`;
-      lines.push(`_w_${sIdx}_${wIdx} = h_${sIdx}.create_wall([${uw.p1[0]}, ${uw.p1[1]}], [${uw.p2[0]}, ${uw.p2[1]}], height=${height}, thickness=${thick}, z_bottom=${elev})`);
+
+      const openings: { offset: number; width: number; height: number; sill_height: number }[] = [];
+      const cleanWindows: any[] = [];
+      for (const w of uw.windows) {
+        const wW = Number(w.width || 1.4);
+        const wH = Number(w.height || 1.5);
+        const sH = Number(w.sill_height || 0.9);
+        const off = Math.max(0.3, Math.min(Number(w.offset || 1.0), wallLen - wW - 0.3));
+        const cleanOp = { offset: Number(off.toFixed(2)), width: wW, height: wH, sill_height: sH };
+        openings.push(cleanOp);
+        cleanWindows.push(cleanOp);
+      }
+      const cleanDoors: any[] = [];
+      for (const d of uw.doors) {
+        const dW = Number(d.width || 0.9);
+        const dH = Number(d.height || 2.1);
+        const off = Math.max(0.2, Math.min(Number(d.offset || 1.0), wallLen - dW - 0.2));
+        const cleanOp = { offset: Number(off.toFixed(2)), width: dW, height: dH, sill_height: 0.0 };
+        openings.push(cleanOp);
+        cleanDoors.push(cleanOp);
+      }
+
+      const opJson = openings.length ? JSON.stringify(openings) : "None";
+      lines.push(`_w_${sIdx}_${wIdx} = h_${sIdx}.create_wall([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], height=${height.toFixed(2)}, thickness=${thick}, z_bottom=${elev.toFixed(2)}, openings=${opJson})`);
       lines.push(`h_${sIdx}.add_mesh_element(_w_${sIdx}_${wIdx}, "${wName}", ifc_class="IfcWall", mat_name="${mat}", rgb=${rgb})`);
-    }
-    lines.push("");
 
-    // 3. Glazed Panels / Windows
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      for (let winIdx = 0; winIdx < rb.windows.length; winIdx++) {
-        const win = rb.windows[winIdx];
-        const winW = Number(win.width || 1.4);
-        const winH = Number(win.height || 1.5);
-        const sillH = Number(win.sill_height || 0.9);
-        const offset = Number(win.offset || 1.0);
-        const wall = String(win.wall || "south").toLowerCase();
+      for (let winI = 0; winI < cleanWindows.length; winI++) {
+        const w = cleanWindows[winI];
+        lines.push(`h_${sIdx}.add_window([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], offset=${w.offset}, width=${w.width}, height=${w.height}, sill_height=${w.sill_height}, z_bottom=${elev.toFixed(2)}, name="${wName}_Window_${winI + 1}")`);
+      }
 
-        let cx = rb.x + offset + winW / 2;
-        let cy = rb.y;
-        let rotZ = 0;
-        if (wall === "north") {
-          cy = rb.y + rb.l;
-          rotZ = 0;
-        } else if (wall === "east") {
-          cx = rb.x + rb.w;
-          cy = rb.y + offset + winW / 2;
-          rotZ = 90;
-        } else if (wall === "west") {
-          cx = rb.x;
-          cy = rb.y + offset + winW / 2;
-          rotZ = 90;
-        }
-        const cz = elev + sillH + winH / 2;
-        const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
-        lines.push(`_win_${sIdx}_${rIdx}_${winIdx} = h_${sIdx}.create_box(extents=[${winW}, 0.08, ${winH}], pos=[${cx}, ${cy}, ${cz}], rot_z_deg=${rotZ})`);
-        lines.push(`h_${sIdx}.add_mesh_element(_win_${sIdx}_${rIdx}_${winIdx}, "${sName}_${cleanName}_Window_${winIdx + 1}", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.85, 0.92, 0.98), transparency=0.7)`);
+      for (let doorI = 0; doorI < cleanDoors.length; doorI++) {
+        const d = cleanDoors[doorI];
+        lines.push(`h_${sIdx}.add_door([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], offset=${d.offset}, width=${d.width}, height=${d.height}, z_bottom=${elev.toFixed(2)}, name="${wName}_Door_${doorI + 1}")`);
       }
     }
     lines.push("");
 
-    // 4. Doors
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      const doorList = rb.doors.length > 0 ? rb.doors : [{ wall: "south", offset: 1.0, width: 0.9, height: 2.1 }];
-      for (let doorIdx = 0; doorIdx < doorList.length; doorIdx++) {
-        const door = doorList[doorIdx];
-        const doorW = Number(door.width || 0.9);
-        const doorH = Number(door.height || 2.1);
-        const offset = Number(door.offset || 1.0);
-        const wall = String(door.wall || "south").toLowerCase();
-
-        let cx = rb.x + offset + doorW / 2;
-        let cy = rb.y;
-        let rotZ = 0;
-        if (wall === "north") {
-          cy = rb.y + rb.l;
-          rotZ = 0;
-        } else if (wall === "east") {
-          cx = rb.x + rb.w;
-          cy = rb.y + offset + doorW / 2;
-          rotZ = 90;
-        } else if (wall === "west") {
-          cx = rb.x;
-          cy = rb.y + offset + doorW / 2;
-          rotZ = 90;
-        }
-        const cz = elev + doorH / 2;
-        const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
-        lines.push(`_door_${sIdx}_${rIdx}_${doorIdx} = h_${sIdx}.create_box(extents=[${doorW}, 0.08, ${doorH}], pos=[${cx}, ${cy}, ${cz}], rot_z_deg=${rotZ})`);
-        lines.push(`h_${sIdx}.add_mesh_element(_door_${sIdx}_${rIdx}_${doorIdx}, "${sName}_${cleanName}_Door_${doorIdx + 1}", ifc_class="IfcDoor", mat_name="Solid Architectural Wood Door", rgb=(0.58, 0.38, 0.22))`);
-      }
-    }
-    lines.push("");
-
-    // 4. Stairs (if multi-storey or has_stairs)
+    // 4. Inter-storey Stairs (if multi-storey or has_stairs)
     if ((plan.has_stairs || storeys.length > 1) && sIdx < storeys.length - 1) {
-      const stairX = rBounds[0].x + 1.0;
-      const stairY = rBounds[0].y + 1.0;
+      const stairX = Number((rBounds[0].x + 0.8).toFixed(2));
+      const stairY = Number((rBounds[0].y + 0.8).toFixed(2));
       lines.push(`# Monolithic Staircase connecting ${sName} to upper level`);
-      lines.push(`_stairs_${sIdx} = h_${sIdx}.create_stairs(start_pt=[${stairX}, ${stairY}, ${elev}], length=3.5, width=1.2, height=${height}, num_steps=16)`);
-      lines.push(`h_${sIdx}.add_mesh_element(_stairs_${sIdx}, "${sName}_Monolithic_Stairs", ifc_class="IfcStair", mat_name="Architectural Hardwood Tread", rgb=(0.76, 0.58, 0.38))`);
+      lines.push(`_stairs_${sIdx} = h_${sIdx}.create_stairs(start_pt=[${stairX}, ${stairY}, ${elev.toFixed(2)}], length=3.6, width=1.2, height=${height.toFixed(2)}, num_steps=18)`);
+      lines.push(`h_${sIdx}.add_mesh_element(_stairs_${sIdx}, "${sName}_Monolithic_Stairs", ifc_class="IfcStair", mat_name="Architectural Hardwood Tread", rgb=(0.65, 0.45, 0.25))`);
+      lines.push(`h_${sIdx}.add_railing([${stairX}, ${stairY}], [${(stairX + 3.6).toFixed(2)}, ${stairY}], height=0.95, z_bottom=${elev.toFixed(2)}, name="${sName}_Stair_Handrail", rgb=(0.20, 0.20, 0.22))`);
       lines.push("");
     }
 
     // 5. Ceiling Slab
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      const fp = `[[${rb.x}, ${rb.y}], [${rb.x + rb.w}, ${rb.y}], [${rb.x + rb.w}, ${rb.y + rb.l}], [${rb.x}, ${rb.y + rb.l}]]`;
-      const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
-      lines.push(`_ceil_${sIdx}_${rIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.20, z_elevation=${elev + height})`);
-      lines.push(`h_${sIdx}.add_mesh_element(_ceil_${sIdx}_${rIdx}, "${sName}_${cleanName}_Ceiling", ifc_class="IfcSlab", mat_name="White Gypsum Ceiling Plaster", rgb=(0.98, 0.98, 0.98))`);
-    }
+    const ceilFp = `[[${sMinX.toFixed(2)}, ${sMinY.toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMinY.toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMaxY.toFixed(2)}], [${sMinX.toFixed(2)}, ${sMaxY.toFixed(2)}]]`;
+    lines.push(`_ceil_${sIdx} = h_${sIdx}.create_slab(${ceilFp}, thickness=0.20, z_elevation=${(elev + height).toFixed(2)})`);
+    lines.push(`h_${sIdx}.add_mesh_element(_ceil_${sIdx}, "${sName}_Ceiling", ifc_class="IfcSlab", mat_name="White Gypsum Ceiling Plaster", rgb=(0.98, 0.98, 0.98))`);
     lines.push("");
 
     lines.push(`h_${sIdx}.commit()`);
@@ -1296,21 +1328,37 @@ export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
 
   // Roof on top storey
   if (roofType !== "none") {
-    const minX = isFinite(totalMinX) ? totalMinX - 0.4 : -0.4;
-    const minY = isFinite(totalMinY) ? totalMinY - 0.4 : -0.4;
-    const maxX = isFinite(totalMaxX) ? totalMaxX + 0.4 : 10.4;
-    const maxY = isFinite(totalMaxY) ? totalMaxY + 0.4 : 8.4;
-    const roofFp = `[[${minX}, ${minY}], [${maxX}, ${minY}], [${maxX}, ${maxY}], [${minX}, ${maxY}]]`;
+    const minX = isFinite(totalMinX) ? totalMinX : 0;
+    const minY = isFinite(totalMinY) ? totalMinY : 0;
+    const maxX = isFinite(totalMaxX) ? totalMaxX : 10;
+    const maxY = isFinite(totalMaxY) ? totalMaxY : 8;
     const rType = roofType.includes("flat") ? "flat" : roofType.includes("shed") ? "shed" : roofType.includes("hip") ? "hip" : "gable";
-    const roofHeight = rType === "flat" ? 0.3 : 2.4;
+    const roofHeight = rType === "flat" ? 0.3 : 2.5;
 
     lines.push(`# ========================================================`);
     lines.push(`# ROOF STRUCTURE: ${rType.toUpperCase()}`);
     lines.push(`# ========================================================`);
     lines.push(`_top_st = _st_${storeys.length - 1}`);
     lines.push(`h_roof = InfraStudioHarness(ifc, _top_st)`);
-    lines.push(`_roof_mesh = h_roof.create_roof(${roofFp}, roof_type="${rType}", height=${roofHeight}, z_elevation=${topZ + 0.2}, thickness=0.30)`);
-    lines.push(`h_roof.add_mesh_element(_roof_mesh, "Architectural_${rType}_Roof", ifc_class="IfcRoof", mat_name="Dark Anthracite Standing Seam Roof", rgb=(0.25, 0.26, 0.28))`);
+
+    if (rType === "flat") {
+      const roofFp = `[[${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}]]`;
+      lines.push(`_roof_slab = h_roof.create_slab(${roofFp}, thickness=0.25, z_elevation=${topZ.toFixed(2)})`);
+      lines.push(`h_roof.add_mesh_element(_roof_slab, "Flat_Roof_Diaphragm", ifc_class="IfcSlab", mat_name="Insulated Membrane Roof Slab", rgb=(0.70, 0.70, 0.68))`);
+      lines.push(`# Perimeter Parapet Wall with Coping`);
+      lines.push(`_p1 = h_roof.create_wall([${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`_p2 = h_roof.create_wall([${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`_p3 = h_roof.create_wall([${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`_p4 = h_roof.create_wall([${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`h_roof.add_mesh_element(_p1, "Roof_Parapet_South", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+      lines.push(`h_roof.add_mesh_element(_p2, "Roof_Parapet_East", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+      lines.push(`h_roof.add_mesh_element(_p3, "Roof_Parapet_North", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+      lines.push(`h_roof.add_mesh_element(_p4, "Roof_Parapet_West", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+    } else {
+      const roofFp = `[[${(minX - 0.5).toFixed(2)}, ${(minY - 0.5).toFixed(2)}], [${(maxX + 0.5).toFixed(2)}, ${(minY - 0.5).toFixed(2)}], [${(maxX + 0.5).toFixed(2)}, ${(maxY + 0.5).toFixed(2)}], [${(minX - 0.5).toFixed(2)}, ${(maxY + 0.5).toFixed(2)}]]`;
+      lines.push(`_roof_mesh = h_roof.create_roof(${roofFp}, roof_type="${rType}", height=${roofHeight}, z_elevation=${(topZ + 0.15).toFixed(2)}, thickness=0.30)`);
+      lines.push(`h_roof.add_mesh_element(_roof_mesh, "Architectural_${rType}_Roof", ifc_class="IfcRoof", mat_name="Standing Seam Architectural Zinc", rgb=(0.24, 0.26, 0.28))`);
+    }
     lines.push(`h_roof.commit()`);
     lines.push("");
   }
@@ -1360,13 +1408,52 @@ function repairPlan(plan: any, brief?: any): any {
       : minimumBuildingPlan(brief);
   }
 
+  const text = requestedText(brief);
+  const isMultiStorey = /2.?stor|two.?stor|second floor|upper floor|first floor|multi.?stor/i.test(text);
+
+  // If user requested a multi-storey building but only 1 storey was returned:
+  if (isMultiStorey && plan.storey_plans.length === 1) {
+    const allRooms = plan.storey_plans[0].rooms || [];
+    if (allRooms.length >= 2) {
+      const groundRooms = allRooms.filter((r: any) => /living|kitchen|dining|entrance|entry|hall|lounge|family/i.test(String(r.name)));
+      const upperRooms = allRooms.filter((r: any) => !groundRooms.includes(r));
+      if (groundRooms.length === 0) {
+        const mid = Math.ceil(allRooms.length / 2);
+        groundRooms.push(...allRooms.slice(0, mid));
+        upperRooms.push(...allRooms.slice(mid));
+      } else if (upperRooms.length === 0) {
+        upperRooms.push(groundRooms.pop()!);
+      }
+      upperRooms.forEach((r: any) => {
+        if (Array.isArray(r.origin)) r.origin[2] = 3.2;
+      });
+      plan.storey_plans = [
+        { name: "Ground Floor", elevation: 0, height: 3.2, rooms: groundRooms },
+        { name: "First Floor", elevation: 3.2, height: 3.2, rooms: upperRooms }
+      ];
+    }
+  }
+
+  if (isMultiStorey || plan.storey_plans.length > 1) {
+    plan.has_stairs = true;
+  }
+
+  if (/gable|pitch/i.test(text)) {
+    plan.roof_type = "gable";
+  } else if (/hip/i.test(text)) {
+    plan.roof_type = "hip";
+  } else if (/shed/i.test(text)) {
+    plan.roof_type = "shed";
+  } else if (/flat|parapet/i.test(text)) {
+    plan.roof_type = "flat";
+  } else if (!plan.roof_type) {
+    plan.roof_type = "gable";
+  }
+
   const expectedRooms = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
   const proposedRooms = plan.storey_plans.reduce((total: number, storey: any) => total + (Array.isArray(storey.rooms) ? storey.rooms.length : 0), 0);
-  const text = requestedText(brief);
   const isMultiUnit = /residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text);
   const isApartmentUnit = /apartment/.test(text) && !isMultiUnit;
-  // Multi-unit buildings need a larger programme, but a single apartment must
-  // not be forced into the same fixed high-room-count template every time.
   if ((isMultiUnit && proposedRooms < 10) ||
       (isApartmentUnit && proposedRooms < Math.max(3, expectedRooms || 0)) ||
       (expectedRooms > 0 && proposedRooms < expectedRooms)) {

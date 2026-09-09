@@ -319,21 +319,164 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         m.apply_translation(pos)
         return m
 
-    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0):
+    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0, openings=None):
         dx = float(p2[0]) - float(p1[0])
         dy = float(p2[1]) - float(p1[1])
         length = math.hypot(dx, dy)
         if length < 1e-4:
             return trimesh.Trimesh()
         angle_rad = math.atan2(dy, dx)
-        cx = (float(p1[0]) + float(p2[0])) / 2.0
-        cy = (float(p1[1]) + float(p2[1])) / 2.0
-        cz = float(z_bottom) + float(height) / 2.0
-        m = trimesh.primitives.Box(extents=[length, float(thickness), float(height)])
+        thickness = float(thickness)
+        height = float(height)
+        z_bottom = float(z_bottom)
+        
+        if not openings:
+            cx = (float(p1[0]) + float(p2[0])) / 2.0
+            cy = (float(p1[1]) + float(p2[1])) / 2.0
+            cz = z_bottom + height / 2.0
+            m = trimesh.primitives.Box(extents=[length, thickness, height])
+            R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+            m.apply_transform(R)
+            m.apply_translation([cx, cy, cz])
+            return m
+
+        valid_ops = []
+        for op in openings:
+            off = float(op.get("offset", 0.0))
+            w = float(op.get("width", 1.0))
+            h = float(op.get("height", 2.0))
+            sill = float(op.get("sill_height", 0.0))
+            if off >= 0 and off + w <= length + 1e-3 and w > 0.05 and h > 0.05:
+                valid_ops.append({
+                    "start": max(0.0, off),
+                    "end": min(length, off + w),
+                    "sill": max(0.0, sill),
+                    "top": min(height, sill + h)
+                })
+        valid_ops.sort(key=lambda x: x["start"])
+
+        boxes = []
+        cur_x = 0.0
+        for op in valid_ops:
+            if op["start"] > cur_x + 1e-3:
+                pier_w = op["start"] - cur_x
+                b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
+                b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
+                boxes.append(b)
+            if op["sill"] > 1e-3:
+                op_w = op["end"] - op["start"]
+                b = trimesh.primitives.Box(extents=[op_w, thickness, op["sill"]])
+                b.apply_translation([op["start"] + op_w / 2.0, 0, op["sill"] / 2.0])
+                boxes.append(b)
+            lintel_h = height - op["top"]
+            if lintel_h > 1e-3:
+                op_w = op["end"] - op["start"]
+                b = trimesh.primitives.Box(extents=[op_w, thickness, lintel_h])
+                b.apply_translation([op["start"] + op_w / 2.0, 0, op["top"] + lintel_h / 2.0])
+                boxes.append(b)
+            cur_x = max(cur_x, op["end"])
+
+        if cur_x < length - 1e-3:
+            pier_w = length - cur_x
+            b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
+            b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
+            boxes.append(b)
+
+        m = trimesh.util.concatenate(boxes) if boxes else trimesh.primitives.Box(extents=[length, thickness, height])
         R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
         m.apply_transform(R)
-        m.apply_translation([cx, cy, cz])
+        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
         return m
+
+    def create_railing(p1, p2, height=1.05, z_bottom=0.0, num_balusters=None):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 0.1:
+            return trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        height = float(height)
+        z_bottom = float(z_bottom)
+        parts = []
+        rail = trimesh.primitives.Box(extents=[length, 0.06, 0.05])
+        rail.apply_translation([length / 2.0, 0, height - 0.025])
+        parts.append(rail)
+        bot_rail = trimesh.primitives.Box(extents=[length, 0.04, 0.03])
+        bot_rail.apply_translation([length / 2.0, 0, 0.1])
+        parts.append(bot_rail)
+        n_posts = int(max(2, length / 0.8)) if num_balusters is None else int(num_balusters)
+        for i in range(n_posts + 1):
+            px = (i / float(n_posts)) * length
+            post = trimesh.primitives.Box(extents=[0.04, 0.04, height])
+            post.apply_translation([px, 0, height / 2.0])
+            parts.append(post)
+        m = trimesh.util.concatenate(parts)
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
+        return m
+
+    def create_window_assembly(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, frame_w=0.06, frame_d=0.08):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh(), trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
+        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
+        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
+        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
+        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
+        bot_sill = trimesh.primitives.Box(extents=[w, fd, fw])
+        bot_sill.apply_translation([0, 0, -h/2.0 + fw/2.0])
+        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head, bot_sill])
+        gw = max(0.05, w - 2*fw)
+        gh = max(0.05, h - 2*fw)
+        glass = trimesh.primitives.Box(extents=[gw, 0.02, gh])
+        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
+        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
+        cz = float(z_bottom) + float(sill_height) + h/2.0
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        frame.apply_transform(R)
+        frame.apply_translation([cx, cy, cz])
+        glass.apply_transform(R)
+        glass.apply_translation([cx, cy, cz])
+        return frame, glass
+
+    def create_door_assembly(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, frame_w=0.06, frame_d=0.10):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh(), trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
+        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
+        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
+        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
+        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
+        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head])
+        pw = max(0.05, w - 2*fw)
+        ph = max(0.05, h - fw)
+        panel = trimesh.primitives.Box(extents=[pw, 0.045, ph])
+        panel.apply_translation([0, 0, -fw/2.0])
+        handle = trimesh.primitives.Box(extents=[0.12, 0.08, 0.03])
+        handle.apply_translation([pw/2.0 - 0.10, 0.03, 0.0])
+        leaf = trimesh.util.concatenate([panel, handle])
+        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
+        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
+        cz = float(z_bottom) + h/2.0
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        frame.apply_transform(R)
+        frame.apply_translation([cx, cy, cz])
+        leaf.apply_transform(R)
+        leaf.apply_translation([cx, cy, cz])
+        return frame, leaf
 
     def create_slab(polygon_2d, thickness=0.3, z_elevation=0.0):
         pts = [[float(p[0]), float(p[1])] for p in polygon_2d]
@@ -434,6 +577,44 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         elements.append((prod, mat))
         return prod
 
+    def add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window"):
+        f_mesh, g_mesh = create_window_assembly(p1, p2, offset, width, height, sill_height, z_bottom)
+        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcWindow", mat_name="Anodized Dark Aluminum", rgb=(0.18, 0.18, 0.20))
+        p_glass = add_mesh_element(g_mesh, f"{name}_Glazing", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.82, 0.90, 0.96), transparency=0.75)
+        return p_frame, p_glass
+
+    def add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door", panel_color=(0.58, 0.38, 0.22)):
+        f_mesh, l_mesh = create_door_assembly(p1, p2, offset, width, height, z_bottom)
+        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcDoor", mat_name="Architectural Door Frame", rgb=(0.22, 0.22, 0.24))
+        p_leaf = add_mesh_element(l_mesh, f"{name}_Leaf", ifc_class="IfcDoor", mat_name="Warm Wood Veneer", rgb=panel_color)
+        return p_frame, p_leaf
+
+    def add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Balcony_Railing", rgb=(0.25, 0.25, 0.28)):
+        r_mesh = create_railing(p1, p2, height=height, z_bottom=z_bottom)
+        return add_mesh_element(r_mesh, name, ifc_class="IfcRailing", mat_name="Architectural Steel Railing", rgb=rgb)
+
+    def add_column(pos, height=3.2, radius=0.2, z_bottom=0.0, shape="round", name="Column", rgb=(0.82, 0.82, 0.80)):
+        if shape == "square":
+            m = create_box(extents=[radius * 2, radius * 2, height], pos=[pos[0], pos[1], z_bottom + height / 2.0])
+        else:
+            m = create_cylinder(radius=radius, height=height, pos=[pos[0], pos[1], z_bottom + height / 2.0])
+        return add_mesh_element(m, name, ifc_class="IfcColumn", mat_name="Reinforced Cast Concrete", rgb=rgb)
+
+    def add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam", rgb=(0.78, 0.78, 0.76)):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return None
+        angle_rad = math.atan2(dy, dx)
+        cx = (float(p1[0]) + float(p2[0])) / 2.0
+        cy = (float(p1[1]) + float(p2[1])) / 2.0
+        m = create_box(extents=[length, width, depth], pos=[0, 0, 0])
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([cx, cy, float(z_elevation) - depth / 2.0])
+        return add_mesh_element(m, name, ifc_class="IfcBeam", mat_name="Structural Concrete Beam", rgb=rgb)
+
     def commit():
         if not elements:
             return 0
@@ -462,10 +643,18 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         "create_cutwater_pier": staticmethod(create_cutwater_pier),
         "create_i_beam": staticmethod(create_i_beam),
         "create_wall": staticmethod(create_wall),
+        "create_railing": staticmethod(create_railing),
+        "create_window_assembly": staticmethod(create_window_assembly),
+        "create_door_assembly": staticmethod(create_door_assembly),
         "create_slab": staticmethod(create_slab),
         "create_stairs": staticmethod(create_stairs),
         "create_roof": staticmethod(create_roof),
         "add_mesh_element": staticmethod(add_mesh_element),
+        "add_window": staticmethod(add_window),
+        "add_door": staticmethod(add_door),
+        "add_railing": staticmethod(add_railing),
+        "add_column": staticmethod(add_column),
+        "add_beam": staticmethod(add_beam),
         "commit": staticmethod(commit)
     })()
 `;

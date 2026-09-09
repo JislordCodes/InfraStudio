@@ -52963,21 +52963,164 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         m.apply_translation(pos)
         return m
 
-    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0):
+    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0, openings=None):
         dx = float(p2[0]) - float(p1[0])
         dy = float(p2[1]) - float(p1[1])
         length = math.hypot(dx, dy)
         if length < 1e-4:
             return trimesh.Trimesh()
         angle_rad = math.atan2(dy, dx)
-        cx = (float(p1[0]) + float(p2[0])) / 2.0
-        cy = (float(p1[1]) + float(p2[1])) / 2.0
-        cz = float(z_bottom) + float(height) / 2.0
-        m = trimesh.primitives.Box(extents=[length, float(thickness), float(height)])
+        thickness = float(thickness)
+        height = float(height)
+        z_bottom = float(z_bottom)
+        
+        if not openings:
+            cx = (float(p1[0]) + float(p2[0])) / 2.0
+            cy = (float(p1[1]) + float(p2[1])) / 2.0
+            cz = z_bottom + height / 2.0
+            m = trimesh.primitives.Box(extents=[length, thickness, height])
+            R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+            m.apply_transform(R)
+            m.apply_translation([cx, cy, cz])
+            return m
+
+        valid_ops = []
+        for op in openings:
+            off = float(op.get("offset", 0.0))
+            w = float(op.get("width", 1.0))
+            h = float(op.get("height", 2.0))
+            sill = float(op.get("sill_height", 0.0))
+            if off >= 0 and off + w <= length + 1e-3 and w > 0.05 and h > 0.05:
+                valid_ops.append({
+                    "start": max(0.0, off),
+                    "end": min(length, off + w),
+                    "sill": max(0.0, sill),
+                    "top": min(height, sill + h)
+                })
+        valid_ops.sort(key=lambda x: x["start"])
+
+        boxes = []
+        cur_x = 0.0
+        for op in valid_ops:
+            if op["start"] > cur_x + 1e-3:
+                pier_w = op["start"] - cur_x
+                b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
+                b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
+                boxes.append(b)
+            if op["sill"] > 1e-3:
+                op_w = op["end"] - op["start"]
+                b = trimesh.primitives.Box(extents=[op_w, thickness, op["sill"]])
+                b.apply_translation([op["start"] + op_w / 2.0, 0, op["sill"] / 2.0])
+                boxes.append(b)
+            lintel_h = height - op["top"]
+            if lintel_h > 1e-3:
+                op_w = op["end"] - op["start"]
+                b = trimesh.primitives.Box(extents=[op_w, thickness, lintel_h])
+                b.apply_translation([op["start"] + op_w / 2.0, 0, op["top"] + lintel_h / 2.0])
+                boxes.append(b)
+            cur_x = max(cur_x, op["end"])
+
+        if cur_x < length - 1e-3:
+            pier_w = length - cur_x
+            b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
+            b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
+            boxes.append(b)
+
+        m = trimesh.util.concatenate(boxes) if boxes else trimesh.primitives.Box(extents=[length, thickness, height])
         R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
         m.apply_transform(R)
-        m.apply_translation([cx, cy, cz])
+        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
         return m
+
+    def create_railing(p1, p2, height=1.05, z_bottom=0.0, num_balusters=None):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 0.1:
+            return trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        height = float(height)
+        z_bottom = float(z_bottom)
+        parts = []
+        rail = trimesh.primitives.Box(extents=[length, 0.06, 0.05])
+        rail.apply_translation([length / 2.0, 0, height - 0.025])
+        parts.append(rail)
+        bot_rail = trimesh.primitives.Box(extents=[length, 0.04, 0.03])
+        bot_rail.apply_translation([length / 2.0, 0, 0.1])
+        parts.append(bot_rail)
+        n_posts = int(max(2, length / 0.8)) if num_balusters is None else int(num_balusters)
+        for i in range(n_posts + 1):
+            px = (i / float(n_posts)) * length
+            post = trimesh.primitives.Box(extents=[0.04, 0.04, height])
+            post.apply_translation([px, 0, height / 2.0])
+            parts.append(post)
+        m = trimesh.util.concatenate(parts)
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
+        return m
+
+    def create_window_assembly(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, frame_w=0.06, frame_d=0.08):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh(), trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
+        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
+        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
+        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
+        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
+        bot_sill = trimesh.primitives.Box(extents=[w, fd, fw])
+        bot_sill.apply_translation([0, 0, -h/2.0 + fw/2.0])
+        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head, bot_sill])
+        gw = max(0.05, w - 2*fw)
+        gh = max(0.05, h - 2*fw)
+        glass = trimesh.primitives.Box(extents=[gw, 0.02, gh])
+        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
+        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
+        cz = float(z_bottom) + float(sill_height) + h/2.0
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        frame.apply_transform(R)
+        frame.apply_translation([cx, cy, cz])
+        glass.apply_transform(R)
+        glass.apply_translation([cx, cy, cz])
+        return frame, glass
+
+    def create_door_assembly(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, frame_w=0.06, frame_d=0.10):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh(), trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
+        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
+        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
+        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
+        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
+        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head])
+        pw = max(0.05, w - 2*fw)
+        ph = max(0.05, h - fw)
+        panel = trimesh.primitives.Box(extents=[pw, 0.045, ph])
+        panel.apply_translation([0, 0, -fw/2.0])
+        handle = trimesh.primitives.Box(extents=[0.12, 0.08, 0.03])
+        handle.apply_translation([pw/2.0 - 0.10, 0.03, 0.0])
+        leaf = trimesh.util.concatenate([panel, handle])
+        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
+        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
+        cz = float(z_bottom) + h/2.0
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        frame.apply_transform(R)
+        frame.apply_translation([cx, cy, cz])
+        leaf.apply_transform(R)
+        leaf.apply_translation([cx, cy, cz])
+        return frame, leaf
 
     def create_slab(polygon_2d, thickness=0.3, z_elevation=0.0):
         pts = [[float(p[0]), float(p[1])] for p in polygon_2d]
@@ -53078,6 +53221,44 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         elements.append((prod, mat))
         return prod
 
+    def add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window"):
+        f_mesh, g_mesh = create_window_assembly(p1, p2, offset, width, height, sill_height, z_bottom)
+        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcWindow", mat_name="Anodized Dark Aluminum", rgb=(0.18, 0.18, 0.20))
+        p_glass = add_mesh_element(g_mesh, f"{name}_Glazing", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.82, 0.90, 0.96), transparency=0.75)
+        return p_frame, p_glass
+
+    def add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door", panel_color=(0.58, 0.38, 0.22)):
+        f_mesh, l_mesh = create_door_assembly(p1, p2, offset, width, height, z_bottom)
+        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcDoor", mat_name="Architectural Door Frame", rgb=(0.22, 0.22, 0.24))
+        p_leaf = add_mesh_element(l_mesh, f"{name}_Leaf", ifc_class="IfcDoor", mat_name="Warm Wood Veneer", rgb=panel_color)
+        return p_frame, p_leaf
+
+    def add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Balcony_Railing", rgb=(0.25, 0.25, 0.28)):
+        r_mesh = create_railing(p1, p2, height=height, z_bottom=z_bottom)
+        return add_mesh_element(r_mesh, name, ifc_class="IfcRailing", mat_name="Architectural Steel Railing", rgb=rgb)
+
+    def add_column(pos, height=3.2, radius=0.2, z_bottom=0.0, shape="round", name="Column", rgb=(0.82, 0.82, 0.80)):
+        if shape == "square":
+            m = create_box(extents=[radius * 2, radius * 2, height], pos=[pos[0], pos[1], z_bottom + height / 2.0])
+        else:
+            m = create_cylinder(radius=radius, height=height, pos=[pos[0], pos[1], z_bottom + height / 2.0])
+        return add_mesh_element(m, name, ifc_class="IfcColumn", mat_name="Reinforced Cast Concrete", rgb=rgb)
+
+    def add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam", rgb=(0.78, 0.78, 0.76)):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return None
+        angle_rad = math.atan2(dy, dx)
+        cx = (float(p1[0]) + float(p2[0])) / 2.0
+        cy = (float(p1[1]) + float(p2[1])) / 2.0
+        m = create_box(extents=[length, width, depth], pos=[0, 0, 0])
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([cx, cy, float(z_elevation) - depth / 2.0])
+        return add_mesh_element(m, name, ifc_class="IfcBeam", mat_name="Structural Concrete Beam", rgb=rgb)
+
     def commit():
         if not elements:
             return 0
@@ -53106,10 +53287,18 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         "create_cutwater_pier": staticmethod(create_cutwater_pier),
         "create_i_beam": staticmethod(create_i_beam),
         "create_wall": staticmethod(create_wall),
+        "create_railing": staticmethod(create_railing),
+        "create_window_assembly": staticmethod(create_window_assembly),
+        "create_door_assembly": staticmethod(create_door_assembly),
         "create_slab": staticmethod(create_slab),
         "create_stairs": staticmethod(create_stairs),
         "create_roof": staticmethod(create_roof),
         "add_mesh_element": staticmethod(add_mesh_element),
+        "add_window": staticmethod(add_window),
+        "add_door": staticmethod(add_door),
+        "add_railing": staticmethod(add_railing),
+        "add_column": staticmethod(add_column),
+        "add_beam": staticmethod(add_beam),
         "commit": staticmethod(commit)
     })()
 `;
@@ -53621,21 +53810,24 @@ h = InfraStudioHarness(ifc, storey)
 
 # AVAILABLE HARNESS METHODS:
 # 1. h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
-# 2. h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0) -> trimesh.Trimesh
-# 3. h.create_stairs(start_pt=[x,y,z], length=3.5, width=1.2, height=3.2, num_steps=16) -> trimesh.Trimesh
-# 4. h.create_roof(footprint_2d, roof_type="gable|flat|shed|hip", height=2.5, z_elevation=3.2, thickness=0.3) -> trimesh.Trimesh
-# 5. h.create_cylinder(radius=0.25, height=3.5, pos=[x,y,z], axis=[0,0,1]) -> trimesh.Trimesh (columns)
-# 6. h.create_i_beam(depth=0.5, flange_w=0.25, web_t=0.02, flange_t=0.03, length=8.0, pos=[x,y,z], rot_z_deg=0.0) -> trimesh.Trimesh (beams)
-# 7. h.create_box(extents=[l,w,h], pos=[x,y,z], rot_z_deg=0.0) -> trimesh.Trimesh (curtain walls, glass panels, parapets)
-# 8. h.add_mesh_element(mesh, name, ifc_class="IfcWall|IfcSlab|IfcRoof|IfcColumn|IfcBeam|IfcStair|IfcDoor|IfcWindow|IfcFooting", mat_name="...", rgb=(r,g,b), transparency=0.0)
+# 2. h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[{"offset": float, "width": float, "height": float, "sill_height": float}]) -> trimesh.Trimesh (creates watertight walls with actual opening voids!)
+# 3. h.add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window") -> adds dark aluminum frame and low-e glass pane
+# 4. h.add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door") -> adds door frame and wood veneer leaf
+# 5. h.add_column(pos=[x,y], height=3.2, radius=0.2, z_bottom=0.0, shape="round|square", name="Column") -> adds structural concrete column
+# 6. h.add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam") -> adds structural beam
+# 7. h.add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Railing") -> adds balcony or stair safety railing
+# 8. h.create_stairs(start_pt=[x,y,z], length=3.6, width=1.2, height=3.2, num_steps=18) -> trimesh.Trimesh
+# 9. h.create_roof(footprint_2d, roof_type="gable|flat|shed|hip", height=2.5, z_elevation=3.2, thickness=0.3) -> trimesh.Trimesh
+# 10. h.add_mesh_element(mesh, name, ifc_class="IfcWall|IfcSlab|IfcRoof|IfcColumn|IfcBeam|IfcStair|IfcDoor|IfcWindow|IfcRailing", mat_name="...", rgb=(r,g,b), transparency=0.0)
 
 # Build:
-# 1. Ground floor slab & upper slabs
-# 2. Exterior facade walls & interior partitions (avoid duplicate overlapping walls)
-# 3. Floor-to-ceiling glass curtain walls or picture windows (use ifc_class="IfcWindow", mat_name="Low-E Glass", rgb=(0.85, 0.92, 0.98), transparency=0.7)
-# 4. Monolithic staircases for multi-storey buildings (ifc_class="IfcStair", mat_name="Timber Tread", rgb=(0.76, 0.58, 0.38))
-# 5. Structural columns/beams for large open spans
-# 6. Ceiling slabs & Roof structure (pitched gable, hip, shed, or flat parapet)
+# 1. Continuous ground podium slab & upper floor plates with cantilevered balconies
+# 2. Structural column grid at spans/corners
+# 3. Exterior & interior walls with genuine window/door opening voids via openings=[...]
+# 4. Framed windows & panel doors inserted directly into the wall openings
+# 5. Safety railings along balcony edges and staircases
+# 6. Roof structure with eaves overhangs or capped parapets
+# 7. Monolithic staircases for multi-storey buildings
 
 count = h.commit()
 save_and_load_ifc()
@@ -54635,24 +54827,66 @@ function synthesizeBuildingPythonCode(plan, brief) {
         rBounds.push({ name: r5.name || "Room", x: ox, y: oy, w, l: l3, windows: r5.windows || [], doors: r5.doors || [] });
       }
     }
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      totalMinX = Math.min(totalMinX, rb.x);
-      totalMinY = Math.min(totalMinY, rb.y);
-      totalMaxX = Math.max(totalMaxX, rb.x + rb.w);
-      totalMaxY = Math.max(totalMaxY, rb.y + rb.l);
-      const fp = `[[${rb.x}, ${rb.y}], [${rb.x + rb.w}, ${rb.y}], [${rb.x + rb.w}, ${rb.y + rb.l}], [${rb.x}, ${rb.y + rb.l}]]`;
-      const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, "_");
-      lines.push(`_slab_${sIdx}_${rIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.25, z_elevation=${elev - 0.25})`);
-      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}_${rIdx}, "${sName}_${cleanName}_Floor_Slab", ifc_class="IfcSlab", mat_name="Polished Architectural Concrete", rgb=(0.78, 0.78, 0.76))`);
+    const pad = 0.3;
+    const isGround = sIdx === 0;
+    const isUpper = sIdx > 0;
+    const balcDepth = isUpper ? 1.2 : 0;
+    const sMinX = Math.min(...rBounds.map((r5) => r5.x));
+    const sMinY = Math.min(...rBounds.map((r5) => r5.y));
+    const sMaxX = Math.max(...rBounds.map((r5) => r5.x + r5.w));
+    const sMaxY = Math.max(...rBounds.map((r5) => r5.y + r5.l));
+    totalMinX = Math.min(totalMinX, sMinX);
+    totalMinY = Math.min(totalMinY, sMinY - balcDepth);
+    totalMaxX = Math.max(totalMaxX, sMaxX);
+    totalMaxY = Math.max(totalMaxY, sMaxY);
+    if (isGround) {
+      lines.push(`# Ground Floor Continuous Podium Slab`);
+      const fp = `[[${(sMinX - pad).toFixed(2)}, ${(sMinY - pad).toFixed(2)}], [${(sMaxX + pad).toFixed(2)}, ${(sMinY - pad).toFixed(2)}], [${(sMaxX + pad).toFixed(2)}, ${(sMaxY + pad).toFixed(2)}], [${(sMinX - pad).toFixed(2)}, ${(sMaxY + pad).toFixed(2)}]]`;
+      lines.push(`_slab_${sIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.30, z_elevation=${(elev - 0.3).toFixed(2)})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}, "${sName}_Ground_Podium_Slab", ifc_class="IfcSlab", mat_name="Cast-in-Place Structural Concrete", rgb=(0.76, 0.76, 0.74))`);
+    } else {
+      lines.push(`# Upper Level Continuous Floor Plate with Cantilever Balcony`);
+      const fp = `[[${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMaxY.toFixed(2)}], [${sMinX.toFixed(2)}, ${sMaxY.toFixed(2)}]]`;
+      lines.push(`_slab_${sIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.25, z_elevation=${(elev - 0.25).toFixed(2)})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}, "${sName}_Cantilever_Floor_Plate", ifc_class="IfcSlab", mat_name="Post-Tensioned Architectural Concrete", rgb=(0.80, 0.80, 0.78))`);
+      lines.push(`h_${sIdx}.add_railing([${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_Front_Railing", rgb=(0.20, 0.20, 0.22))`);
+      lines.push(`h_${sIdx}.add_railing([${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMinX.toFixed(2)}, ${sMinY.toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_West_Railing", rgb=(0.20, 0.20, 0.22))`);
+      lines.push(`h_${sIdx}.add_railing([${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMinY.toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_East_Railing", rgb=(0.20, 0.20, 0.22))`);
+    }
+    lines.push("");
+    lines.push(`# Structural Framing: Columns`);
+    const rawCorners = [];
+    for (const rb of rBounds) {
+      rawCorners.push([rb.x, rb.y]);
+      rawCorners.push([rb.x + rb.w, rb.y]);
+      rawCorners.push([rb.x + rb.w, rb.y + rb.l]);
+      rawCorners.push([rb.x, rb.y + rb.l]);
+    }
+    const uniqueCols = [];
+    for (const pt of rawCorners) {
+      if (!uniqueCols.some((c5) => Math.hypot(c5[0] - pt[0], c5[1] - pt[1]) < 1.4)) {
+        uniqueCols.push(pt);
+      }
+    }
+    for (let cIdx = 0; cIdx < uniqueCols.length; cIdx++) {
+      const [colX, colY] = uniqueCols[cIdx];
+      lines.push(`h_${sIdx}.add_column([${colX.toFixed(2)}, ${colY.toFixed(2)}], height=${height.toFixed(2)}, radius=0.18, z_bottom=${elev.toFixed(2)}, shape="round", name="${sName}_Column_${cIdx + 1}", rgb=(0.84, 0.84, 0.82))`);
     }
     lines.push("");
     const rawSegments = [];
     for (const rb of rBounds) {
-      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x + rb.w, rb.y], roomName: rb.name });
-      rawSegments.push({ p1: [rb.x + rb.w, rb.y], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name });
-      rawSegments.push({ p1: [rb.x + rb.w, rb.y + rb.l], p2: [rb.x, rb.y + rb.l], roomName: rb.name });
-      rawSegments.push({ p1: [rb.x, rb.y + rb.l], p2: [rb.x, rb.y], roomName: rb.name });
+      const sWins = rb.windows.filter((w) => String(w.wall || "south").toLowerCase() === "south");
+      const sDoors = rb.doors.filter((d5) => String(d5.wall || "south").toLowerCase() === "south");
+      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x + rb.w, rb.y], roomName: rb.name, windows: sWins, doors: sDoors });
+      const nWins = rb.windows.filter((w) => String(w.wall).toLowerCase() === "north");
+      const nDoors = rb.doors.filter((d5) => String(d5.wall).toLowerCase() === "north");
+      rawSegments.push({ p1: [rb.x, rb.y + rb.l], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name, windows: nWins, doors: nDoors });
+      const eWins = rb.windows.filter((w) => String(w.wall).toLowerCase() === "east");
+      const eDoors = rb.doors.filter((d5) => String(d5.wall).toLowerCase() === "east");
+      rawSegments.push({ p1: [rb.x + rb.w, rb.y], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name, windows: eWins, doors: eDoors });
+      const wWins = rb.windows.filter((w) => String(w.wall).toLowerCase() === "west");
+      const wDoors = rb.doors.filter((d5) => String(d5.wall).toLowerCase() === "west");
+      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x, rb.y + rb.l], roomName: rb.name, windows: wWins, doors: wDoors });
     }
     const uniqueWalls = [];
     for (const seg of rawSegments) {
@@ -54665,121 +54899,103 @@ function synthesizeBuildingPythonCode(plan, brief) {
       for (const uw of uniqueWalls) {
         if (Math.hypot(uw.p1[0] - sp1[0], uw.p1[1] - sp1[1]) < 0.15 && Math.hypot(uw.p2[0] - sp2[0], uw.p2[1] - sp2[1]) < 0.15) {
           uw.isShared = true;
+          uw.windows.push(...seg.windows);
+          uw.doors.push(...seg.doors);
           found = true;
           break;
         }
       }
       if (!found) {
-        uniqueWalls.push({ p1: sp1, p2: sp2, isShared: false, name: seg.roomName });
+        uniqueWalls.push({ p1: sp1, p2: sp2, isShared: false, name: seg.roomName, windows: [...seg.windows], doors: [...seg.doors] });
       }
     }
-    lines.push(`# Walls for ${sName}`);
+    lines.push(`# Walls with Framed Opening Voids for ${sName}`);
     for (let wIdx = 0; wIdx < uniqueWalls.length; wIdx++) {
       const uw = uniqueWalls[wIdx];
+      const wallLen = Math.hypot(uw.p2[0] - uw.p1[0], uw.p2[1] - uw.p1[1]);
       const thick = uw.isShared ? 0.15 : 0.25;
       const mat = uw.isShared ? "Interior Partition Drywall" : "Smooth Architectural Stucco";
       const rgb = uw.isShared ? "(0.90, 0.90, 0.88)" : "(0.95, 0.95, 0.92)";
       const wName = `${sName}_${uw.isShared ? "Interior" : "Perimeter"}_Wall_${wIdx + 1}`;
-      lines.push(`_w_${sIdx}_${wIdx} = h_${sIdx}.create_wall([${uw.p1[0]}, ${uw.p1[1]}], [${uw.p2[0]}, ${uw.p2[1]}], height=${height}, thickness=${thick}, z_bottom=${elev})`);
-      lines.push(`h_${sIdx}.add_mesh_element(_w_${sIdx}_${wIdx}, "${wName}", ifc_class="IfcWall", mat_name="${mat}", rgb=${rgb})`);
-    }
-    lines.push("");
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      for (let winIdx = 0; winIdx < rb.windows.length; winIdx++) {
-        const win = rb.windows[winIdx];
-        const winW = Number(win.width || 1.4);
-        const winH = Number(win.height || 1.5);
-        const sillH = Number(win.sill_height || 0.9);
-        const offset = Number(win.offset || 1);
-        const wall = String(win.wall || "south").toLowerCase();
-        let cx = rb.x + offset + winW / 2;
-        let cy = rb.y;
-        let rotZ = 0;
-        if (wall === "north") {
-          cy = rb.y + rb.l;
-          rotZ = 0;
-        } else if (wall === "east") {
-          cx = rb.x + rb.w;
-          cy = rb.y + offset + winW / 2;
-          rotZ = 90;
-        } else if (wall === "west") {
-          cx = rb.x;
-          cy = rb.y + offset + winW / 2;
-          rotZ = 90;
-        }
-        const cz = elev + sillH + winH / 2;
-        const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, "_");
-        lines.push(`_win_${sIdx}_${rIdx}_${winIdx} = h_${sIdx}.create_box(extents=[${winW}, 0.08, ${winH}], pos=[${cx}, ${cy}, ${cz}], rot_z_deg=${rotZ})`);
-        lines.push(`h_${sIdx}.add_mesh_element(_win_${sIdx}_${rIdx}_${winIdx}, "${sName}_${cleanName}_Window_${winIdx + 1}", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.85, 0.92, 0.98), transparency=0.7)`);
+      const openings = [];
+      const cleanWindows = [];
+      for (const w of uw.windows) {
+        const wW = Number(w.width || 1.4);
+        const wH = Number(w.height || 1.5);
+        const sH = Number(w.sill_height || 0.9);
+        const off = Math.max(0.3, Math.min(Number(w.offset || 1), wallLen - wW - 0.3));
+        const cleanOp = { offset: Number(off.toFixed(2)), width: wW, height: wH, sill_height: sH };
+        openings.push(cleanOp);
+        cleanWindows.push(cleanOp);
       }
-    }
-    lines.push("");
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      const doorList = rb.doors.length > 0 ? rb.doors : [{ wall: "south", offset: 1, width: 0.9, height: 2.1 }];
-      for (let doorIdx = 0; doorIdx < doorList.length; doorIdx++) {
-        const door = doorList[doorIdx];
-        const doorW = Number(door.width || 0.9);
-        const doorH = Number(door.height || 2.1);
-        const offset = Number(door.offset || 1);
-        const wall = String(door.wall || "south").toLowerCase();
-        let cx = rb.x + offset + doorW / 2;
-        let cy = rb.y;
-        let rotZ = 0;
-        if (wall === "north") {
-          cy = rb.y + rb.l;
-          rotZ = 0;
-        } else if (wall === "east") {
-          cx = rb.x + rb.w;
-          cy = rb.y + offset + doorW / 2;
-          rotZ = 90;
-        } else if (wall === "west") {
-          cx = rb.x;
-          cy = rb.y + offset + doorW / 2;
-          rotZ = 90;
-        }
-        const cz = elev + doorH / 2;
-        const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, "_");
-        lines.push(`_door_${sIdx}_${rIdx}_${doorIdx} = h_${sIdx}.create_box(extents=[${doorW}, 0.08, ${doorH}], pos=[${cx}, ${cy}, ${cz}], rot_z_deg=${rotZ})`);
-        lines.push(`h_${sIdx}.add_mesh_element(_door_${sIdx}_${rIdx}_${doorIdx}, "${sName}_${cleanName}_Door_${doorIdx + 1}", ifc_class="IfcDoor", mat_name="Solid Architectural Wood Door", rgb=(0.58, 0.38, 0.22))`);
+      const cleanDoors = [];
+      for (const d5 of uw.doors) {
+        const dW = Number(d5.width || 0.9);
+        const dH = Number(d5.height || 2.1);
+        const off = Math.max(0.2, Math.min(Number(d5.offset || 1), wallLen - dW - 0.2));
+        const cleanOp = { offset: Number(off.toFixed(2)), width: dW, height: dH, sill_height: 0 };
+        openings.push(cleanOp);
+        cleanDoors.push(cleanOp);
+      }
+      const opJson = openings.length ? JSON.stringify(openings) : "None";
+      lines.push(`_w_${sIdx}_${wIdx} = h_${sIdx}.create_wall([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], height=${height.toFixed(2)}, thickness=${thick}, z_bottom=${elev.toFixed(2)}, openings=${opJson})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_w_${sIdx}_${wIdx}, "${wName}", ifc_class="IfcWall", mat_name="${mat}", rgb=${rgb})`);
+      for (let winI = 0; winI < cleanWindows.length; winI++) {
+        const w = cleanWindows[winI];
+        lines.push(`h_${sIdx}.add_window([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], offset=${w.offset}, width=${w.width}, height=${w.height}, sill_height=${w.sill_height}, z_bottom=${elev.toFixed(2)}, name="${wName}_Window_${winI + 1}")`);
+      }
+      for (let doorI = 0; doorI < cleanDoors.length; doorI++) {
+        const d5 = cleanDoors[doorI];
+        lines.push(`h_${sIdx}.add_door([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], offset=${d5.offset}, width=${d5.width}, height=${d5.height}, z_bottom=${elev.toFixed(2)}, name="${wName}_Door_${doorI + 1}")`);
       }
     }
     lines.push("");
     if ((plan.has_stairs || storeys.length > 1) && sIdx < storeys.length - 1) {
-      const stairX = rBounds[0].x + 1;
-      const stairY = rBounds[0].y + 1;
+      const stairX = Number((rBounds[0].x + 0.8).toFixed(2));
+      const stairY = Number((rBounds[0].y + 0.8).toFixed(2));
       lines.push(`# Monolithic Staircase connecting ${sName} to upper level`);
-      lines.push(`_stairs_${sIdx} = h_${sIdx}.create_stairs(start_pt=[${stairX}, ${stairY}, ${elev}], length=3.5, width=1.2, height=${height}, num_steps=16)`);
-      lines.push(`h_${sIdx}.add_mesh_element(_stairs_${sIdx}, "${sName}_Monolithic_Stairs", ifc_class="IfcStair", mat_name="Architectural Hardwood Tread", rgb=(0.76, 0.58, 0.38))`);
+      lines.push(`_stairs_${sIdx} = h_${sIdx}.create_stairs(start_pt=[${stairX}, ${stairY}, ${elev.toFixed(2)}], length=3.6, width=1.2, height=${height.toFixed(2)}, num_steps=18)`);
+      lines.push(`h_${sIdx}.add_mesh_element(_stairs_${sIdx}, "${sName}_Monolithic_Stairs", ifc_class="IfcStair", mat_name="Architectural Hardwood Tread", rgb=(0.65, 0.45, 0.25))`);
+      lines.push(`h_${sIdx}.add_railing([${stairX}, ${stairY}], [${(stairX + 3.6).toFixed(2)}, ${stairY}], height=0.95, z_bottom=${elev.toFixed(2)}, name="${sName}_Stair_Handrail", rgb=(0.20, 0.20, 0.22))`);
       lines.push("");
     }
-    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
-      const rb = rBounds[rIdx];
-      const fp = `[[${rb.x}, ${rb.y}], [${rb.x + rb.w}, ${rb.y}], [${rb.x + rb.w}, ${rb.y + rb.l}], [${rb.x}, ${rb.y + rb.l}]]`;
-      const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, "_");
-      lines.push(`_ceil_${sIdx}_${rIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.20, z_elevation=${elev + height})`);
-      lines.push(`h_${sIdx}.add_mesh_element(_ceil_${sIdx}_${rIdx}, "${sName}_${cleanName}_Ceiling", ifc_class="IfcSlab", mat_name="White Gypsum Ceiling Plaster", rgb=(0.98, 0.98, 0.98))`);
-    }
+    const ceilFp = `[[${sMinX.toFixed(2)}, ${sMinY.toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMinY.toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMaxY.toFixed(2)}], [${sMinX.toFixed(2)}, ${sMaxY.toFixed(2)}]]`;
+    lines.push(`_ceil_${sIdx} = h_${sIdx}.create_slab(${ceilFp}, thickness=0.20, z_elevation=${(elev + height).toFixed(2)})`);
+    lines.push(`h_${sIdx}.add_mesh_element(_ceil_${sIdx}, "${sName}_Ceiling", ifc_class="IfcSlab", mat_name="White Gypsum Ceiling Plaster", rgb=(0.98, 0.98, 0.98))`);
     lines.push("");
     lines.push(`h_${sIdx}.commit()`);
     lines.push("");
   }
   if (roofType !== "none") {
-    const minX = isFinite(totalMinX) ? totalMinX - 0.4 : -0.4;
-    const minY = isFinite(totalMinY) ? totalMinY - 0.4 : -0.4;
-    const maxX = isFinite(totalMaxX) ? totalMaxX + 0.4 : 10.4;
-    const maxY = isFinite(totalMaxY) ? totalMaxY + 0.4 : 8.4;
-    const roofFp = `[[${minX}, ${minY}], [${maxX}, ${minY}], [${maxX}, ${maxY}], [${minX}, ${maxY}]]`;
+    const minX = isFinite(totalMinX) ? totalMinX : 0;
+    const minY = isFinite(totalMinY) ? totalMinY : 0;
+    const maxX = isFinite(totalMaxX) ? totalMaxX : 10;
+    const maxY = isFinite(totalMaxY) ? totalMaxY : 8;
     const rType = roofType.includes("flat") ? "flat" : roofType.includes("shed") ? "shed" : roofType.includes("hip") ? "hip" : "gable";
-    const roofHeight = rType === "flat" ? 0.3 : 2.4;
+    const roofHeight = rType === "flat" ? 0.3 : 2.5;
     lines.push(`# ========================================================`);
     lines.push(`# ROOF STRUCTURE: ${rType.toUpperCase()}`);
     lines.push(`# ========================================================`);
     lines.push(`_top_st = _st_${storeys.length - 1}`);
     lines.push(`h_roof = InfraStudioHarness(ifc, _top_st)`);
-    lines.push(`_roof_mesh = h_roof.create_roof(${roofFp}, roof_type="${rType}", height=${roofHeight}, z_elevation=${topZ + 0.2}, thickness=0.30)`);
-    lines.push(`h_roof.add_mesh_element(_roof_mesh, "Architectural_${rType}_Roof", ifc_class="IfcRoof", mat_name="Dark Anthracite Standing Seam Roof", rgb=(0.25, 0.26, 0.28))`);
+    if (rType === "flat") {
+      const roofFp = `[[${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}]]`;
+      lines.push(`_roof_slab = h_roof.create_slab(${roofFp}, thickness=0.25, z_elevation=${topZ.toFixed(2)})`);
+      lines.push(`h_roof.add_mesh_element(_roof_slab, "Flat_Roof_Diaphragm", ifc_class="IfcSlab", mat_name="Insulated Membrane Roof Slab", rgb=(0.70, 0.70, 0.68))`);
+      lines.push(`# Perimeter Parapet Wall with Coping`);
+      lines.push(`_p1 = h_roof.create_wall([${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`_p2 = h_roof.create_wall([${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`_p3 = h_roof.create_wall([${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`_p4 = h_roof.create_wall([${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+      lines.push(`h_roof.add_mesh_element(_p1, "Roof_Parapet_South", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+      lines.push(`h_roof.add_mesh_element(_p2, "Roof_Parapet_East", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+      lines.push(`h_roof.add_mesh_element(_p3, "Roof_Parapet_North", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+      lines.push(`h_roof.add_mesh_element(_p4, "Roof_Parapet_West", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+    } else {
+      const roofFp = `[[${(minX - 0.5).toFixed(2)}, ${(minY - 0.5).toFixed(2)}], [${(maxX + 0.5).toFixed(2)}, ${(minY - 0.5).toFixed(2)}], [${(maxX + 0.5).toFixed(2)}, ${(maxY + 0.5).toFixed(2)}], [${(minX - 0.5).toFixed(2)}, ${(maxY + 0.5).toFixed(2)}]]`;
+      lines.push(`_roof_mesh = h_roof.create_roof(${roofFp}, roof_type="${rType}", height=${roofHeight}, z_elevation=${(topZ + 0.15).toFixed(2)}, thickness=0.30)`);
+      lines.push(`h_roof.add_mesh_element(_roof_mesh, "Architectural_${rType}_Roof", ifc_class="IfcRoof", mat_name="Standing Seam Architectural Zinc", rgb=(0.24, 0.26, 0.28))`);
+    }
     lines.push(`h_roof.commit()`);
     lines.push("");
   }
@@ -54819,9 +55035,45 @@ function repairPlan(plan, brief) {
   if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
     plan.storey_plans = Array.isArray(plan.rooms) && plan.rooms.length ? [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: plan.rooms }] : minimumBuildingPlan(brief);
   }
+  const text = requestedText(brief);
+  const isMultiStorey = /2.?stor|two.?stor|second floor|upper floor|first floor|multi.?stor/i.test(text);
+  if (isMultiStorey && plan.storey_plans.length === 1) {
+    const allRooms = plan.storey_plans[0].rooms || [];
+    if (allRooms.length >= 2) {
+      const groundRooms = allRooms.filter((r5) => /living|kitchen|dining|entrance|entry|hall|lounge|family/i.test(String(r5.name)));
+      const upperRooms = allRooms.filter((r5) => !groundRooms.includes(r5));
+      if (groundRooms.length === 0) {
+        const mid = Math.ceil(allRooms.length / 2);
+        groundRooms.push(...allRooms.slice(0, mid));
+        upperRooms.push(...allRooms.slice(mid));
+      } else if (upperRooms.length === 0) {
+        upperRooms.push(groundRooms.pop());
+      }
+      upperRooms.forEach((r5) => {
+        if (Array.isArray(r5.origin)) r5.origin[2] = 3.2;
+      });
+      plan.storey_plans = [
+        { name: "Ground Floor", elevation: 0, height: 3.2, rooms: groundRooms },
+        { name: "First Floor", elevation: 3.2, height: 3.2, rooms: upperRooms }
+      ];
+    }
+  }
+  if (isMultiStorey || plan.storey_plans.length > 1) {
+    plan.has_stairs = true;
+  }
+  if (/gable|pitch/i.test(text)) {
+    plan.roof_type = "gable";
+  } else if (/hip/i.test(text)) {
+    plan.roof_type = "hip";
+  } else if (/shed/i.test(text)) {
+    plan.roof_type = "shed";
+  } else if (/flat|parapet/i.test(text)) {
+    plan.roof_type = "flat";
+  } else if (!plan.roof_type) {
+    plan.roof_type = "gable";
+  }
   const expectedRooms = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
   const proposedRooms = plan.storey_plans.reduce((total, storey) => total + (Array.isArray(storey.rooms) ? storey.rooms.length : 0), 0);
-  const text = requestedText(brief);
   const isMultiUnit = /residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text);
   const isApartmentUnit = /apartment/.test(text) && !isMultiUnit;
   if (isMultiUnit && proposedRooms < 10 || isApartmentUnit && proposedRooms < Math.max(3, expectedRooms || 0) || expectedRooms > 0 && proposedRooms < expectedRooms) {
@@ -55035,7 +55287,7 @@ function deterministicReview(scene, requirements, category) {
   }
   const solids = objects.filter((object) => {
     const cls = String(object?.ifc_class || object?.type || "");
-    return !/IfcDoor|IfcWindow|IfcOpeningElement/.test(cls) && boundsOf(object);
+    return !/IfcDoor|IfcWindow|IfcOpeningElement|IfcRailing/.test(cls) && boundsOf(object);
   });
   for (let i5 = 0; i5 < solids.length; i5++) {
     for (let j5 = i5 + 1; j5 < solids.length; j5++) {
