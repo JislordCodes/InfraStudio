@@ -62,3 +62,4 @@ aws-lambda/dummy.json
 Thumbs.db
 .vscode/
 .idea/
+*.ifc

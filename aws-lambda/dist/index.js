@@ -52647,1138 +52647,8 @@ module.exports = __toCommonJS(index_exports);
 var import_undici = __toESM(require_undici());
 var import_client_secrets_manager = __toESM(require_dist_cjs16());
 
-// ../supabase/functions/_shared/shared.ts
-function getMcpUrl() {
-  const configured = typeof Deno !== "undefined" ? Deno.env.get("MCP_URL") : process.env.MCP_URL;
-  const url = configured?.trim();
-  if (!url) {
-    throw new Error("MCP_URL is not configured. Set it to the stable ECS MCP endpoint, including /mcp.");
-  }
-  try {
-    const parsed = new URL(url);
-    if (!/^https?:$/.test(parsed.protocol)) throw new Error("unsupported protocol");
-    return parsed.toString();
-  } catch {
-    throw new Error("MCP_URL must be a valid HTTP(S) URL ending in /mcp.");
-  }
-}
-var CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS"
-};
-var STATELESS_MCP_SESSION_ID = "stateless-mcp";
-function extractText(content) {
-  if (!content) return void 0;
-  if (Array.isArray(content)) {
-    for (const item of content) {
-      if (Array.isArray(item)) {
-        const r5 = extractText(item);
-        if (r5) return r5;
-      } else if (typeof item === "object" && item !== null) {
-        const o3 = item;
-        if (typeof o3.text === "string") return o3.text;
-      }
-    }
-  }
-  return void 0;
-}
-async function mcpPost(body, clientSessionId) {
-  const headers = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/event-stream"
-  };
-  if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
-  const res = await fetch(getMcpUrl(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  });
-  const returnedSession = res.headers.get("mcp-session-id") || clientSessionId || STATELESS_MCP_SESSION_ID;
-  const text = await res.text();
-  if (text.trim().startsWith("data:")) {
-    const l3 = text.split("\n").find((l4) => l4.startsWith("data:"));
-    const data = l3 ? JSON.parse(l3.slice(5).trim()) : {};
-    return { data, session: returnedSession };
-  }
-  try {
-    return { data: JSON.parse(text), session: returnedSession };
-  } catch {
-    return { data: { raw: text }, session: returnedSession };
-  }
-}
-async function mcpInit(clientSessionId) {
-  const res1 = await mcpPost({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
-  }, clientSessionId);
-  const newSession = res1.session || STATELESS_MCP_SESSION_ID;
-  await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, newSession).catch(() => {
-  });
-  return newSession;
-}
-function sanitizePythonCode(code) {
-  if (!code || typeof code !== "string") return code;
-  const safeHeader = `
-import math
-import numpy as np
-import trimesh
-
-NaN = float('nan')
-nan = float('nan')
-null = None
-true = True
-false = False
-Infinity = float('inf')
-inf = float('inf')
-
-try:
-    _orig_apply_transform = trimesh.primitives.Primitive.apply_transform
-    def _safe_apply_transform(self, matrix):
-        try:
-            return _orig_apply_transform(self, matrix)
-        except Exception:
-            mesh = self.to_mesh()
-            mesh.apply_transform(matrix)
-            return mesh
-    trimesh.primitives.Primitive.apply_transform = _safe_apply_transform
-except Exception:
-    pass
-
-try:
-    _orig_creation_cylinder = trimesh.creation.cylinder
-    def _safe_creation_cylinder(radius, height=None, sections=32, segment=None, transform=None):
-        try:
-            return _orig_creation_cylinder(radius=radius, height=height, sections=sections, segment=segment, transform=transform)
-        except Exception:
-            h = height if height is not None else 1.0
-            mesh = trimesh.primitives.Cylinder(radius=radius, height=h, sections=sections).to_mesh()
-            if transform is not None:
-                mesh.apply_transform(transform)
-            return mesh
-    trimesh.creation.cylinder = _safe_creation_cylinder
-except Exception:
-    pass
-
-try:
-    import mathutils
-except Exception:
-    mathutils = None
-
-def extrude_polygon_safe(poly, height=1.0):
-    pts = None
-    if hasattr(poly, 'exterior'):
-        pts = list(poly.exterior.coords)[:-1]
-    elif isinstance(poly, (list, tuple, np.ndarray)):
-        pts = list(poly)
-    else:
-        try:
-            pts = list(poly.vertices)
-        except Exception:
-            pts = list(poly)
-
-    pts_2d = [[float(p[0]), float(p[1])] for p in pts]
-    N = len(pts_2d)
-    bottom_v = [[p[0], p[1], 0.0] for p in pts_2d]
-    top_v = [[p[0], p[1], float(height)] for p in pts_2d]
-    all_v = np.array(bottom_v + top_v, dtype=float)
-
-    cap_tris = []
-    if mathutils is not None and hasattr(mathutils, 'geometry'):
-        try:
-            cap_tris = mathutils.geometry.tessellate_polygon([pts_2d])
-        except Exception:
-            cap_tris = []
-    if not cap_tris:
-        for i in range(1, N - 1):
-            cap_tris.append((0, i, i + 1))
-
-    faces = []
-    for (i, j, k) in cap_tris:
-        faces.append([i, k, j])
-    for (i, j, k) in cap_tris:
-        faces.append([N + i, N + j, N + k])
-    for i in range(N):
-        nxt = (i + 1) % N
-        faces.append([i, nxt, N + nxt])
-        faces.append([i, N + nxt, N + i])
-
-    m = trimesh.Trimesh(vertices=all_v, faces=np.array(faces, dtype=int), process=True)
-    return m
-
-try:
-    trimesh.creation.extrude_polygon = extrude_polygon_safe
-except Exception:
-    pass
-
-def InfraStudioHarness(ifc_file=None, storey=None):
-    if ifc_file is None:
-        try:
-            ifc_file = get_ifc_file()
-        except Exception:
-            ifc_file = None
-
-    if storey is None and ifc_file is not None:
-        try:
-            st = ifc_file.by_type("IfcBuildingStorey")
-            storey = st[0] if st else None
-        except Exception:
-            storey = None
-
-    body_ctx = None
-    try:
-        contexts = ifc_file.by_type("IfcGeometricRepresentationSubContext")
-        for ctx in contexts:
-            if getattr(ctx, "ContextIdentifier", "") == "Body":
-                body_ctx = ctx
-                break
-        if body_ctx is None:
-            m_ctx = ifc_file.by_type("IfcGeometricRepresentationContext")
-            mc = m_ctx[0] if m_ctx else ifc_file.create_entity("IfcGeometricRepresentationContext", ContextType="Model", CoordinateSpaceDimension=3, Precision=1e-5)
-            body_ctx = ifc_file.create_entity("IfcGeometricRepresentationSubContext", ContextIdentifier="Body", ContextType="Model", TargetView="MODEL_VIEW", ParentContext=mc)
-    except Exception:
-        body_ctx = None
-
-    elements = []
-    styles = {}
-
-    def create_box(extents=[1, 1, 1], pos=[0, 0, 0], rot_z_deg=0.0):
-        m = trimesh.primitives.Box(extents=extents)
-        if rot_z_deg != 0.0:
-            rad = math.radians(rot_z_deg)
-            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
-            m.apply_transform(R)
-        m.apply_translation(pos)
-        return m
-
-    def create_cylinder(radius=0.5, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
-        m = trimesh.primitives.Cylinder(radius=radius, height=height, sections=sections)
-        ax = np.array(axis, dtype=float)
-        norm = np.linalg.norm(ax)
-        if norm > 1e-6:
-            ax = ax / norm
-            z_ax = np.array([0, 0, 1], dtype=float)
-            if not np.allclose(ax, z_ax):
-                v = np.cross(z_ax, ax)
-                c = np.dot(z_ax, ax)
-                if np.allclose(c, -1.0):
-                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
-                else:
-                    s = np.linalg.norm(v)
-                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
-                    R = np.eye(4)
-                    R[:3, :3] = R_3x3
-                m.apply_transform(R)
-        m.apply_translation(pos)
-        return m
-
-    def create_pipe(outer_r=0.4, inner_r=0.35, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
-        outer = trimesh.primitives.Cylinder(radius=outer_r, height=height, sections=sections)
-        inner = trimesh.primitives.Cylinder(radius=inner_r, height=height + 0.02, sections=sections)
-        try:
-            m = outer.difference(inner)
-        except Exception:
-            m = outer
-        ax = np.array(axis, dtype=float)
-        norm = np.linalg.norm(ax)
-        if norm > 1e-6:
-            ax = ax / norm
-            z_ax = np.array([0, 0, 1], dtype=float)
-            if not np.allclose(ax, z_ax):
-                v = np.cross(z_ax, ax)
-                c = np.dot(z_ax, ax)
-                if np.allclose(c, -1.0):
-                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
-                else:
-                    s = np.linalg.norm(v)
-                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
-                    R = np.eye(4)
-                    R[:3, :3] = R_3x3
-                m.apply_transform(R)
-        m.apply_translation(pos)
-        return m
-
-    def create_corrugated_panel(width=2.4, height=12.0, depth=0.45, pitch=0.6, thickness=0.04, pos=[0, 0, 0], rot_z_deg=0.0):
-        pts = []
-        n_waves = max(2, int(width / pitch))
-        for i in range(n_waves):
-            x0 = i * pitch
-            x1 = x0 + pitch * 0.25
-            x2 = x0 + pitch * 0.50
-            x3 = x0 + pitch * 0.75
-            pts.extend([[x0, 0], [x1, depth], [x2, depth], [x3, 0]])
-        pts.append([width, 0])
-        polyline = np.array(pts)
-        outward = []
-        inward = []
-        for p in polyline:
-            outward.append([p[0], p[1] + thickness / 2])
-            inward.append([p[0], p[1] - thickness / 2])
-        poly2d = outward + inward[::-1]
-        m = extrude_polygon_safe(poly2d, height=height)
-        R_align = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
-        m.apply_transform(R_align)
-        if rot_z_deg != 0.0:
-            rad = math.radians(rot_z_deg)
-            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
-            m.apply_transform(R_rot)
-        m.apply_translation(pos)
-        return m
-
-    def create_cutwater_pier(length=12.0, width=4.0, height=8.0, nose_r=2.0, pos=[0, 0, 0], rot_z_deg=0.0):
-        rect_len = max(0.1, length - 2.0 * nose_r)
-        pts = []
-        for deg in range(-90, 91, 10):
-            rad = math.radians(deg)
-            pts.append([rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
-        for deg in range(90, 271, 10):
-            rad = math.radians(deg)
-            pts.append([-rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
-        m = extrude_polygon_safe(pts, height=height)
-        if rot_z_deg != 0.0:
-            rad = math.radians(rot_z_deg)
-            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
-            m.apply_transform(R)
-        m.apply_translation(pos)
-        return m
-
-    def create_i_beam(depth=0.6, flange_w=0.3, web_t=0.02, flange_t=0.03, length=10.0, pos=[0, 0, 0], rot_z_deg=0.0):
-        d, b, tw, tf = depth, flange_w, web_t, flange_t
-        pts = [
-            [-b/2, -d/2], [b/2, -d/2], [b/2, -d/2 + tf], [tw/2, -d/2 + tf],
-            [tw/2, d/2 - tf], [b/2, d/2 - tf], [b/2, d/2], [-b/2, d/2],
-            [-b/2, d/2 - tf], [-tw/2, d/2 - tf], [-tw/2, -d/2 + tf], [-b/2, -d/2 + tf]
-        ]
-        m = extrude_polygon_safe(pts, height=length)
-        R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
-        m.apply_transform(R)
-        if rot_z_deg != 0.0:
-            rad = math.radians(rot_z_deg)
-            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
-            m.apply_transform(R_rot)
-        m.apply_translation(pos)
-        return m
-
-    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0, openings=None):
-        dx = float(p2[0]) - float(p1[0])
-        dy = float(p2[1]) - float(p1[1])
-        length = math.hypot(dx, dy)
-        if length < 1e-4:
-            return trimesh.Trimesh()
-        angle_rad = math.atan2(dy, dx)
-        thickness = float(thickness)
-        height = float(height)
-        z_bottom = float(z_bottom)
-        
-        if not openings:
-            cx = (float(p1[0]) + float(p2[0])) / 2.0
-            cy = (float(p1[1]) + float(p2[1])) / 2.0
-            cz = z_bottom + height / 2.0
-            m = trimesh.primitives.Box(extents=[length, thickness, height])
-            R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
-            m.apply_transform(R)
-            m.apply_translation([cx, cy, cz])
-            return m
-
-        valid_ops = []
-        for op in openings:
-            off = float(op.get("offset", 0.0))
-            w = float(op.get("width", 1.0))
-            h = float(op.get("height", 2.0))
-            sill = float(op.get("sill_height", 0.0))
-            if off >= 0 and off + w <= length + 1e-3 and w > 0.05 and h > 0.05:
-                valid_ops.append({
-                    "start": max(0.0, off),
-                    "end": min(length, off + w),
-                    "sill": max(0.0, sill),
-                    "top": min(height, sill + h)
-                })
-        valid_ops.sort(key=lambda x: x["start"])
-
-        boxes = []
-        cur_x = 0.0
-        for op in valid_ops:
-            if op["start"] > cur_x + 1e-3:
-                pier_w = op["start"] - cur_x
-                b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
-                b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
-                boxes.append(b)
-            if op["sill"] > 1e-3:
-                op_w = op["end"] - op["start"]
-                b = trimesh.primitives.Box(extents=[op_w, thickness, op["sill"]])
-                b.apply_translation([op["start"] + op_w / 2.0, 0, op["sill"] / 2.0])
-                boxes.append(b)
-            lintel_h = height - op["top"]
-            if lintel_h > 1e-3:
-                op_w = op["end"] - op["start"]
-                b = trimesh.primitives.Box(extents=[op_w, thickness, lintel_h])
-                b.apply_translation([op["start"] + op_w / 2.0, 0, op["top"] + lintel_h / 2.0])
-                boxes.append(b)
-            cur_x = max(cur_x, op["end"])
-
-        if cur_x < length - 1e-3:
-            pier_w = length - cur_x
-            b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
-            b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
-            boxes.append(b)
-
-        m = trimesh.util.concatenate(boxes) if boxes else trimesh.primitives.Box(extents=[length, thickness, height])
-        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
-        m.apply_transform(R)
-        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
-        return m
-
-    def create_railing(p1, p2, height=1.05, z_bottom=0.0, num_balusters=None):
-        dx = float(p2[0]) - float(p1[0])
-        dy = float(p2[1]) - float(p1[1])
-        length = math.hypot(dx, dy)
-        if length < 0.1:
-            return trimesh.Trimesh()
-        angle_rad = math.atan2(dy, dx)
-        height = float(height)
-        z_bottom = float(z_bottom)
-        parts = []
-        rail = trimesh.primitives.Box(extents=[length, 0.06, 0.05])
-        rail.apply_translation([length / 2.0, 0, height - 0.025])
-        parts.append(rail)
-        bot_rail = trimesh.primitives.Box(extents=[length, 0.04, 0.03])
-        bot_rail.apply_translation([length / 2.0, 0, 0.1])
-        parts.append(bot_rail)
-        n_posts = int(max(2, length / 0.8)) if num_balusters is None else int(num_balusters)
-        for i in range(n_posts + 1):
-            px = (i / float(n_posts)) * length
-            post = trimesh.primitives.Box(extents=[0.04, 0.04, height])
-            post.apply_translation([px, 0, height / 2.0])
-            parts.append(post)
-        m = trimesh.util.concatenate(parts)
-        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
-        m.apply_transform(R)
-        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
-        return m
-
-    def create_window_assembly(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, frame_w=0.06, frame_d=0.08):
-        dx = float(p2[0]) - float(p1[0])
-        dy = float(p2[1]) - float(p1[1])
-        length = math.hypot(dx, dy)
-        if length < 1e-4:
-            return trimesh.Trimesh(), trimesh.Trimesh()
-        angle_rad = math.atan2(dy, dx)
-        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
-        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
-        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
-        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
-        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
-        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
-        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
-        bot_sill = trimesh.primitives.Box(extents=[w, fd, fw])
-        bot_sill.apply_translation([0, 0, -h/2.0 + fw/2.0])
-        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head, bot_sill])
-        gw = max(0.05, w - 2*fw)
-        gh = max(0.05, h - 2*fw)
-        glass = trimesh.primitives.Box(extents=[gw, 0.02, gh])
-        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
-        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
-        cz = float(z_bottom) + float(sill_height) + h/2.0
-        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
-        frame.apply_transform(R)
-        frame.apply_translation([cx, cy, cz])
-        glass.apply_transform(R)
-        glass.apply_translation([cx, cy, cz])
-        return frame, glass
-
-    def create_door_assembly(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, frame_w=0.06, frame_d=0.10):
-        dx = float(p2[0]) - float(p1[0])
-        dy = float(p2[1]) - float(p1[1])
-        length = math.hypot(dx, dy)
-        if length < 1e-4:
-            return trimesh.Trimesh(), trimesh.Trimesh()
-        angle_rad = math.atan2(dy, dx)
-        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
-        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
-        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
-        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
-        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
-        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
-        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
-        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head])
-        pw = max(0.05, w - 2*fw)
-        ph = max(0.05, h - fw)
-        panel = trimesh.primitives.Box(extents=[pw, 0.045, ph])
-        panel.apply_translation([0, 0, -fw/2.0])
-        handle = trimesh.primitives.Box(extents=[0.12, 0.08, 0.03])
-        handle.apply_translation([pw/2.0 - 0.10, 0.03, 0.0])
-        leaf = trimesh.util.concatenate([panel, handle])
-        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
-        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
-        cz = float(z_bottom) + h/2.0
-        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
-        frame.apply_transform(R)
-        frame.apply_translation([cx, cy, cz])
-        leaf.apply_transform(R)
-        leaf.apply_translation([cx, cy, cz])
-        return frame, leaf
-
-    def create_slab(polygon_2d, thickness=0.3, z_elevation=0.0):
-        pts = [[float(p[0]), float(p[1])] for p in polygon_2d]
-        m = extrude_polygon_safe(pts, height=float(thickness))
-        m.apply_translation([0, 0, float(z_elevation)])
-        return m
-
-    def create_stairs(start_pt=[0, 0, 0], length=3.0, width=1.2, height=3.0, num_steps=16):
-        steps = []
-        n = max(1, int(num_steps))
-        step_h = float(height) / n
-        step_d = float(length) / n
-        x0, y0, z0 = float(start_pt[0]), float(start_pt[1]), float(start_pt[2])
-        for i in range(n):
-            h_curr = step_h * (i + 1)
-            b = trimesh.primitives.Box(extents=[step_d, float(width), h_curr])
-            b.apply_translation([x0 + i * step_d + step_d / 2.0, y0, z0 + h_curr / 2.0])
-            steps.append(b)
-        return trimesh.util.concatenate(steps)
-
-    def create_roof(footprint_2d, roof_type="gable", height=2.0, z_elevation=3.0, thickness=0.25):
-        pts = [[float(p[0]), float(p[1])] for p in footprint_2d]
-        min_x = min(p[0] for p in pts)
-        max_x = max(p[0] for p in pts)
-        min_y = min(p[1] for p in pts)
-        max_y = max(p[1] for p in pts)
-        L = max_x - min_x
-        W = max_y - min_y
-        cx = (min_x + max_x) / 2.0
-        cy = (min_y + max_y) / 2.0
-        rtype = str(roof_type).lower()
-        if "flat" in rtype:
-            m = extrude_polygon_safe(pts, height=float(thickness))
-            m.apply_translation([0, 0, float(z_elevation)])
-            return m
-        elif "shed" in rtype:
-            wedge_pts = [[min_x, 0], [max_x, 0], [max_x, float(height)], [min_x, 0]]
-            m = extrude_polygon_safe(wedge_pts, height=W)
-            R = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
-            m.apply_transform(R)
-            m.apply_translation([0, max_y, float(z_elevation)])
-            return m
-        else:
-            if L >= W:
-                cross = [[min_y, 0], [cy, float(height)], [max_y, 0]]
-                m = extrude_polygon_safe(cross, height=L)
-                R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
-                m.apply_transform(R)
-                m.apply_translation([min_x, 0, float(z_elevation)])
-                return m
-            else:
-                cross = [[min_x, 0], [cx, float(height)], [max_x, 0]]
-                m = extrude_polygon_safe(cross, height=W)
-                R = trimesh.transformations.rotation_matrix(math.pi / 2, [-1, 0, 0])
-                m.apply_transform(R)
-                m.apply_translation([0, min_y, float(z_elevation)])
-                return m
-
-    def add_mesh_element(mesh, name, ifc_class="IfcBuildingElementProxy", mat_name="Structural Steel", rgb=(0.5, 0.5, 0.5), transparency=0.0):
-        if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
-            return None
-        import ifcopenshell.api as api
-        point_list = ifc_file.create_entity("IfcCartesianPointList3D", CoordList=mesh.vertices.tolist())
-        faces_1based = (mesh.faces + 1).tolist()
-        face_set = ifc_file.create_entity("IfcTriangulatedFaceSet", Coordinates=point_list, CoordIndex=faces_1based, Closed=True)
-        rep = ifc_file.create_entity("IfcShapeRepresentation", ContextOfItems=body_ctx, RepresentationIdentifier="Body", RepresentationType="Tessellation", Items=[face_set])
-        prod_shape = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[rep])
-        
-        pt = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
-        d_z = ifc_file.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0))
-        d_x = ifc_file.create_entity("IfcDirection", DirectionRatios=(1.0, 0.0, 0.0))
-        axis_place = ifc_file.create_entity("IfcAxis2Placement3D", Location=pt, Axis=d_z, RefDirection=d_x)
-        local_place = ifc_file.create_entity("IfcLocalPlacement", RelativePlacement=axis_place)
-        
-        prod = api.run("root.create_entity", ifc_file, ifc_class=ifc_class, name=name)
-        prod.Representation = prod_shape
-        prod.ObjectPlacement = local_place
-        
-        key = f"{mat_name}_{rgb}_{transparency}"
-        if key not in styles:
-            mat = api.run("material.add_material", ifc_file, name=mat_name)
-            style = api.run("style.add_style", ifc_file, name=f"Style_{mat_name}", ifc_class="IfcSurfaceStyle")
-            c_rgb = ifc_file.create_entity("IfcColourRgb", Red=float(rgb[0]), Green=float(rgb[1]), Blue=float(rgb[2]))
-            shading = ifc_file.create_entity("IfcSurfaceStyleShading", SurfaceColour=c_rgb, Transparency=float(transparency))
-            style.Styles = [shading]
-            try:
-                api.run("style.assign_material_style", ifc_file, material=mat, style=style, context=body_ctx)
-            except Exception:
-                pass
-            styles[key] = (mat, style)
-        
-        mat, style = styles[key]
-        try:
-            api.run("style.assign_representation_styles", ifc_file, shape_representation=rep, styles=[style])
-        except Exception:
-            pass
-        
-        elements.append((prod, mat))
-        return prod
-
-    def add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window"):
-        f_mesh, g_mesh = create_window_assembly(p1, p2, offset, width, height, sill_height, z_bottom)
-        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcWindow", mat_name="Anodized Dark Aluminum", rgb=(0.18, 0.18, 0.20))
-        p_glass = add_mesh_element(g_mesh, f"{name}_Glazing", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.82, 0.90, 0.96), transparency=0.75)
-        return p_frame, p_glass
-
-    def add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door", panel_color=(0.58, 0.38, 0.22)):
-        f_mesh, l_mesh = create_door_assembly(p1, p2, offset, width, height, z_bottom)
-        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcDoor", mat_name="Architectural Door Frame", rgb=(0.22, 0.22, 0.24))
-        p_leaf = add_mesh_element(l_mesh, f"{name}_Leaf", ifc_class="IfcDoor", mat_name="Warm Wood Veneer", rgb=panel_color)
-        return p_frame, p_leaf
-
-    def add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Balcony_Railing", rgb=(0.25, 0.25, 0.28)):
-        r_mesh = create_railing(p1, p2, height=height, z_bottom=z_bottom)
-        return add_mesh_element(r_mesh, name, ifc_class="IfcRailing", mat_name="Architectural Steel Railing", rgb=rgb)
-
-    def add_column(pos, height=3.2, radius=0.2, z_bottom=0.0, shape="round", name="Column", rgb=(0.82, 0.82, 0.80)):
-        if shape == "square":
-            m = create_box(extents=[radius * 2, radius * 2, height], pos=[pos[0], pos[1], z_bottom + height / 2.0])
-        else:
-            m = create_cylinder(radius=radius, height=height, pos=[pos[0], pos[1], z_bottom + height / 2.0])
-        return add_mesh_element(m, name, ifc_class="IfcColumn", mat_name="Reinforced Cast Concrete", rgb=rgb)
-
-    def add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam", rgb=(0.78, 0.78, 0.76)):
-        dx = float(p2[0]) - float(p1[0])
-        dy = float(p2[1]) - float(p1[1])
-        length = math.hypot(dx, dy)
-        if length < 1e-4:
-            return None
-        angle_rad = math.atan2(dy, dx)
-        cx = (float(p1[0]) + float(p2[0])) / 2.0
-        cy = (float(p1[1]) + float(p2[1])) / 2.0
-        m = create_box(extents=[length, width, depth], pos=[0, 0, 0])
-        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
-        m.apply_transform(R)
-        m.apply_translation([cx, cy, float(z_elevation) - depth / 2.0])
-        return add_mesh_element(m, name, ifc_class="IfcBeam", mat_name="Structural Concrete Beam", rgb=rgb)
-
-    def commit():
-        if not elements:
-            return 0
-        import ifcopenshell.api as api
-        prods = [p for p, _ in elements]
-        if storey:
-            try:
-                api.run("aggregate.assign_object", ifc_file, relating_object=storey, products=prods)
-            except Exception:
-                pass
-        by_mat = {}
-        for p, m in elements:
-            by_mat.setdefault(m, []).append(p)
-        for m, ps in by_mat.items():
-            try:
-                api.run("material.assign_material", ifc_file, products=ps, material=m)
-            except Exception:
-                pass
-        return len(prods)
-
-    return type("InfraStudioHarnessInstance", (), {
-        "create_box": staticmethod(create_box),
-        "create_cylinder": staticmethod(create_cylinder),
-        "create_pipe": staticmethod(create_pipe),
-        "create_corrugated_panel": staticmethod(create_corrugated_panel),
-        "create_cutwater_pier": staticmethod(create_cutwater_pier),
-        "create_i_beam": staticmethod(create_i_beam),
-        "create_wall": staticmethod(create_wall),
-        "create_railing": staticmethod(create_railing),
-        "create_window_assembly": staticmethod(create_window_assembly),
-        "create_door_assembly": staticmethod(create_door_assembly),
-        "create_slab": staticmethod(create_slab),
-        "create_stairs": staticmethod(create_stairs),
-        "create_roof": staticmethod(create_roof),
-        "add_mesh_element": staticmethod(add_mesh_element),
-        "add_window": staticmethod(add_window),
-        "add_door": staticmethod(add_door),
-        "add_railing": staticmethod(add_railing),
-        "add_column": staticmethod(add_column),
-        "add_beam": staticmethod(add_beam),
-        "commit": staticmethod(commit)
-    })()
-`;
-  const sanitized = code.replace(/\.is_empty/g, ".size == 0");
-  return safeHeader + "\n" + sanitized;
-}
-async function mcpCallTool(name, args, clientSessionId) {
-  if (args) {
-    if (typeof args.trimesh_code === "string") {
-      args.trimesh_code = sanitizePythonCode(args.trimesh_code);
-    }
-    if (typeof args.code_str === "string") {
-      args.code_str = sanitizePythonCode(args.code_str);
-    }
-    if (typeof args.code === "string" && (name.includes("code") || name.includes("ifc"))) {
-      args.code = sanitizePythonCode(args.code);
-    }
-  }
-  const res = await mcpPost({
-    jsonrpc: "2.0",
-    id: Date.now(),
-    method: "tools/call",
-    params: { name, arguments: args }
-  }, clientSessionId);
-  const payload2 = res.data;
-  if (payload2.error) {
-    throw new Error(`Tool ${name} failed: ${JSON.stringify(payload2.error)}`);
-  }
-  if (!payload2.result && payload2.raw) {
-    throw new Error(`Tool ${name} returned invalid response from server: ${payload2.raw}`);
-  }
-  const resultText = extractText(payload2?.result?.content) || JSON.stringify(payload2?.result ?? "done");
-  try {
-    const parsed = JSON.parse(resultText);
-    if (parsed && typeof parsed === "object") {
-      if (parsed.success === false || parsed.error) {
-        throw new Error(`Tool ${name} reported failure: ${parsed.error || JSON.stringify(parsed)}`);
-      }
-    }
-  } catch (e5) {
-    if (e5 instanceof Error && e5.message.startsWith("Tool ")) throw e5;
-  }
-  return { resultText, session: res.session };
-}
-async function fetchMcpTools(clientSessionId) {
-  const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, clientSessionId);
-  const data = res.data;
-  const tools = data?.result?.tools || [];
-  return {
-    tools: tools.map((t) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: (t.description || "").slice(0, 256),
-        parameters: t.inputSchema || { type: "object", properties: {} }
-      }
-    })),
-    session: res.session
-  };
-}
-function getExplabsApiKey() {
-  return typeof Deno !== "undefined" ? Deno.env.get("EXPLABS_API_KEY") : process.env.EXPLABS_API_KEY;
-}
-async function callAstra(systemPrompt4, userMessage, jsonMode = false, model = "gpt-6-astra") {
-  const key = getExplabsApiKey();
-  if (!key) throw new Error("EXPLABS_API_KEY is not configured.");
-  let msgs = [{ role: "system", content: systemPrompt4 }];
-  if (Array.isArray(userMessage) && userMessage.length > 0) {
-    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role || "user", content: m3.content || "" })));
-  } else if (!Array.isArray(userMessage) && userMessage && String(userMessage).trim().length > 0) {
-    msgs.push({ role: "user", content: String(userMessage) });
-  } else {
-    msgs.push({ role: "user", content: "Process according to system instructions." });
-  }
-  const payload2 = {
-    model: model || "gpt-6-astra",
-    messages: msgs
-  };
-  if (jsonMode) {
-    payload2.response_format = { type: "json_object" };
-  }
-  const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${key}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload2)
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`[Experiential Labs Astra ${res.status}]: ${errText}`);
-  }
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
-}
-function getTargetModel(model) {
-  const m3 = (model || "").toLowerCase();
-  if (m3.includes("kimi") || m3 === "kimi-k3") {
-    return "kimi-k3";
-  }
-  if (m3.includes("astra") || m3 === "gpt-6-astra") {
-    return "gpt-6-astra";
-  }
-  if (m3 === "qwen3.8-max" || m3 === "qwen3.8-max-preview") {
-    return "qwen3.8-max";
-  }
-  if (m3 === "qwen-max") {
-    return "qwen-max";
-  }
-  if (m3 === "qwen3.7-plus" || m3 === "qwen-plus") {
-    return "qwen-plus";
-  }
-  return "kimi-k3";
-}
-function getQwenEndpoints() {
-  const proxy = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
-  if (proxy?.trim()) return [proxy.trim().replace(/\/+$/, "")];
-  const configured = typeof Deno !== "undefined" ? Deno.env.get("QWEN_BASE_URL") : process.env.QWEN_BASE_URL;
-  const base = configured?.trim().replace(/\/+$/, "");
-  if (base) return [`${base}/chat/completions`];
-  return [
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-  ];
-}
-async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "kimi-k3") {
-  const targetModel = getTargetModel(model);
-  if (targetModel === "gpt-6-astra") {
-    const explabsKey = getExplabsApiKey();
-    if (explabsKey) {
-      try {
-        return await callAstra(systemPrompt4, userMessage, jsonMode, "gpt-6-astra");
-      } catch (err) {
-        console.warn("[callQwen] Fallback from Astra error:", err);
-      }
-    }
-  }
-  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
-  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
-  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
-  let msgs = [{ role: "system", content: systemPrompt4 }];
-  if (Array.isArray(userMessage)) {
-    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role, content: m3.content || "" })));
-  } else {
-    msgs.push({ role: "user", content: userMessage });
-  }
-  let lastError = null;
-  const endpoints = getQwenEndpoints();
-  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
-  for (const endpoint of endpoints) {
-    try {
-      console.log(`[callQwen] Invoking ${targetModel} via ${endpoint}...`);
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(14e4),
-        // stay below the Supabase proxy wall-clock limit
-        body: JSON.stringify({
-          model: targetModel,
-          messages: msgs,
-          temperature: 0.6,
-          max_tokens: 8192,
-          response_format: jsonMode ? { type: "json_object" } : void 0
-        })
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
-        lastError = new Error(`Model Error (${res.status}): ${errText}`);
-        continue;
-      }
-      const data = await res.json();
-      const choice = data.choices?.[0];
-      if (choice?.finish_reason === "length") {
-        console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length).`);
-      }
-      return choice?.message?.content || "";
-    } catch (err) {
-      lastError = err;
-      console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
-    }
-  }
-  throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
-}
-async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k3") {
-  const targetModel = getTargetModel(model);
-  if (targetModel === "gpt-6-astra") {
-    const explabsKey = getExplabsApiKey();
-    if (explabsKey) {
-      try {
-        const msgs2 = [
-          { role: "system", content: systemPrompt4 },
-          { role: "user", content: userMessage }
-        ];
-        const payload2 = {
-          model: "gpt-6-astra",
-          messages: msgs2
-        };
-        if (tools && tools.length > 0) {
-          payload2.tools = tools;
-        }
-        const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${explabsKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload2)
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.choices?.[0]?.message;
-        }
-        console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
-      } catch (err) {
-        console.warn("[callGLM Astra] Fallback on error:", err);
-      }
-    }
-  }
-  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
-  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
-  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
-  const msgs = [
-    { role: "system", content: systemPrompt4 },
-    { role: "user", content: userMessage }
-  ];
-  const endpoints = getQwenEndpoints();
-  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
-  let lastErrText = "";
-  for (const endpoint of endpoints) {
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: targetModel,
-          messages: msgs,
-          tools: tools && tools.length > 0 ? tools : void 0,
-          temperature: 0.6,
-          max_tokens: 4096
-        })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.choices[0].message;
-      }
-      lastErrText = await res.text();
-      console.warn(`[callGLM] ${endpoint} returned (${res.status}): ${lastErrText}`);
-    } catch (e5) {
-      lastErrText = e5.message || String(e5);
-    }
-  }
-  throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
-}
-function autoRepairTruncatedJson(jsonStr) {
-  let str = jsonStr.trim();
-  str = str.replace(/,\s*"[^"]*"?\s*:\s*[^,\}\]]*$/, "");
-  str = str.replace(/,\s*"[^"]*$/, "");
-  str = str.replace(/,\s*$/, "");
-  let inString = false;
-  let escape = false;
-  const stack = [];
-  for (let i5 = 0; i5 < str.length; i5++) {
-    const char = str[i5];
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (char === "\\") {
-        escape = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-    } else {
-      if (char === '"') {
-        inString = true;
-      } else if (char === "{") {
-        stack.push("}");
-      } else if (char === "[") {
-        stack.push("]");
-      } else if (char === "}" || char === "]") {
-        if (stack.length > 0 && stack[stack.length - 1] === char) {
-          stack.pop();
-        }
-      }
-    }
-  }
-  if (inString) {
-    str += '"';
-  }
-  str = str.replace(/,\s*$/, "");
-  while (stack.length > 0) {
-    str += stack.pop();
-  }
-  return str;
-}
-function cleanJsonResponse(rawStr) {
-  let clean = rawStr.trim();
-  if (clean.includes("```")) {
-    const startIdx = clean.indexOf("```");
-    if (startIdx !== -1) {
-      const newlineIdx = clean.indexOf("\n", startIdx);
-      const contentStart = newlineIdx !== -1 ? newlineIdx + 1 : startIdx + 3;
-      const endIdx = clean.indexOf("```", contentStart);
-      if (endIdx !== -1) {
-        clean = clean.substring(contentStart, endIdx);
-      } else {
-        clean = clean.substring(contentStart);
-      }
-    }
-  }
-  clean = clean.trim();
-  const firstBrace = clean.indexOf("{");
-  if (firstBrace !== -1) {
-    clean = clean.substring(firstBrace);
-  }
-  const lastBrace = clean.lastIndexOf("}");
-  if (lastBrace !== -1 && lastBrace > 0) {
-    const candidate = clean.substring(0, lastBrace + 1);
-    try {
-      return JSON.parse(candidate.replace(/,\s*([\}])\}/g, "$1}"));
-    } catch {
-    }
-  }
-  clean = clean.replace(/,\s*([\}\]])/g, "$1");
-  try {
-    return JSON.parse(clean);
-  } catch (_err) {
-    const repaired = autoRepairTruncatedJson(clean);
-    try {
-      return JSON.parse(repaired);
-    } catch (_err2) {
-      const sanitized = repaired.replace(/[\u0000-\u001F]+/g, " ");
-      return JSON.parse(sanitized);
-    }
-  }
-}
-
-// ../supabase/functions/agent-interpreter/index.ts
-var systemPrompt = `You are the Interpreter Agent for InfraStudio.
-Your sole responsibility is to convert natural-language user intent into a complete, machine-readable design brief.
-
-Core Directives:
- 1. STRUCTURE CATEGORY (CRITICAL): Classify the user request into ONE of these categories:
-    - "infrastructure" \u2014 structural frames, column grids, beam/column networks, pad bases, footings, foundations, bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
-    - "building" \u2014 houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
-    - "mep" \u2014 pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
-    - "custom" \u2014 furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
-  2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
-    - If ACTIVE_SESSION_EXISTS is true or history contains previous turns:
-      Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure.
-      ONLY set "is_edit": false if the user explicitly requests to "create a new building/frame from scratch", "start over", "clear all", or "replace this model".
-    - If an assistant previously asked a clarifying question and the latest user message supplies rooms, dimensions, materials, or features, it is the continuation of a NEW design. Set "is_edit": false.
- 3. FOR BUILDINGS: Extract rooms, storeys, special features, materials, and edit instructions.
- 4. FOR NON-BUILDINGS / STRUCTURAL FRAMES: Extract component_requirements \u2014 a list of named structural components (columns, beams, pad bases, slabs) with descriptions, grid spacing, dimensions, and positions.
-
-Strict Restrictions:
- * You MUST NOT generate geometry or invoke BIM/MCP tools.
- * Return ONLY raw JSON matching the exact schema below.
-
-Expected JSON Schema:
-{
-  "is_edit": boolean,
-  "edit_instructions": ["string"],
-  "structure_category": "building" | "infrastructure" | "mep" | "custom",
-  "project_type": "string",
-  "storeys": [{"name": "string", "elevation": number, "height": number}],
-  "room_requirements": [{"name": "string", "suggested_area": number}],
-  "component_requirements": [{"name": "string", "type": "string", "description": "string"}],
-  "special_features": ["string"],
-  "material_requirements": ["string"],
-  "style_preferences": ["string"],
-  "constraints": ["string"],
-  "needs_clarification": boolean,
-  "clarifying_question": "string",
-  "confidence_score": number
-}`;
-function designSeedFrom(text, sessionId = "") {
-  const source = `${text}|${sessionId}|${Date.now()}`;
-  let hash = 2166136261;
-  for (let i5 = 0; i5 < source.length; i5++) {
-    hash ^= source.charCodeAt(i5);
-    hash = Math.imul(hash, 16777619);
-  }
-  return Math.abs(hash);
-}
-async function handleInterpreter(payload2) {
-  const rawMessages = payload2.messages || (payload2.prompt ? [{ role: "user", content: String(payload2.prompt) }] : payload2.text ? [{ role: "user", content: String(payload2.text) }] : []);
-  const messages = Array.isArray(rawMessages) && rawMessages.length > 0 ? rawMessages : [{ role: "user", content: typeof payload2 === "string" ? payload2 : "Create a structure" }];
-  const hasHistory = Array.isArray(messages) ? messages.slice(0, -1).some((message) => message?.role === "user" || message?.role === "assistant") : false;
-  let formattedPrompt = messages;
-  if (hasHistory) {
-    const historyText = Array.isArray(messages) ? messages.map((m3) => `${(m3.role || "user").toUpperCase()}: ${m3.content || ""}`).join("\n") : String(messages);
-    formattedPrompt = `ACTIVE_SESSION_EXISTS: ${hasHistory}.
-Full Conversation History:
-${historyText}
-
-Task: Parse the LATEST user message in context of conversation history. If the user wants to add to, modify, paint, adjust, or edit the existing model, set "is_edit": true.`;
-  }
-  let result = null;
-  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
-  try {
-    const res = await callQwen(systemPrompt, formattedPrompt, true, payload2?.model || "kimi-k3");
-    result = cleanJsonResponse(res);
-  } catch (err) {
-    console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
-    const textLower = String(latestText).toLowerCase();
-    const isInfra = /cofferdam|coffer|bridge|rail|road|pier|jetty|dam|tunnel/i.test(textLower);
-    const projType = isInfra ? /cofferdam|coffer/i.test(textLower) ? "Bridge Pier Cofferdam" : /bridge/i.test(textLower) ? "Bridge" : "Infrastructure Structure" : /apartment/i.test(textLower) ? "Apartment Building" : "Modern House";
-    result = {
-      is_edit: false,
-      edit_instructions: [],
-      structure_category: isInfra ? "infrastructure" : "building",
-      project_type: projType,
-      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2 }],
-      room_requirements: isInfra ? [] : [
-        { name: "Living Room", suggested_area: 25 },
-        { name: "Kitchen", suggested_area: 15 },
-        { name: "Bedroom", suggested_area: 18 },
-        { name: "Bathroom", suggested_area: 8 }
-      ],
-      component_requirements: [],
-      special_features: [],
-      material_requirements: [],
-      style_preferences: [],
-      constraints: [],
-      needs_clarification: false,
-      confidence_score: 0.95
-    };
-  }
-  const priorAssistantText = Array.isArray(messages) ? messages.slice(0, -1).filter((message) => message?.role === "assistant").map((message) => String(message.content || "")).join(" ").toLowerCase() : "";
-  const followsClarification = /could you provide more details|please describe|what should i design|clarifying|layout.*additional rooms/i.test(priorAssistantText);
-  const startsNewDesign = /\b(create|build|design|make)\b.*\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText));
-  if (followsClarification || startsNewDesign) {
-    result.is_edit = false;
-    result.needs_clarification = false;
-  }
-  if (!result.structure_category) {
-    result.structure_category = "building";
-  }
-  if (hasHistory && result.is_edit === void 0) {
-    const lastUserMsg = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
-    if (!/new building|new project|start over|clear|reset/i.test(lastUserMsg)) {
-      result.is_edit = true;
-    }
-  }
-  const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
-  const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
-  if (isVagueNewBuild) {
-    result.is_edit = false;
-    result.structure_category = "building";
-    result.project_type = "architect-designed house";
-    result.autonomous_design = true;
-    result.needs_clarification = false;
-    result.room_requirements = [];
-    result.special_features = result.special_features || ["varied footprint", "daylight", "entry sequence"];
-  }
-  if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
-    result.needs_clarification = false;
-  }
-  if (!result.is_edit && !result.design_seed) {
-    result.design_seed = designSeedFrom(String(latestText), String(payload2.sessionId || ""));
-  }
-  return result;
-}
-if (typeof Deno !== "undefined" && Deno.serve) {
-  Deno.serve(async (req) => {
-    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-    try {
-      const payload2 = await req.json();
-      const result = await handleInterpreter(payload2);
-      return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
-    }
-  });
-}
-
 // ../supabase/functions/agent-architect/index.ts
-var systemPrompt2 = `You are the Lead Master Architect & Computational BIM Engineer for InfraStudio.
+var systemPrompt = `You are the Lead Master Architect & Computational BIM Engineer for InfraStudio.
 Your mission is to transform a design brief into a complete, visually striking, mathematically sound, and watertight architectural BIM model.
 
 SINGLE-PASS PYTHON CODE EXECUTION (CRITICAL REQUIREMENT):
@@ -55148,7 +54018,7 @@ async function handleArchitect(rawBrief) {
   const textCheck = requestedText(brief);
   const category = brief.structure_category || (/cofferdam|coffer|bridge|rail|road|pier|jetty|pier/i.test(textCheck) ? "infrastructure" : "building");
   const isBuilding = category === "building";
-  const prompt = isBuilding ? systemPrompt2 : infrastructurePrompt;
+  const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
   const fallbackPlan = (reason) => {
     const modelFailure = String(reason instanceof Error ? reason.message : reason).slice(0, 280);
     try {
@@ -55222,6 +54092,1279 @@ if (typeof Deno !== "undefined" && Deno.serve) {
     try {
       const brief = await req.json();
       const result = await handleArchitect(brief);
+      return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
+    }
+  });
+}
+
+// ../supabase/functions/_shared/antigravity_kimi_agent.ts
+var ANTIGRAVITY_SYSTEM_PROMPT = `You are Antigravity, Google DeepMind's elite Autonomous Coding Agent and Master Computational Architect.
+Your task is to generate complete, high-performance, watertight, clash-free Python scripts that build stunning architectural BIM models using IfcOpenShell and InfraStudioHarness.
+
+RULES OF ENGAGEMENT:
+1. ALWAYS WRITE RUNNABLE PYTHON CODE USING InfraStudioHarness.
+2. Watertight geometry is mandatory: never overlap solid geometry.
+3. For walls with doors or windows, use create_wall(..., openings=[...]) which creates genuine physical rectangular voids in the wall assembly, and add corresponding framed windows/doors inside those openings.
+4. Structural integrity: Provide a structural column grid (add_column) at corner intersections, continuous floor plates (create_slab), cantilevered upper-level balconies with safety railings (add_railing), and a solid roof (create_roof or flat slab with parapets).
+5. All dimensions in meters:
+   - Ground slab: thickness 0.30m, z_elevation -0.30m
+   - Walls: height 3.2m, thickness 0.25m
+   - Columns: radius 0.20m or square 0.30m
+   - Railings: height 1.05m
+   - Doors: width 0.90m to 1.10m, height 2.10m
+   - Windows: width 1.20m to 2.40m, height 1.40m, sill_height 0.90m
+6. Structure of script:
+   - Retrieve IFC: ifc = get_ifc_file()
+   - Storey setup: storey = ifc.by_type("IfcBuildingStorey")[0]
+   - Harness: h = InfraStudioHarness(ifc, storey)
+   - Primitives: h.create_slab, h.create_wall, h.add_column, h.add_beam, h.add_railing, h.add_window, h.add_door, h.create_stairs, h.create_roof
+   - Commit: count = h.commit()
+   - Finalize: save_and_load_ifc()
+   - Print: print(f"Committed {count} elements.")
+
+Output format:
+Return a JSON object with:
+{
+  "thought_process": "Your step-by-step spatial and structural reasoning",
+  "structure_name": "Descriptive Name",
+  "python_code": "Complete executable Python script"
+}`;
+function extractPythonCode(response) {
+  if (!response || typeof response !== "string") return "";
+  const trimmed = response.trim();
+  try {
+    const parsed = cleanJsonResponse(trimmed);
+    if (parsed && typeof parsed.python_code === "string" && parsed.python_code.trim().length > 20) {
+      return parsed.python_code.trim();
+    }
+  } catch {
+  }
+  const codeBlockMatch = trimmed.match(/```(?:python)?\s*([\s\S]*?)```/i);
+  if (codeBlockMatch && codeBlockMatch[1].trim().length > 20) {
+    return codeBlockMatch[1].trim();
+  }
+  if (trimmed.includes("InfraStudioHarness") && trimmed.includes("commit()")) {
+    return trimmed;
+  }
+  return "";
+}
+async function runAntigravityKimiAgent(brief, initialSessionId, options = {}) {
+  const maxRetries = options.maxRetries ?? 3;
+  const model = options.model || "kimi-k3";
+  const onStep = options.onStep || (() => {
+  });
+  const steps = [];
+  const logStep = (msg) => {
+    steps.push(msg);
+    onStep(msg);
+  };
+  logStep(`\u{1F9E0} Antigravity Agent (${model}): Analyzing design brief & calculating spatial grids...`);
+  let currentSessionId = initialSessionId;
+  let code = "";
+  let promptText = typeof brief === "string" ? brief : JSON.stringify(brief);
+  let errorFeedback = "";
+  let iterations = 0;
+  while (iterations < maxRetries) {
+    iterations++;
+    try {
+      let promptMessage = "";
+      if (iterations === 1) {
+        promptMessage = `User Design Brief: ${promptText}
+
+Design a complete, high-quality, watertight architectural BIM model using InfraStudioHarness. Return JSON with thought_process and python_code.`;
+      } else {
+        logStep(`\u{1F527} Antigravity Agent: Self-healing error from previous pass (Attempt ${iterations}/${maxRetries})...`);
+        promptMessage = `PREVIOUS PYTHON CODE EXECUTION FAILED ON EC2 BONSAI WITH ERROR:
+${errorFeedback}
+
+FAILED CODE:
+\`\`\`python
+${code}
+\`\`\`
+
+Analyze why this failed, repair the geometry/parameters, ensure all InfraStudioHarness methods are valid, and return the corrected JSON with repaired python_code.`;
+      }
+      const rawResponse = await callQwen(
+        ANTIGRAVITY_SYSTEM_PROMPT,
+        promptMessage,
+        true,
+        model
+      );
+      code = extractPythonCode(rawResponse);
+      if (!code || code.length < 50) {
+        throw new Error(`Failed to extract valid Python code from ${model} response.`);
+      }
+      logStep(`\u26A1 Antigravity Agent: Executing ${code.length} bytes of Python code on EC2 Bonsai MCP...`);
+      const toolRes = await mcpCallTool("execute_ifc_code_tool", { code }, currentSessionId);
+      currentSessionId = toolRes.session;
+      logStep(`\u2705 Antigravity Agent: Execution succeeded! Model generated cleanly.`);
+      return {
+        success: true,
+        python_code: code,
+        mcpSessionId: currentSessionId,
+        resultText: toolRes.resultText,
+        iterations,
+        steps
+      };
+    } catch (err) {
+      const errMsg = err?.message || String(err);
+      console.warn(`[AntigravityAgent] Attempt ${iterations} failed: ${errMsg.slice(0, 300)}`);
+      errorFeedback = errMsg;
+      if (iterations >= maxRetries) {
+        logStep(`\u26A0\uFE0F Antigravity Agent: Max retries reached (${maxRetries}). Engaging deterministic architectural fallback.`);
+        break;
+      }
+    }
+  }
+  const fallbackCode = synthesizeBuildingPythonCode(brief);
+  try {
+    const fallbackRes = await mcpCallTool("execute_ifc_code_tool", { code: fallbackCode }, currentSessionId);
+    currentSessionId = fallbackRes.session;
+    return {
+      success: true,
+      python_code: fallbackCode,
+      mcpSessionId: currentSessionId,
+      resultText: fallbackRes.resultText,
+      iterations,
+      steps: [...steps, "\u2705 Deterministic architectural fallback executed cleanly."]
+    };
+  } catch (finalErr) {
+    return {
+      success: false,
+      python_code: fallbackCode,
+      mcpSessionId: currentSessionId,
+      error: finalErr?.message || String(finalErr),
+      iterations,
+      steps
+    };
+  }
+}
+
+// ../supabase/functions/_shared/shared.ts
+function getMcpUrl() {
+  const configured = typeof Deno !== "undefined" ? Deno.env.get("MCP_URL") : process.env.MCP_URL;
+  const url = configured?.trim();
+  if (!url) {
+    throw new Error("MCP_URL is not configured. Set it to the stable ECS MCP endpoint, including /mcp.");
+  }
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("unsupported protocol");
+    return parsed.toString();
+  } catch {
+    throw new Error("MCP_URL must be a valid HTTP(S) URL ending in /mcp.");
+  }
+}
+var CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS"
+};
+var STATELESS_MCP_SESSION_ID = "stateless-mcp";
+function extractText(content) {
+  if (!content) return void 0;
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (Array.isArray(item)) {
+        const r5 = extractText(item);
+        if (r5) return r5;
+      } else if (typeof item === "object" && item !== null) {
+        const o3 = item;
+        if (typeof o3.text === "string") return o3.text;
+      }
+    }
+  }
+  return void 0;
+}
+async function mcpPost(body, clientSessionId) {
+  const headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream"
+  };
+  if (clientSessionId) headers["mcp-session-id"] = clientSessionId;
+  const res = await fetch(getMcpUrl(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+  const returnedSession = res.headers.get("mcp-session-id") || clientSessionId || STATELESS_MCP_SESSION_ID;
+  const text = await res.text();
+  if (text.trim().startsWith("data:")) {
+    const l3 = text.split("\n").find((l4) => l4.startsWith("data:"));
+    const data = l3 ? JSON.parse(l3.slice(5).trim()) : {};
+    return { data, session: returnedSession };
+  }
+  try {
+    return { data: JSON.parse(text), session: returnedSession };
+  } catch {
+    return { data: { raw: text }, session: returnedSession };
+  }
+}
+async function mcpInit(clientSessionId) {
+  const res1 = await mcpPost({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "infrastudio", version: "9.0" } }
+  }, clientSessionId);
+  const newSession = res1.session || STATELESS_MCP_SESSION_ID;
+  await mcpPost({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, newSession).catch(() => {
+  });
+  return newSession;
+}
+function sanitizePythonCode(code) {
+  if (!code || typeof code !== "string") return code;
+  const safeHeader = `
+import math
+import numpy as np
+import trimesh
+
+NaN = float('nan')
+nan = float('nan')
+null = None
+true = True
+false = False
+Infinity = float('inf')
+inf = float('inf')
+
+try:
+    _orig_apply_transform = trimesh.primitives.Primitive.apply_transform
+    def _safe_apply_transform(self, matrix):
+        try:
+            return _orig_apply_transform(self, matrix)
+        except Exception:
+            mesh = self.to_mesh()
+            mesh.apply_transform(matrix)
+            return mesh
+    trimesh.primitives.Primitive.apply_transform = _safe_apply_transform
+except Exception:
+    pass
+
+try:
+    _orig_creation_cylinder = trimesh.creation.cylinder
+    def _safe_creation_cylinder(radius, height=None, sections=32, segment=None, transform=None):
+        try:
+            return _orig_creation_cylinder(radius=radius, height=height, sections=sections, segment=segment, transform=transform)
+        except Exception:
+            h = height if height is not None else 1.0
+            mesh = trimesh.primitives.Cylinder(radius=radius, height=h, sections=sections).to_mesh()
+            if transform is not None:
+                mesh.apply_transform(transform)
+            return mesh
+    trimesh.creation.cylinder = _safe_creation_cylinder
+except Exception:
+    pass
+
+try:
+    import mathutils
+except Exception:
+    mathutils = None
+
+def extrude_polygon_safe(poly, height=1.0):
+    pts = None
+    if hasattr(poly, 'exterior'):
+        pts = list(poly.exterior.coords)[:-1]
+    elif isinstance(poly, (list, tuple, np.ndarray)):
+        pts = list(poly)
+    else:
+        try:
+            pts = list(poly.vertices)
+        except Exception:
+            pts = list(poly)
+
+    pts_2d = [[float(p[0]), float(p[1])] for p in pts]
+    N = len(pts_2d)
+    bottom_v = [[p[0], p[1], 0.0] for p in pts_2d]
+    top_v = [[p[0], p[1], float(height)] for p in pts_2d]
+    all_v = np.array(bottom_v + top_v, dtype=float)
+
+    cap_tris = []
+    if mathutils is not None and hasattr(mathutils, 'geometry'):
+        try:
+            cap_tris = mathutils.geometry.tessellate_polygon([pts_2d])
+        except Exception:
+            cap_tris = []
+    if not cap_tris:
+        for i in range(1, N - 1):
+            cap_tris.append((0, i, i + 1))
+
+    faces = []
+    for (i, j, k) in cap_tris:
+        faces.append([i, k, j])
+    for (i, j, k) in cap_tris:
+        faces.append([N + i, N + j, N + k])
+    for i in range(N):
+        nxt = (i + 1) % N
+        faces.append([i, nxt, N + nxt])
+        faces.append([i, N + nxt, N + i])
+
+    m = trimesh.Trimesh(vertices=all_v, faces=np.array(faces, dtype=int), process=True)
+    return m
+
+try:
+    trimesh.creation.extrude_polygon = extrude_polygon_safe
+except Exception:
+    pass
+
+def InfraStudioHarness(ifc_file=None, storey=None):
+    if ifc_file is None:
+        try:
+            ifc_file = get_ifc_file()
+        except Exception:
+            ifc_file = None
+
+    if storey is None and ifc_file is not None:
+        try:
+            st = ifc_file.by_type("IfcBuildingStorey")
+            storey = st[0] if st else None
+        except Exception:
+            storey = None
+
+    body_ctx = None
+    try:
+        contexts = ifc_file.by_type("IfcGeometricRepresentationSubContext")
+        for ctx in contexts:
+            if getattr(ctx, "ContextIdentifier", "") == "Body":
+                body_ctx = ctx
+                break
+        if body_ctx is None:
+            m_ctx = ifc_file.by_type("IfcGeometricRepresentationContext")
+            mc = m_ctx[0] if m_ctx else ifc_file.create_entity("IfcGeometricRepresentationContext", ContextType="Model", CoordinateSpaceDimension=3, Precision=1e-5)
+            body_ctx = ifc_file.create_entity("IfcGeometricRepresentationSubContext", ContextIdentifier="Body", ContextType="Model", TargetView="MODEL_VIEW", ParentContext=mc)
+    except Exception:
+        body_ctx = None
+
+    elements = []
+    styles = {}
+
+    def create_box(extents=[1, 1, 1], pos=[0, 0, 0], rot_z_deg=0.0):
+        m = trimesh.primitives.Box(extents=extents)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_cylinder(radius=0.5, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
+        m = trimesh.primitives.Cylinder(radius=radius, height=height, sections=sections)
+        ax = np.array(axis, dtype=float)
+        norm = np.linalg.norm(ax)
+        if norm > 1e-6:
+            ax = ax / norm
+            z_ax = np.array([0, 0, 1], dtype=float)
+            if not np.allclose(ax, z_ax):
+                v = np.cross(z_ax, ax)
+                c = np.dot(z_ax, ax)
+                if np.allclose(c, -1.0):
+                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
+                else:
+                    s = np.linalg.norm(v)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
+                    R = np.eye(4)
+                    R[:3, :3] = R_3x3
+                m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_pipe(outer_r=0.4, inner_r=0.35, height=2.0, pos=[0, 0, 0], axis=[0, 0, 1], sections=32):
+        outer = trimesh.primitives.Cylinder(radius=outer_r, height=height, sections=sections)
+        inner = trimesh.primitives.Cylinder(radius=inner_r, height=height + 0.02, sections=sections)
+        try:
+            m = outer.difference(inner)
+        except Exception:
+            m = outer
+        ax = np.array(axis, dtype=float)
+        norm = np.linalg.norm(ax)
+        if norm > 1e-6:
+            ax = ax / norm
+            z_ax = np.array([0, 0, 1], dtype=float)
+            if not np.allclose(ax, z_ax):
+                v = np.cross(z_ax, ax)
+                c = np.dot(z_ax, ax)
+                if np.allclose(c, -1.0):
+                    R = trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0])
+                else:
+                    s = np.linalg.norm(v)
+                    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                    R_3x3 = np.eye(3) + vx + (vx @ vx) * ((1 - c) / (s * s))
+                    R = np.eye(4)
+                    R[:3, :3] = R_3x3
+                m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_corrugated_panel(width=2.4, height=12.0, depth=0.45, pitch=0.6, thickness=0.04, pos=[0, 0, 0], rot_z_deg=0.0):
+        pts = []
+        n_waves = max(2, int(width / pitch))
+        for i in range(n_waves):
+            x0 = i * pitch
+            x1 = x0 + pitch * 0.25
+            x2 = x0 + pitch * 0.50
+            x3 = x0 + pitch * 0.75
+            pts.extend([[x0, 0], [x1, depth], [x2, depth], [x3, 0]])
+        pts.append([width, 0])
+        polyline = np.array(pts)
+        outward = []
+        inward = []
+        for p in polyline:
+            outward.append([p[0], p[1] + thickness / 2])
+            inward.append([p[0], p[1] - thickness / 2])
+        poly2d = outward + inward[::-1]
+        m = extrude_polygon_safe(poly2d, height=height)
+        R_align = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+        m.apply_transform(R_align)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R_rot)
+        m.apply_translation(pos)
+        return m
+
+    def create_cutwater_pier(length=12.0, width=4.0, height=8.0, nose_r=2.0, pos=[0, 0, 0], rot_z_deg=0.0):
+        rect_len = max(0.1, length - 2.0 * nose_r)
+        pts = []
+        for deg in range(-90, 91, 10):
+            rad = math.radians(deg)
+            pts.append([rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
+        for deg in range(90, 271, 10):
+            rad = math.radians(deg)
+            pts.append([-rect_len / 2.0 + nose_r * math.cos(rad), nose_r * math.sin(rad)])
+        m = extrude_polygon_safe(pts, height=height)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R)
+        m.apply_translation(pos)
+        return m
+
+    def create_i_beam(depth=0.6, flange_w=0.3, web_t=0.02, flange_t=0.03, length=10.0, pos=[0, 0, 0], rot_z_deg=0.0):
+        d, b, tw, tf = depth, flange_w, web_t, flange_t
+        pts = [
+            [-b/2, -d/2], [b/2, -d/2], [b/2, -d/2 + tf], [tw/2, -d/2 + tf],
+            [tw/2, d/2 - tf], [b/2, d/2 - tf], [b/2, d/2], [-b/2, d/2],
+            [-b/2, d/2 - tf], [-tw/2, d/2 - tf], [-tw/2, -d/2 + tf], [-b/2, -d/2 + tf]
+        ]
+        m = extrude_polygon_safe(pts, height=length)
+        R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+        m.apply_transform(R)
+        if rot_z_deg != 0.0:
+            rad = math.radians(rot_z_deg)
+            R_rot = trimesh.transformations.rotation_matrix(rad, [0, 0, 1])
+            m.apply_transform(R_rot)
+        m.apply_translation(pos)
+        return m
+
+    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0, openings=None):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        thickness = float(thickness)
+        height = float(height)
+        z_bottom = float(z_bottom)
+        
+        if not openings:
+            cx = (float(p1[0]) + float(p2[0])) / 2.0
+            cy = (float(p1[1]) + float(p2[1])) / 2.0
+            cz = z_bottom + height / 2.0
+            m = trimesh.primitives.Box(extents=[length, thickness, height])
+            R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+            m.apply_transform(R)
+            m.apply_translation([cx, cy, cz])
+            return m
+
+        valid_ops = []
+        for op in openings:
+            off = float(op.get("offset", 0.0))
+            w = float(op.get("width", 1.0))
+            h = float(op.get("height", 2.0))
+            sill = float(op.get("sill_height", 0.0))
+            if off >= 0 and off + w <= length + 1e-3 and w > 0.05 and h > 0.05:
+                valid_ops.append({
+                    "start": max(0.0, off),
+                    "end": min(length, off + w),
+                    "sill": max(0.0, sill),
+                    "top": min(height, sill + h)
+                })
+        valid_ops.sort(key=lambda x: x["start"])
+
+        boxes = []
+        cur_x = 0.0
+        for op in valid_ops:
+            if op["start"] > cur_x + 1e-3:
+                pier_w = op["start"] - cur_x
+                b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
+                b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
+                boxes.append(b)
+            if op["sill"] > 1e-3:
+                op_w = op["end"] - op["start"]
+                b = trimesh.primitives.Box(extents=[op_w, thickness, op["sill"]])
+                b.apply_translation([op["start"] + op_w / 2.0, 0, op["sill"] / 2.0])
+                boxes.append(b)
+            lintel_h = height - op["top"]
+            if lintel_h > 1e-3:
+                op_w = op["end"] - op["start"]
+                b = trimesh.primitives.Box(extents=[op_w, thickness, lintel_h])
+                b.apply_translation([op["start"] + op_w / 2.0, 0, op["top"] + lintel_h / 2.0])
+                boxes.append(b)
+            cur_x = max(cur_x, op["end"])
+
+        if cur_x < length - 1e-3:
+            pier_w = length - cur_x
+            b = trimesh.primitives.Box(extents=[pier_w, thickness, height])
+            b.apply_translation([cur_x + pier_w / 2.0, 0, height / 2.0])
+            boxes.append(b)
+
+        m = trimesh.util.concatenate(boxes) if boxes else trimesh.primitives.Box(extents=[length, thickness, height])
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
+        return m
+
+    def create_railing(p1, p2, height=1.05, z_bottom=0.0, num_balusters=None):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 0.1:
+            return trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        height = float(height)
+        z_bottom = float(z_bottom)
+        parts = []
+        rail = trimesh.primitives.Box(extents=[length, 0.06, 0.05])
+        rail.apply_translation([length / 2.0, 0, height - 0.025])
+        parts.append(rail)
+        bot_rail = trimesh.primitives.Box(extents=[length, 0.04, 0.03])
+        bot_rail.apply_translation([length / 2.0, 0, 0.1])
+        parts.append(bot_rail)
+        n_posts = int(max(2, length / 0.8)) if num_balusters is None else int(num_balusters)
+        for i in range(n_posts + 1):
+            px = (i / float(n_posts)) * length
+            post = trimesh.primitives.Box(extents=[0.04, 0.04, height])
+            post.apply_translation([px, 0, height / 2.0])
+            parts.append(post)
+        m = trimesh.util.concatenate(parts)
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([float(p1[0]), float(p1[1]), z_bottom])
+        return m
+
+    def create_window_assembly(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, frame_w=0.06, frame_d=0.08):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh(), trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
+        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
+        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
+        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
+        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
+        bot_sill = trimesh.primitives.Box(extents=[w, fd, fw])
+        bot_sill.apply_translation([0, 0, -h/2.0 + fw/2.0])
+        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head, bot_sill])
+        gw = max(0.05, w - 2*fw)
+        gh = max(0.05, h - 2*fw)
+        glass = trimesh.primitives.Box(extents=[gw, 0.02, gh])
+        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
+        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
+        cz = float(z_bottom) + float(sill_height) + h/2.0
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        frame.apply_transform(R)
+        frame.apply_translation([cx, cy, cz])
+        glass.apply_transform(R)
+        glass.apply_translation([cx, cy, cz])
+        return frame, glass
+
+    def create_door_assembly(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, frame_w=0.06, frame_d=0.10):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh(), trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        w, h, fd, fw = float(width), float(height), float(frame_d), float(frame_w)
+        left_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        left_jamb.apply_translation([-w/2.0 + fw/2.0, 0, 0])
+        right_jamb = trimesh.primitives.Box(extents=[fw, fd, h])
+        right_jamb.apply_translation([w/2.0 - fw/2.0, 0, 0])
+        top_head = trimesh.primitives.Box(extents=[w, fd, fw])
+        top_head.apply_translation([0, 0, h/2.0 - fw/2.0])
+        frame = trimesh.util.concatenate([left_jamb, right_jamb, top_head])
+        pw = max(0.05, w - 2*fw)
+        ph = max(0.05, h - fw)
+        panel = trimesh.primitives.Box(extents=[pw, 0.045, ph])
+        panel.apply_translation([0, 0, -fw/2.0])
+        handle = trimesh.primitives.Box(extents=[0.12, 0.08, 0.03])
+        handle.apply_translation([pw/2.0 - 0.10, 0.03, 0.0])
+        leaf = trimesh.util.concatenate([panel, handle])
+        cx = float(p1[0]) + (dx / length) * (float(offset) + w/2.0)
+        cy = float(p1[1]) + (dy / length) * (float(offset) + w/2.0)
+        cz = float(z_bottom) + h/2.0
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        frame.apply_transform(R)
+        frame.apply_translation([cx, cy, cz])
+        leaf.apply_transform(R)
+        leaf.apply_translation([cx, cy, cz])
+        return frame, leaf
+
+    def create_slab(polygon_2d, thickness=0.3, z_elevation=0.0):
+        pts = [[float(p[0]), float(p[1])] for p in polygon_2d]
+        m = extrude_polygon_safe(pts, height=float(thickness))
+        m.apply_translation([0, 0, float(z_elevation)])
+        return m
+
+    def create_stairs(start_pt=[0, 0, 0], length=3.0, width=1.2, height=3.0, num_steps=16):
+        steps = []
+        n = max(1, int(num_steps))
+        step_h = float(height) / n
+        step_d = float(length) / n
+        x0, y0, z0 = float(start_pt[0]), float(start_pt[1]), float(start_pt[2])
+        for i in range(n):
+            h_curr = step_h * (i + 1)
+            b = trimesh.primitives.Box(extents=[step_d, float(width), h_curr])
+            b.apply_translation([x0 + i * step_d + step_d / 2.0, y0, z0 + h_curr / 2.0])
+            steps.append(b)
+        return trimesh.util.concatenate(steps)
+
+    def create_roof(footprint_2d, roof_type="gable", height=2.0, z_elevation=3.0, thickness=0.25):
+        pts = [[float(p[0]), float(p[1])] for p in footprint_2d]
+        min_x = min(p[0] for p in pts)
+        max_x = max(p[0] for p in pts)
+        min_y = min(p[1] for p in pts)
+        max_y = max(p[1] for p in pts)
+        L = max_x - min_x
+        W = max_y - min_y
+        cx = (min_x + max_x) / 2.0
+        cy = (min_y + max_y) / 2.0
+        rtype = str(roof_type).lower()
+        if "flat" in rtype:
+            m = extrude_polygon_safe(pts, height=float(thickness))
+            m.apply_translation([0, 0, float(z_elevation)])
+            return m
+        elif "shed" in rtype:
+            wedge_pts = [[min_x, 0], [max_x, 0], [max_x, float(height)], [min_x, 0]]
+            m = extrude_polygon_safe(wedge_pts, height=W)
+            R = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+            m.apply_transform(R)
+            m.apply_translation([0, max_y, float(z_elevation)])
+            return m
+        else:
+            if L >= W:
+                cross = [[min_y, 0], [cy, float(height)], [max_y, 0]]
+                m = extrude_polygon_safe(cross, height=L)
+                R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+                m.apply_transform(R)
+                m.apply_translation([min_x, 0, float(z_elevation)])
+                return m
+            else:
+                cross = [[min_x, 0], [cx, float(height)], [max_x, 0]]
+                m = extrude_polygon_safe(cross, height=W)
+                R = trimesh.transformations.rotation_matrix(math.pi / 2, [-1, 0, 0])
+                m.apply_transform(R)
+                m.apply_translation([0, min_y, float(z_elevation)])
+                return m
+
+    def add_mesh_element(mesh, name, ifc_class="IfcBuildingElementProxy", mat_name="Structural Steel", rgb=(0.5, 0.5, 0.5), transparency=0.0):
+        if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+            return None
+        import ifcopenshell.api as api
+        point_list = ifc_file.create_entity("IfcCartesianPointList3D", CoordList=mesh.vertices.tolist())
+        faces_1based = (mesh.faces + 1).tolist()
+        face_set = ifc_file.create_entity("IfcTriangulatedFaceSet", Coordinates=point_list, CoordIndex=faces_1based, Closed=True)
+        rep = ifc_file.create_entity("IfcShapeRepresentation", ContextOfItems=body_ctx, RepresentationIdentifier="Body", RepresentationType="Tessellation", Items=[face_set])
+        prod_shape = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[rep])
+        
+        pt = ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        d_z = ifc_file.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0))
+        d_x = ifc_file.create_entity("IfcDirection", DirectionRatios=(1.0, 0.0, 0.0))
+        axis_place = ifc_file.create_entity("IfcAxis2Placement3D", Location=pt, Axis=d_z, RefDirection=d_x)
+        local_place = ifc_file.create_entity("IfcLocalPlacement", RelativePlacement=axis_place)
+        
+        prod = api.run("root.create_entity", ifc_file, ifc_class=ifc_class, name=name)
+        prod.Representation = prod_shape
+        prod.ObjectPlacement = local_place
+        
+        key = f"{mat_name}_{rgb}_{transparency}"
+        if key not in styles:
+            mat = api.run("material.add_material", ifc_file, name=mat_name)
+            style = api.run("style.add_style", ifc_file, name=f"Style_{mat_name}", ifc_class="IfcSurfaceStyle")
+            c_rgb = ifc_file.create_entity("IfcColourRgb", Red=float(rgb[0]), Green=float(rgb[1]), Blue=float(rgb[2]))
+            shading = ifc_file.create_entity("IfcSurfaceStyleShading", SurfaceColour=c_rgb, Transparency=float(transparency))
+            style.Styles = [shading]
+            try:
+                api.run("style.assign_material_style", ifc_file, material=mat, style=style, context=body_ctx)
+            except Exception:
+                pass
+            styles[key] = (mat, style)
+        
+        mat, style = styles[key]
+        try:
+            api.run("style.assign_representation_styles", ifc_file, shape_representation=rep, styles=[style])
+        except Exception:
+            pass
+        
+        elements.append((prod, mat))
+        return prod
+
+    def add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window"):
+        f_mesh, g_mesh = create_window_assembly(p1, p2, offset, width, height, sill_height, z_bottom)
+        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcWindow", mat_name="Anodized Dark Aluminum", rgb=(0.18, 0.18, 0.20))
+        p_glass = add_mesh_element(g_mesh, f"{name}_Glazing", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.82, 0.90, 0.96), transparency=0.75)
+        return p_frame, p_glass
+
+    def add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door", panel_color=(0.58, 0.38, 0.22)):
+        f_mesh, l_mesh = create_door_assembly(p1, p2, offset, width, height, z_bottom)
+        p_frame = add_mesh_element(f_mesh, f"{name}_Frame", ifc_class="IfcDoor", mat_name="Architectural Door Frame", rgb=(0.22, 0.22, 0.24))
+        p_leaf = add_mesh_element(l_mesh, f"{name}_Leaf", ifc_class="IfcDoor", mat_name="Warm Wood Veneer", rgb=panel_color)
+        return p_frame, p_leaf
+
+    def add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Balcony_Railing", rgb=(0.25, 0.25, 0.28)):
+        r_mesh = create_railing(p1, p2, height=height, z_bottom=z_bottom)
+        return add_mesh_element(r_mesh, name, ifc_class="IfcRailing", mat_name="Architectural Steel Railing", rgb=rgb)
+
+    def add_column(pos, height=3.2, radius=0.2, z_bottom=0.0, shape="round", name="Column", rgb=(0.82, 0.82, 0.80)):
+        if shape == "square":
+            m = create_box(extents=[radius * 2, radius * 2, height], pos=[pos[0], pos[1], z_bottom + height / 2.0])
+        else:
+            m = create_cylinder(radius=radius, height=height, pos=[pos[0], pos[1], z_bottom + height / 2.0])
+        return add_mesh_element(m, name, ifc_class="IfcColumn", mat_name="Reinforced Cast Concrete", rgb=rgb)
+
+    def add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam", rgb=(0.78, 0.78, 0.76)):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return None
+        angle_rad = math.atan2(dy, dx)
+        cx = (float(p1[0]) + float(p2[0])) / 2.0
+        cy = (float(p1[1]) + float(p2[1])) / 2.0
+        m = create_box(extents=[length, width, depth], pos=[0, 0, 0])
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([cx, cy, float(z_elevation) - depth / 2.0])
+        return add_mesh_element(m, name, ifc_class="IfcBeam", mat_name="Structural Concrete Beam", rgb=rgb)
+
+    def commit():
+        if not elements:
+            return 0
+        import ifcopenshell.api as api
+        prods = [p for p, _ in elements]
+        if storey:
+            try:
+                api.run("aggregate.assign_object", ifc_file, relating_object=storey, products=prods)
+            except Exception:
+                pass
+        by_mat = {}
+        for p, m in elements:
+            by_mat.setdefault(m, []).append(p)
+        for m, ps in by_mat.items():
+            try:
+                api.run("material.assign_material", ifc_file, products=ps, material=m)
+            except Exception:
+                pass
+        return len(prods)
+
+    return type("InfraStudioHarnessInstance", (), {
+        "create_box": staticmethod(create_box),
+        "create_cylinder": staticmethod(create_cylinder),
+        "create_pipe": staticmethod(create_pipe),
+        "create_corrugated_panel": staticmethod(create_corrugated_panel),
+        "create_cutwater_pier": staticmethod(create_cutwater_pier),
+        "create_i_beam": staticmethod(create_i_beam),
+        "create_wall": staticmethod(create_wall),
+        "create_railing": staticmethod(create_railing),
+        "create_window_assembly": staticmethod(create_window_assembly),
+        "create_door_assembly": staticmethod(create_door_assembly),
+        "create_slab": staticmethod(create_slab),
+        "create_stairs": staticmethod(create_stairs),
+        "create_roof": staticmethod(create_roof),
+        "add_mesh_element": staticmethod(add_mesh_element),
+        "add_window": staticmethod(add_window),
+        "add_door": staticmethod(add_door),
+        "add_railing": staticmethod(add_railing),
+        "add_column": staticmethod(add_column),
+        "add_beam": staticmethod(add_beam),
+        "commit": staticmethod(commit)
+    })()
+`;
+  const sanitized = code.replace(/\.is_empty/g, ".size == 0");
+  return safeHeader + "\n" + sanitized;
+}
+async function mcpCallTool(name, args, clientSessionId) {
+  if (args) {
+    if (typeof args.trimesh_code === "string") {
+      args.trimesh_code = sanitizePythonCode(args.trimesh_code);
+    }
+    if (typeof args.code_str === "string") {
+      args.code_str = sanitizePythonCode(args.code_str);
+    }
+    if (typeof args.code === "string" && (name.includes("code") || name.includes("ifc"))) {
+      args.code = sanitizePythonCode(args.code);
+    }
+  }
+  const res = await mcpPost({
+    jsonrpc: "2.0",
+    id: Date.now(),
+    method: "tools/call",
+    params: { name, arguments: args }
+  }, clientSessionId);
+  const payload2 = res.data;
+  if (payload2.error) {
+    throw new Error(`Tool ${name} failed: ${JSON.stringify(payload2.error)}`);
+  }
+  if (!payload2.result && payload2.raw) {
+    throw new Error(`Tool ${name} returned invalid response from server: ${payload2.raw}`);
+  }
+  const resultText = extractText(payload2?.result?.content) || JSON.stringify(payload2?.result ?? "done");
+  try {
+    const parsed = JSON.parse(resultText);
+    if (parsed && typeof parsed === "object") {
+      if (parsed.success === false || parsed.error) {
+        throw new Error(`Tool ${name} reported failure: ${parsed.error || JSON.stringify(parsed)}`);
+      }
+    }
+  } catch (e5) {
+    if (e5 instanceof Error && e5.message.startsWith("Tool ")) throw e5;
+  }
+  return { resultText, session: res.session };
+}
+async function fetchMcpTools(clientSessionId) {
+  const res = await mcpPost({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, clientSessionId);
+  const data = res.data;
+  const tools = data?.result?.tools || [];
+  return {
+    tools: tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: (t.description || "").slice(0, 256),
+        parameters: t.inputSchema || { type: "object", properties: {} }
+      }
+    })),
+    session: res.session
+  };
+}
+function getExplabsApiKey() {
+  return typeof Deno !== "undefined" ? Deno.env.get("EXPLABS_API_KEY") : process.env.EXPLABS_API_KEY;
+}
+async function callAstra(systemPrompt4, userMessage, jsonMode = false, model = "gpt-6-astra") {
+  const key = getExplabsApiKey();
+  if (!key) throw new Error("EXPLABS_API_KEY is not configured.");
+  let msgs = [{ role: "system", content: systemPrompt4 }];
+  if (Array.isArray(userMessage) && userMessage.length > 0) {
+    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role || "user", content: m3.content || "" })));
+  } else if (!Array.isArray(userMessage) && userMessage && String(userMessage).trim().length > 0) {
+    msgs.push({ role: "user", content: String(userMessage) });
+  } else {
+    msgs.push({ role: "user", content: "Process according to system instructions." });
+  }
+  const payload2 = {
+    model: model || "gpt-6-astra",
+    messages: msgs
+  };
+  if (jsonMode) {
+    payload2.response_format = { type: "json_object" };
+  }
+  const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload2)
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`[Experiential Labs Astra ${res.status}]: ${errText}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+function getTargetModel(model) {
+  const m3 = (model || "").toLowerCase();
+  if (m3.includes("kimi") || m3 === "kimi-k3") {
+    return "kimi-k3";
+  }
+  if (m3.includes("astra") || m3 === "gpt-6-astra") {
+    return "gpt-6-astra";
+  }
+  if (m3 === "qwen3.8-max" || m3 === "qwen3.8-max-preview") {
+    return "qwen3.8-max";
+  }
+  if (m3 === "qwen-max") {
+    return "qwen-max";
+  }
+  if (m3 === "qwen3.7-plus" || m3 === "qwen-plus") {
+    return "qwen-plus";
+  }
+  return "kimi-k3";
+}
+function getQwenEndpoints() {
+  const proxy = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (proxy?.trim()) return [proxy.trim().replace(/\/+$/, "")];
+  const configured = typeof Deno !== "undefined" ? Deno.env.get("QWEN_BASE_URL") : process.env.QWEN_BASE_URL;
+  const base = configured?.trim().replace(/\/+$/, "");
+  if (base) return [`${base}/chat/completions`];
+  return [
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  ];
+}
+async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "kimi-k3") {
+  const targetModel = getTargetModel(model);
+  if (targetModel === "gpt-6-astra") {
+    const explabsKey = getExplabsApiKey();
+    if (explabsKey) {
+      try {
+        return await callAstra(systemPrompt4, userMessage, jsonMode, "gpt-6-astra");
+      } catch (err) {
+        console.warn("[callQwen] Fallback from Astra error:", err);
+      }
+    }
+  }
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
+  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
+  let msgs = [{ role: "system", content: systemPrompt4 }];
+  if (Array.isArray(userMessage)) {
+    msgs = msgs.concat(userMessage.map((m3) => ({ role: m3.role, content: m3.content || "" })));
+  } else {
+    msgs.push({ role: "user", content: userMessage });
+  }
+  let lastError = null;
+  const endpoints = getQwenEndpoints();
+  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`[callQwen] Invoking ${targetModel} via ${endpoint}...`);
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(14e4),
+        // stay below the Supabase proxy wall-clock limit
+        body: JSON.stringify({
+          model: targetModel,
+          messages: msgs,
+          temperature: 0.6,
+          max_tokens: 8192,
+          response_format: jsonMode ? { type: "json_object" } : void 0
+        })
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
+        lastError = new Error(`Model Error (${res.status}): ${errText}`);
+        continue;
+      }
+      const data = await res.json();
+      const choice = data.choices?.[0];
+      if (choice?.finish_reason === "length") {
+        console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length).`);
+      }
+      return choice?.message?.content || "";
+    } catch (err) {
+      lastError = err;
+      console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
+    }
+  }
+  throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
+}
+async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k3") {
+  const targetModel = getTargetModel(model);
+  if (targetModel === "gpt-6-astra") {
+    const explabsKey = getExplabsApiKey();
+    if (explabsKey) {
+      try {
+        const msgs2 = [
+          { role: "system", content: systemPrompt4 },
+          { role: "user", content: userMessage }
+        ];
+        const payload2 = {
+          model: "gpt-6-astra",
+          messages: msgs2
+        };
+        if (tools && tools.length > 0) {
+          payload2.tools = tools;
+        }
+        const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${explabsKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload2)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.choices?.[0]?.message;
+        }
+        console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
+      } catch (err) {
+        console.warn("[callGLM Astra] Fallback on error:", err);
+      }
+    }
+  }
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
+  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
+  const msgs = [
+    { role: "system", content: systemPrompt4 },
+    { role: "user", content: userMessage }
+  ];
+  const endpoints = getQwenEndpoints();
+  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  let lastErrText = "";
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: msgs,
+          tools: tools && tools.length > 0 ? tools : void 0,
+          temperature: 0.6,
+          max_tokens: 4096
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices[0].message;
+      }
+      lastErrText = await res.text();
+      console.warn(`[callGLM] ${endpoint} returned (${res.status}): ${lastErrText}`);
+    } catch (e5) {
+      lastErrText = e5.message || String(e5);
+    }
+  }
+  throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
+}
+function autoRepairTruncatedJson(jsonStr) {
+  let str = jsonStr.trim();
+  str = str.replace(/,\s*"[^"]*"?\s*:\s*[^,\}\]]*$/, "");
+  str = str.replace(/,\s*"[^"]*$/, "");
+  str = str.replace(/,\s*$/, "");
+  let inString = false;
+  let escape = false;
+  const stack = [];
+  for (let i5 = 0; i5 < str.length; i5++) {
+    const char = str[i5];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === "\\") {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+      } else if (char === "{") {
+        stack.push("}");
+      } else if (char === "[") {
+        stack.push("]");
+      } else if (char === "}" || char === "]") {
+        if (stack.length > 0 && stack[stack.length - 1] === char) {
+          stack.pop();
+        }
+      }
+    }
+  }
+  if (inString) {
+    str += '"';
+  }
+  str = str.replace(/,\s*$/, "");
+  while (stack.length > 0) {
+    str += stack.pop();
+  }
+  return str;
+}
+function cleanJsonResponse(rawStr) {
+  let clean = rawStr.trim();
+  if (clean.includes("```")) {
+    const startIdx = clean.indexOf("```");
+    if (startIdx !== -1) {
+      const newlineIdx = clean.indexOf("\n", startIdx);
+      const contentStart = newlineIdx !== -1 ? newlineIdx + 1 : startIdx + 3;
+      const endIdx = clean.indexOf("```", contentStart);
+      if (endIdx !== -1) {
+        clean = clean.substring(contentStart, endIdx);
+      } else {
+        clean = clean.substring(contentStart);
+      }
+    }
+  }
+  clean = clean.trim();
+  const firstBrace = clean.indexOf("{");
+  if (firstBrace !== -1) {
+    clean = clean.substring(firstBrace);
+  }
+  const lastBrace = clean.lastIndexOf("}");
+  if (lastBrace !== -1 && lastBrace > 0) {
+    const candidate = clean.substring(0, lastBrace + 1);
+    try {
+      return JSON.parse(candidate.replace(/,\s*([\}])\}/g, "$1}"));
+    } catch {
+    }
+  }
+  clean = clean.replace(/,\s*([\}\]])/g, "$1");
+  try {
+    return JSON.parse(clean);
+  } catch (_err) {
+    const repaired = autoRepairTruncatedJson(clean);
+    try {
+      return JSON.parse(repaired);
+    } catch (_err2) {
+      const sanitized = repaired.replace(/[\u0000-\u001F]+/g, " ");
+      return JSON.parse(sanitized);
+    }
+  }
+}
+
+// ../supabase/functions/agent-interpreter/index.ts
+var systemPrompt2 = `You are the Interpreter Agent for InfraStudio.
+Your sole responsibility is to convert natural-language user intent into a complete, machine-readable design brief.
+
+Core Directives:
+ 1. STRUCTURE CATEGORY (CRITICAL): Classify the user request into ONE of these categories:
+    - "infrastructure" \u2014 structural frames, column grids, beam/column networks, pad bases, footings, foundations, bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
+    - "building" \u2014 houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
+    - "mep" \u2014 pipes, ducts, cable trays, HVAC systems, plumbing networks, electrical conduits
+    - "custom" \u2014 furniture, sculptures, art installations, mechanical parts, free-form geometry, anything else
+  2. EDIT vs NEW (CRITICAL DIRECTIVE FOR ITERATIVE EDITING):
+    - If ACTIVE_SESSION_EXISTS is true or history contains previous turns:
+      Default "is_edit": true whenever the user is asking to add, modify, alter, paint, expand, adjust, or edit the existing structure.
+      ONLY set "is_edit": false if the user explicitly requests to "create a new building/frame from scratch", "start over", "clear all", or "replace this model".
+    - If an assistant previously asked a clarifying question and the latest user message supplies rooms, dimensions, materials, or features, it is the continuation of a NEW design. Set "is_edit": false.
+ 3. FOR BUILDINGS: Extract rooms, storeys, special features, materials, and edit instructions.
+ 4. FOR NON-BUILDINGS / STRUCTURAL FRAMES: Extract component_requirements \u2014 a list of named structural components (columns, beams, pad bases, slabs) with descriptions, grid spacing, dimensions, and positions.
+
+Strict Restrictions:
+ * You MUST NOT generate geometry or invoke BIM/MCP tools.
+ * Return ONLY raw JSON matching the exact schema below.
+
+Expected JSON Schema:
+{
+  "is_edit": boolean,
+  "edit_instructions": ["string"],
+  "structure_category": "building" | "infrastructure" | "mep" | "custom",
+  "project_type": "string",
+  "storeys": [{"name": "string", "elevation": number, "height": number}],
+  "room_requirements": [{"name": "string", "suggested_area": number}],
+  "component_requirements": [{"name": "string", "type": "string", "description": "string"}],
+  "special_features": ["string"],
+  "material_requirements": ["string"],
+  "style_preferences": ["string"],
+  "constraints": ["string"],
+  "needs_clarification": boolean,
+  "clarifying_question": "string",
+  "confidence_score": number
+}`;
+function designSeedFrom(text, sessionId = "") {
+  const source = `${text}|${sessionId}|${Date.now()}`;
+  let hash = 2166136261;
+  for (let i5 = 0; i5 < source.length; i5++) {
+    hash ^= source.charCodeAt(i5);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+async function handleInterpreter(payload2) {
+  const rawMessages = payload2.messages || (payload2.prompt ? [{ role: "user", content: String(payload2.prompt) }] : payload2.text ? [{ role: "user", content: String(payload2.text) }] : []);
+  const messages = Array.isArray(rawMessages) && rawMessages.length > 0 ? rawMessages : [{ role: "user", content: typeof payload2 === "string" ? payload2 : "Create a structure" }];
+  const hasHistory = Array.isArray(messages) ? messages.slice(0, -1).some((message) => message?.role === "user" || message?.role === "assistant") : false;
+  let formattedPrompt = messages;
+  if (hasHistory) {
+    const historyText = Array.isArray(messages) ? messages.map((m3) => `${(m3.role || "user").toUpperCase()}: ${m3.content || ""}`).join("\n") : String(messages);
+    formattedPrompt = `ACTIVE_SESSION_EXISTS: ${hasHistory}.
+Full Conversation History:
+${historyText}
+
+Task: Parse the LATEST user message in context of conversation history. If the user wants to add to, modify, paint, adjust, or edit the existing model, set "is_edit": true.`;
+  }
+  let result = null;
+  const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+  try {
+    const res = await callQwen(systemPrompt2, formattedPrompt, true, payload2?.model || "kimi-k3");
+    result = cleanJsonResponse(res);
+  } catch (err) {
+    console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
+    const textLower = String(latestText).toLowerCase();
+    const isInfra = /cofferdam|coffer|bridge|rail|road|pier|jetty|dam|tunnel/i.test(textLower);
+    const projType = isInfra ? /cofferdam|coffer/i.test(textLower) ? "Bridge Pier Cofferdam" : /bridge/i.test(textLower) ? "Bridge" : "Infrastructure Structure" : /apartment/i.test(textLower) ? "Apartment Building" : "Modern House";
+    result = {
+      is_edit: false,
+      edit_instructions: [],
+      structure_category: isInfra ? "infrastructure" : "building",
+      project_type: projType,
+      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2 }],
+      room_requirements: isInfra ? [] : [
+        { name: "Living Room", suggested_area: 25 },
+        { name: "Kitchen", suggested_area: 15 },
+        { name: "Bedroom", suggested_area: 18 },
+        { name: "Bathroom", suggested_area: 8 }
+      ],
+      component_requirements: [],
+      special_features: [],
+      material_requirements: [],
+      style_preferences: [],
+      constraints: [],
+      needs_clarification: false,
+      confidence_score: 0.95
+    };
+  }
+  const priorAssistantText = Array.isArray(messages) ? messages.slice(0, -1).filter((message) => message?.role === "assistant").map((message) => String(message.content || "")).join(" ").toLowerCase() : "";
+  const followsClarification = /could you provide more details|please describe|what should i design|clarifying|layout.*additional rooms/i.test(priorAssistantText);
+  const startsNewDesign = /\b(create|build|design|make)\b.*\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText));
+  if (followsClarification || startsNewDesign) {
+    result.is_edit = false;
+    result.needs_clarification = false;
+  }
+  if (!result.structure_category) {
+    result.structure_category = "building";
+  }
+  if (hasHistory && result.is_edit === void 0) {
+    const lastUserMsg = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+    if (!/new building|new project|start over|clear|reset/i.test(lastUserMsg)) {
+      result.is_edit = true;
+    }
+  }
+  const normalized = String(latestText).toLowerCase().replace(/\s+/g, " ").trim();
+  const isVagueNewBuild = !hasHistory && /^(?:please )?(?:build|create|make|design)(?: me)? (?:something|a building|a model|anything)[.!? ]*$/.test(normalized);
+  if (isVagueNewBuild) {
+    result.is_edit = false;
+    result.structure_category = "building";
+    result.project_type = "architect-designed house";
+    result.autonomous_design = true;
+    result.needs_clarification = false;
+    result.room_requirements = [];
+    result.special_features = result.special_features || ["varied footprint", "daylight", "entry sequence"];
+  }
+  if (/\b(apartment|house|building|bridge|railway|road|station|office|warehouse)\b/i.test(String(latestText))) {
+    result.needs_clarification = false;
+  }
+  if (!result.is_edit && !result.design_seed) {
+    result.design_seed = designSeedFrom(String(latestText), String(payload2.sessionId || ""));
+  }
+  return result;
+}
+if (typeof Deno !== "undefined" && Deno.serve) {
+  Deno.serve(async (req) => {
+    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    try {
+      const payload2 = await req.json();
+      const result = await handleInterpreter(payload2);
       return new Response(JSON.stringify(result), { headers: { ...CORS, "Content-Type": "application/json" } });
     } catch (err) {
       return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS });
@@ -55856,7 +55999,22 @@ result = h.create_box(extents=[${l3}, ${w}, ${h5}], pos=[${x}, ${y}, ${z}], rot_
         executedTools.push("execute_ifc_code_tool");
         executedMutation = true;
       } catch (pErr) {
-        console.warn(`[build_code] Direct python_code execution failed, falling back to synthesizer:`, pErr);
+        console.warn(`[build_code] Direct python_code execution failed, starting Antigravity self-healing pass:`, pErr);
+        try {
+          const selfHealed = await runAntigravityKimiAgent(
+            { brief: payload2.plan, failed_code: payload2.plan.python_code, error: String(pErr?.message || pErr) },
+            mcpSessionId,
+            { model: "kimi-k3", maxRetries: 2 }
+          );
+          if (selfHealed.success) {
+            mcpSessionId = selfHealed.mcpSessionId;
+            executedTools.push("execute_ifc_code_tool");
+            executedMutation = true;
+            console.log(`[build_code] Antigravity self-healing succeeded!`);
+          }
+        } catch (healErr) {
+          console.warn(`[build_code] Antigravity self-healing error, falling back to deterministic synthesizer:`, healErr);
+        }
       }
     }
     if (!executedMutation && Array.isArray(payload2.plan?.storey_plans) && payload2.plan.storey_plans.length > 0) {

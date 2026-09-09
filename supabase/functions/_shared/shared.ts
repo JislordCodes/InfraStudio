@@ -1219,3 +1219,5 @@ export function cleanJsonResponse(rawStr: string): any {
     }
   }
 }
+
+export { runAntigravityKimiAgent } from "./antigravity_kimi_agent.ts";

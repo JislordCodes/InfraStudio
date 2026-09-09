@@ -1,4 +1,4 @@
-import { CORS, mcpInit, mcpCallTool, fetchMcpTools, callQwen, callGLM } from "../_shared/shared.ts";
+import { CORS, mcpInit, mcpCallTool, fetchMcpTools, callQwen, callGLM, runAntigravityKimiAgent } from "../_shared/shared.ts";
 import { synthesizeBuildingPythonCode } from "../agent-architect/index.ts";
 
 type McpCall = { resultText: string; session: string };
@@ -553,7 +553,22 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         executedTools.push("execute_ifc_code_tool");
         executedMutation = true;
       } catch (pErr: any) {
-        console.warn(`[build_code] Direct python_code execution failed, falling back to synthesizer:`, pErr);
+        console.warn(`[build_code] Direct python_code execution failed, starting Antigravity self-healing pass:`, pErr);
+        try {
+          const selfHealed = await runAntigravityKimiAgent(
+            { brief: payload.plan, failed_code: payload.plan.python_code, error: String(pErr?.message || pErr) },
+            mcpSessionId,
+            { model: "kimi-k3", maxRetries: 2 }
+          );
+          if (selfHealed.success) {
+            mcpSessionId = selfHealed.mcpSessionId;
+            executedTools.push("execute_ifc_code_tool");
+            executedMutation = true;
+            console.log(`[build_code] Antigravity self-healing succeeded!`);
+          }
+        } catch (healErr) {
+          console.warn(`[build_code] Antigravity self-healing error, falling back to deterministic synthesizer:`, healErr);
+        }
       }
     }
 
