@@ -25,7 +25,7 @@ function App() {
 
   useEffect(() => {
     const lastRevision = { current: '' };
-    const isEnabled = import.meta.env.DEV ||
+    const isEnabled =
       new URL(window.location.href).searchParams.get('codexBridge') === '1' ||
       localStorage.getItem('infrastudio_codex_bridge') === '1';
 
