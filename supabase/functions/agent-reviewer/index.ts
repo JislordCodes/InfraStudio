@@ -51,9 +51,9 @@ function deterministicReview(scene: any, requirements: any, category: string) {
       fixes.push(`Create semantic ${requiredClass} elements using the appropriate MCP tool.`);
     }
   }
-  if (category === "building" && Number(requirements?.minimum_rooms || 0) > 0 && (classes.IfcWall || 0) < Number(requirements.minimum_rooms) * 4) {
+  if (category === "building" && Number(requirements?.minimum_rooms || 0) > 0 && (classes.IfcWall || 0) < Math.max(4, Number(requirements.minimum_rooms))) {
     issues.push("The wall count is too low for the requested room programme.");
-    fixes.push("Build each missing room with build_room using the validated floor plan.");
+    fixes.push("Add the missing walls using InfraStudioHarness.");
   }
 
   const solids = objects.filter((object: any) => {

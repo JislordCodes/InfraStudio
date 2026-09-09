@@ -68,127 +68,32 @@ export async function runMultiAgentLoop(
     // Force plan.is_edit if interpreter determined it is an edit
     if (isEdit) plan.is_edit = true;
 
-    // 3. BIM Executor — branch based on edit vs new building vs infrastructure
-    const isBuildingNew = structureCategory === "building" && !plan.is_edit && plan.storey_plans;
-    const isInfrastructureNew = !plan.is_edit && (structureCategory !== "building" || plan.components);
+    // 3. BIM Executor — branch based on edit vs new design
+    const isNew = !plan.is_edit;
 
     // A new design must get a new MCP model. Reusing a session that previously
-    // held a railway or another project mixes its geometry into the new IFC.
-    if (isBuildingNew || isInfrastructureNew) {
+    // held another project mixes its geometry into the new IFC.
+    if (isNew) {
       sessionId = '';
     }
 
-    if (isBuildingNew && plan.layout_validation?.status !== 'PASS') {
+    if (isNew && plan.layout_validation?.status !== 'PASS') {
       throw new Error('BIM generation blocked: the spatial layout did not pass clash validation.');
     }
-    if (isBuildingNew && plan.layout_validation?.repairs?.length) {
+    if (isNew && plan.layout_validation?.repairs?.length) {
       pushStep(`Architectural Agent: Spatial layout repaired — ${plan.layout_validation.repairs.join(' ')}`);
     }
 
-    if (isBuildingNew) {
-      // ═══ NEW BUILDING MODE: Room-by-room pipeline from scratch ═══
-      pushStep(`BIM Agent: Building mode — ${plan.storey_plans.length} storeys. Beginning chunked execution...`);
-      
-      pushStep("BIM Agent: Initializing new project...");
-      let bimRes = await callEdge('agent-bim', { action: 'initialize', mcpSessionId: sessionId });
-      sessionId = bimRes.mcpSessionId;
-      
-      for (const storey of plan.storey_plans) {
-        pushStep(`BIM Agent: Creating storey: ${storey.name}...`);
-        bimRes = await callEdge('agent-bim', { action: 'create_storey', name: storey.name, elevation: storey.elevation || 0, mcpSessionId: sessionId });
-        sessionId = bimRes.mcpSessionId;
-        
-        if (!storey.rooms) continue;
-        for (let i = 0; i < storey.rooms.length; i++) {
-          const room = storey.rooms[i];
-          pushStep(`BIM Agent: Building ${storey.name} - ${room.name} (${i + 1}/${storey.rooms.length})...`);
-          bimRes = await callEdge('agent-bim', {
-            action: 'build_room',
-            mcpSessionId: sessionId,
-            storeyHeight: storey.height,
-            room: room
-          });
-          sessionId = bimRes.mcpSessionId;
-        }
-      }
-
-      // Deduplicate shared walls between adjacent rooms
-      pushStep("BIM Agent: Removing duplicate walls at shared boundaries...");
-      try {
-        const dedupRes = await callEdge('agent-bim', { action: 'deduplicate_walls', mcpSessionId: sessionId });
-        sessionId = dedupRes.mcpSessionId;
-        if (dedupRes.removed > 0) {
-          pushStep(`BIM Agent: Removed ${dedupRes.removed} overlapping wall(s).`);
-        }
-      } catch (e) {
-        console.warn('Wall deduplication skipped:', e);
-      }
-      
-      let roofTypeRequested = plan.roof_type;
-      if (roofTypeRequested === undefined || roofTypeRequested === null) {
-        const match = plan.special_elements?.find((e: string) => /roof|gable|hip|flat/i.test(e));
-        if (match) {
-          if (/no roof|without roof|remove roof|none/i.test(match)) {
-            roofTypeRequested = "none";
-          } else if (/gable/i.test(match)) {
-            roofTypeRequested = "gable";
-          } else if (/hip/i.test(match)) {
-            roofTypeRequested = "hip";
-          } else if (/flat/i.test(match)) {
-            roofTypeRequested = "flat";
-          }
-        }
-      }
-
-      if (roofTypeRequested && roofTypeRequested !== "none") {
-        pushStep(`BIM Agent: Creating ${roofTypeRequested} roof...`);
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxHeight = 3;
-        for (const storey of plan.storey_plans || []) {
-          maxHeight = Math.max(maxHeight, Number(storey.elevation || 0) + Number(storey.height || 3));
-          for (const r of storey.rooms || []) {
-            const [ox, oy] = r.origin || [0, 0, 0];
-            const w = r.width || 4;
-            const l = r.length || 4;
-            minX = Math.min(minX, ox);
-            minY = Math.min(minY, oy);
-            maxX = Math.max(maxX, ox + w);
-            maxY = Math.max(maxY, oy + l);
-          }
-        }
-        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 6; maxY = 6; }
-
-        bimRes = await callEdge('agent-bim', {
-          action: 'create_roof',
-          roof_type: roofTypeRequested,
-          bbox: { minX, minY, maxX, maxY, height: maxHeight },
-          footprint: plan.roof_footprint,
-          mcpSessionId: sessionId
-        });
-        if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
-      }
-
-      if (plan.material_palette) {
-        pushStep("BIM Agent: Applying requested material finishes...");
-        bimRes = await callEdge('agent-bim', { action: 'apply_materials', mcpSessionId: sessionId });
-        if (bimRes?.mcpSessionId) sessionId = bimRes.mcpSessionId;
-      }
-
-      pushStep("BIM Agent: All elements generated. Exporting IFC...");
-      const exportRes = await callEdge('agent-bim', { action: 'export', mcpSessionId: sessionId });
-      ifc_url = exportRes.ifc_url;
-
-    } else if (isInfrastructureNew) {
-      // ═══ NEW INFRASTRUCTURE/MEP/CUSTOM MODE ═══
-      const compCount = plan.components?.length || 0;
-      pushStep(`BIM Agent: Infrastructure mode (${compCount} components) — generating structure with InfraStudioHarness...`);
+    if (isNew) {
+      // ═══ SINGLE-PASS MONOLITHIC CODE EXECUTION ═══
+      pushStep(`BIM Agent: Generating complete ${structureCategory} model via execute_ifc_code_tool...`);
       const bimRes = await callEdge('agent-bim', {
-        action: 'build_freeform',
+        action: 'build_code',
         plan: plan,
         mcpSessionId: sessionId
       });
       ifc_url = bimRes.ifc_url;
       sessionId = bimRes.mcpSessionId;
-
     } else {
       // ═══ EDIT MODE (BUILD UPON ACTIVE MODEL - DO NOT INITIALIZE / ERASE) ═══
       pushStep(`BIM Agent: Modifying active model in session (Session: ${sessionId || 'new'})...`);

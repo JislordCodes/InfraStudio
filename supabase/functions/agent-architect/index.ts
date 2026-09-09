@@ -1,45 +1,72 @@
 import { CORS, callQwen, callGemini, cleanJsonResponse } from "../_shared/shared.ts";
 
-const systemPrompt = `You are the Lead Architectural Reasoning Agent for InfraStudio.
-Your mission is to transform a design brief into a complete, spatially coherent, visually striking, and mathematically sound architectural plan or edit plan.
+const systemPrompt = `You are the Lead Master Architect & Computational BIM Engineer for InfraStudio.
+Your mission is to transform a design brief into a complete, visually striking, mathematically sound, and watertight architectural BIM model.
 
-ARCHITECTURAL DIVERSITY & FOOTPRINT SELECTION (CRITICAL FOR NEW BUILDINGS):
- 1. DIVERSE & CREATIVE FOOTPRINTS: Unless the user explicitly requests a plain rectangular box, dynamically choose an expressive architectural footprint shape for new builds:
-    - "L-SHAPE": Main living wing along X (e.g. 8x5m) + perpendicular private wing along Y (e.g. 5x6m starting at origin [0,5,0]), creating a protected terrace/courtyard angle.
-    - "U-SHAPE / COURTYARD": Two parallel side wings (e.g. Bedrooms & Garage) connected by a central living wing, surrounding a central open outdoor courtyard.
-    - "OFFSET DUAL-VOLUME": Two rectangular volumes offset from each other (e.g. Ground Floor Wing 1 at [0,0,0], Wing 2 shifted to [3,2,0], or a cantilevered 2nd floor volume).
-    - "T-SHAPE / CROSS": Central entry/circulation spine with function wings protruding outward.
-    - "MODERN OPEN PAVILION": Wide glass-fronted modern pavilion with attached side volume (garage, porch, deck).
- 2. DO NOT output the exact same basic 2x2 rectangular block every time. Vary room dimensions, orientations, and roof styles to match modern architectural design!
+SINGLE-PASS PYTHON CODE EXECUTION (CRITICAL REQUIREMENT):
+You do NOT use piecemeal single-room tools.
+Instead, you write complete, high-performance, executable Python code in "python_code" that executes in a single pass via execute_ifc_code_tool using InfraStudioHarness and ifcopenshell.
 
-SPATIAL AXIOMS & RULES:
- 1. ALL ROOMS REQUIRED: Include EVERY room specified in room_requirements (Living Room, Bedrooms, Kitchen, Bathrooms, Hallways, Garages, Balconies, etc.).
- 2. FLUSH WALL BOUNDARIES: Adjacent rooms MUST share exact flush boundary coordinates so internal and external walls connect seamlessly.
- 3. DOORS: EVERY room MUST have at least one door connecting to a circulation space (Living Room, Hallway, or Entry) UNLESS the user explicitly requests no doors or elements are omitted.
-    - If the user explicitly asks for NO DOORS, or to omit doors, set "doors": [] explicitly on all rooms AND set "allow_no_doors": true in the root JSON.
- 4. WINDOWS: Windows MUST ONLY be placed on EXTERIOR walls. If the user asks for NO WINDOWS, set "windows": [] explicitly on all rooms AND set "allow_no_windows": true in the root JSON.
- 5. FLOOR & CEILING SLABS: Rooms have floor slabs and ceiling slabs by default. If the user asks to omit slabs (e.g. open sky / no ceiling slab, or dirt floor / no floor slab), set "floor_slab": false and/or "ceiling_slab": false on that room.
- 6. ROOF: Choose a roof type ("gable", "flat", "hip", "shed", "butterfly"). If user wants no roof, set "roof_type": "none".
- 7. MATERIALS: Specify a harmonious material palette (e.g. white render + cedar cladding, exposed concrete + black steel, light timber + slate).
+EXECUTION ENVIRONMENT & INFRASTUDIO HARNESS:
+The Python execution environment has ifcopenshell, trimesh, numpy, and math pre-imported.
+It also provides InfraStudioHarness(ifc, storey).
 
-ITERATIVE EDITS & MODIFICATIONS (WHEN is_edit = true):
- 1. When modifying an active existing model (is_edit = true), DO NOT erase or rebuild the building from scratch.
- 2. If adding new rooms or storeys (e.g. garage, balcony, 2nd floor, extra bedroom):
-    - Output "new_storeys": Array of any new floors/storeys (e.g. [{"name": "First Floor", "elevation": 3.0, "height": 3.0}]).
-    - Output "new_rooms": Array of new room objects with precise origin [x,y,z], width, length, doors, windows, floor_slab, ceiling_slab, attached to or above the existing structure.
- 3. Output "target_actions": List of concrete edit actions (e.g., add_room, add_window, add_door, add_balcony, change_roof, apply_material, delete_element).
- 4. Output "material_palette": Any updated material finishes requested by user.
+Structure your "python_code" like this:
+"""
+import ifcopenshell
+import ifcopenshell.api as api
+import trimesh
+import numpy as np
+import math
+
+ifc = get_ifc_file()
+buildings = ifc.by_type("IfcBuilding")
+building = buildings[0] if buildings else api.run("root.create_entity", ifc, ifc_class="IfcBuilding", name="Architectural Project")
+
+# Storey setup:
+storeys = ifc.by_type("IfcBuildingStorey")
+storey = storeys[0] if storeys else api.run("root.create_entity", ifc, ifc_class="IfcBuildingStorey", name="Ground Floor")
+api.run("aggregate.assign_object", ifc, relating_object=building, products=[storey])
+
+h = InfraStudioHarness(ifc, storey)
+
+# AVAILABLE HARNESS METHODS:
+# 1. h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
+# 2. h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0) -> trimesh.Trimesh
+# 3. h.create_stairs(start_pt=[x,y,z], length=3.5, width=1.2, height=3.2, num_steps=16) -> trimesh.Trimesh
+# 4. h.create_roof(footprint_2d, roof_type="gable|flat|shed|hip", height=2.5, z_elevation=3.2, thickness=0.3) -> trimesh.Trimesh
+# 5. h.create_cylinder(radius=0.25, height=3.5, pos=[x,y,z], axis=[0,0,1]) -> trimesh.Trimesh (columns)
+# 6. h.create_i_beam(depth=0.5, flange_w=0.25, web_t=0.02, flange_t=0.03, length=8.0, pos=[x,y,z], rot_z_deg=0.0) -> trimesh.Trimesh (beams)
+# 7. h.create_box(extents=[l,w,h], pos=[x,y,z], rot_z_deg=0.0) -> trimesh.Trimesh (curtain walls, glass panels, parapets)
+# 8. h.add_mesh_element(mesh, name, ifc_class="IfcWall|IfcSlab|IfcRoof|IfcColumn|IfcBeam|IfcStair|IfcDoor|IfcWindow|IfcFooting", mat_name="...", rgb=(r,g,b), transparency=0.0)
+
+# Build:
+# 1. Ground floor slab & upper slabs
+# 2. Exterior facade walls & interior partitions (avoid duplicate overlapping walls)
+# 3. Floor-to-ceiling glass curtain walls or picture windows (use ifc_class="IfcWindow", mat_name="Low-E Glass", rgb=(0.85, 0.92, 0.98), transparency=0.7)
+# 4. Monolithic staircases for multi-storey buildings (ifc_class="IfcStair", mat_name="Timber Tread", rgb=(0.76, 0.58, 0.38))
+# 5. Structural columns/beams for large open spans
+# 6. Ceiling slabs & Roof structure (pitched gable, hip, shed, or flat parapet)
+
+count = h.commit()
+save_and_load_ifc()
+print(f"Committed {count} elements.")
+"""
+
+ARCHITECTURAL DIVERSITY & FOOTPRINTS:
+Dynamically choose expressive modern footprints (L-Shape, U-Shape with courtyard, Cantilevered dual-volume, Modern glass pavilion).
+Do NOT produce a boring 1-room box!
 
 Strict Restrictions:
- * Return ONLY raw JSON matching the schema below. Start your output immediately with '{'.
+* Return ONLY raw JSON matching the schema below. Start your output immediately with '{'.
 
 Expected JSON Schema:
 {
+  "structure_name": "string",
+  "structure_category": "building",
   "is_edit": boolean,
   "roof_type": "flat|gable|hip|shed|butterfly|none",
   "has_stairs": boolean,
-  "allow_no_doors": boolean,
-  "allow_no_windows": boolean,
   "material_palette": {
     "wall": "string",
     "floor": "string",
@@ -47,6 +74,7 @@ Expected JSON Schema:
     "window_glass": "string",
     "roof_or_ceiling": "string"
   },
+  "python_code": "complete runnable python script using InfraStudioHarness(ifc, storey)",
   "storey_plans": [
     {
       "name": "string",
@@ -60,52 +88,10 @@ Expected JSON Schema:
           "origin": [number, number, number],
           "floor_slab": boolean,
           "ceiling_slab": boolean,
-          "doors": [
-            {
-              "wall": "south|east|north|west",
-              "offset": number,
-              "width": number,
-              "height": number
-            }
-          ],
-          "windows": [
-            {
-              "wall": "south|east|north|west",
-              "offset": number,
-              "width": number,
-              "height": number,
-              "sill_height": number
-            }
-          ]
+          "doors": [],
+          "windows": []
         }
       ]
-    }
-  ],
-  "new_storeys": [
-    {
-      "name": "string",
-      "elevation": number,
-      "height": number
-    }
-  ],
-  "new_rooms": [
-    {
-      "name": "string",
-      "width": number,
-      "length": number,
-      "origin": [number, number, number],
-      "floor_slab": boolean,
-      "ceiling_slab": boolean,
-      "doors": [],
-      "windows": []
-    }
-  ],
-  "special_elements": ["string"],
-  "target_actions": [
-    {
-      "action": "string",
-      "target": "string",
-      "parameters": {}
     }
   ],
   "structural_notes": ["string"]
@@ -114,15 +100,18 @@ Expected JSON Schema:
 const infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
 Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (cofferdams, bridge piers, structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
 
-INFRASTRUCTURE GEOMETRIES & HARNESS PRIMITIVES:
-You have access to specialized InfraStudio parametric engineering primitives via geometry_type:
-- "corrugated_panel": Interlocking sheet piles (AZ-36). Dimensions: { width, height, depth, pitch, thickness }.
-- "cutwater_pier": Hydrodynamic piers with curved upstream/downstream noses. Dimensions: { length, width, height, nose_radius }.
-- "i_beam": Steel beams/walers/girders with I-profile. Dimensions: { depth, flange_width, length, web_thickness, flange_thickness }.
-- "pipe": Tubular circular hollow struts/piles. Dimensions: { outer_radius, inner_radius, height, axis: [x,y,z] }.
-- "cylinder": Solid columns/piles. Dimensions: { radius, height, axis: [x,y,z] }.
-- "box": Slabs, footings, caps, water planes. Dimensions: { length, width, height }.
-- "custom_trimesh": You can supply a "trimesh_code" Python string returning 'result = mesh'.
+SINGLE-PASS PYTHON CODE EXECUTION (RECOMMENDED):
+Whenever possible, output a full, runnable Python script in "python_code" using InfraStudioHarness.
+Available harness methods:
+- h.create_corrugated_panel(width, height, depth, pitch, thickness, pos, rot_z_deg) (AZ-36 sheet piles)
+- h.create_cutwater_pier(length, width, height, nose_r, pos, rot_z_deg) (hydrodynamic bridge piers)
+- h.create_i_beam(depth, flange_w, web_t, flange_t, length, pos, rot_z_deg) (walers, girders)
+- h.create_pipe(outer_r, inner_r, height, pos, axis) (pipe struts)
+- h.create_cylinder(radius, height, pos, axis) (columns, pilings)
+- h.create_box(extents, pos, rot_z_deg) (slabs, footings, caps, water planes)
+- h.add_mesh_element(mesh, name, ifc_class, mat_name, rgb, transparency)
+- count = h.commit()
+- save_and_load_ifc()
 
 STRUCTURAL ACCURACY RULES:
 1. For cofferdams: Enclose the perimeter with "corrugated_panel" sheet piles, add horizontal "i_beam" waler rings at multiple depth tiers, span "pipe" compression cross struts, and position a central "cutwater_pier" on an "IfcFooting" inside.
@@ -132,7 +121,6 @@ STRUCTURAL ACCURACY RULES:
 
 Strict Restrictions:
 * Return ONLY raw JSON.
-* Do NOT include rooms, doors, or windows.
 * Start output immediately with '{'.
 
 Expected JSON Schema:
@@ -1085,6 +1073,241 @@ function processRooms(rooms: Room[], allowNoDoors = false): void {
   }
 }
 
+export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
+  const storeys = Array.isArray(plan.storey_plans) && plan.storey_plans.length > 0
+    ? plan.storey_plans
+    : [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [] }];
+
+  const rawRoof = String(plan.roof_type || "gable").toLowerCase();
+  const roofType = rawRoof.includes("none") ? "none" : rawRoof.includes("flat") ? "flat" : rawRoof.includes("shed") ? "shed" : rawRoof.includes("hip") ? "hip" : "gable";
+  const rawName = plan.structure_name || brief?.project_type || "InfraStudio Architecture";
+  const structureName = String(rawName).replace(/['"\\]/g, "");
+
+  const lines: string[] = [
+    "import ifcopenshell",
+    "import ifcopenshell.api as api",
+    "import trimesh",
+    "import numpy as np",
+    "import math",
+    "",
+    "ifc = get_ifc_file()",
+    "buildings = ifc.by_type('IfcBuilding')",
+    `building = buildings[0] if buildings else api.run('root.create_entity', ifc, ifc_class='IfcBuilding', name="${structureName}")`,
+    ""
+  ];
+
+  let totalMinX = Infinity, totalMinY = Infinity, totalMaxX = -Infinity, totalMaxY = -Infinity;
+  let topZ = 0;
+
+  for (let sIdx = 0; sIdx < storeys.length; sIdx++) {
+    const storey = storeys[sIdx];
+    const sName = String(storey.name || `Level_${sIdx}`).replace(/['"\\]/g, "");
+    const elev = Number(storey.elevation !== undefined ? storey.elevation : sIdx * 3.2);
+    const height = Number(storey.height || 3.2);
+    topZ = Math.max(topZ, elev + height);
+
+    lines.push(`# ========================================================`);
+    lines.push(`# STOREY: ${sName} (Elevation: ${elev}m, Height: ${height}m)`);
+    lines.push(`# ========================================================`);
+    lines.push(`_st_${sIdx} = api.run('root.create_entity', ifc, ifc_class='IfcBuildingStorey', name="${sName}")`);
+    lines.push(`api.run('geometry.edit_object_placement', ifc, product=_st_${sIdx}, matrix=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,${elev},1]])`);
+    lines.push(`api.run('aggregate.assign_object', ifc, relating_object=building, products=[_st_${sIdx}])`);
+    lines.push(`h_${sIdx} = InfraStudioHarness(ifc, _st_${sIdx})`);
+    lines.push("");
+
+    const rooms = Array.isArray(storey.rooms) && storey.rooms.length > 0 ? storey.rooms : [];
+    interface RBound { name: string; x: number; y: number; w: number; l: number; windows: any[]; doors: any[]; }
+    const rBounds: RBound[] = [];
+
+    if (rooms.length === 0) {
+      rBounds.push({ name: "Living Space", x: 0, y: 0, w: 10, l: 8, windows: [], doors: [] });
+    } else {
+      for (const r of rooms) {
+        const ox = Number(r.origin?.[0] || 0);
+        const oy = Number(r.origin?.[1] || 0);
+        const w = Number(r.width || 5);
+        const l = Number(r.length || 4);
+        rBounds.push({ name: r.name || "Room", x: ox, y: oy, w, l, windows: r.windows || [], doors: r.doors || [] });
+      }
+    }
+
+    // 1. Floor Slabs
+    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
+      const rb = rBounds[rIdx];
+      totalMinX = Math.min(totalMinX, rb.x);
+      totalMinY = Math.min(totalMinY, rb.y);
+      totalMaxX = Math.max(totalMaxX, rb.x + rb.w);
+      totalMaxY = Math.max(totalMaxY, rb.y + rb.l);
+
+      const fp = `[[${rb.x}, ${rb.y}], [${rb.x + rb.w}, ${rb.y}], [${rb.x + rb.w}, ${rb.y + rb.l}], [${rb.x}, ${rb.y + rb.l}]]`;
+      const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
+      lines.push(`_slab_${sIdx}_${rIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.25, z_elevation=${elev - 0.25})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_slab_${sIdx}_${rIdx}, "${sName}_${cleanName}_Floor_Slab", ifc_class="IfcSlab", mat_name="Polished Architectural Concrete", rgb=(0.78, 0.78, 0.76))`);
+    }
+    lines.push("");
+
+    // 2. Walls with deduplication at shared boundaries
+    const rawSegments: { p1: [number, number]; p2: [number, number]; roomName: string }[] = [];
+    for (const rb of rBounds) {
+      rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x + rb.w, rb.y], roomName: rb.name });
+      rawSegments.push({ p1: [rb.x + rb.w, rb.y], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name });
+      rawSegments.push({ p1: [rb.x + rb.w, rb.y + rb.l], p2: [rb.x, rb.y + rb.l], roomName: rb.name });
+      rawSegments.push({ p1: [rb.x, rb.y + rb.l], p2: [rb.x, rb.y], roomName: rb.name });
+    }
+
+    const uniqueWalls: { p1: [number, number]; p2: [number, number]; isShared: boolean; name: string }[] = [];
+    for (const seg of rawSegments) {
+      const [ax1, ay1] = seg.p1;
+      const [ax2, ay2] = seg.p2;
+      const keyA = ax1 < ax2 || (ax1 === ax2 && ay1 < ay2);
+      const sp1: [number, number] = keyA ? [ax1, ay1] : [ax2, ay2];
+      const sp2: [number, number] = keyA ? [ax2, ay2] : [ax1, ay1];
+
+      let found = false;
+      for (const uw of uniqueWalls) {
+        if (Math.hypot(uw.p1[0] - sp1[0], uw.p1[1] - sp1[1]) < 0.15 &&
+            Math.hypot(uw.p2[0] - sp2[0], uw.p2[1] - sp2[1]) < 0.15) {
+          uw.isShared = true;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        uniqueWalls.push({ p1: sp1, p2: sp2, isShared: false, name: seg.roomName });
+      }
+    }
+
+    lines.push(`# Walls for ${sName}`);
+    for (let wIdx = 0; wIdx < uniqueWalls.length; wIdx++) {
+      const uw = uniqueWalls[wIdx];
+      const thick = uw.isShared ? 0.15 : 0.25;
+      const mat = uw.isShared ? "Interior Partition Drywall" : "Smooth Architectural Stucco";
+      const rgb = uw.isShared ? "(0.90, 0.90, 0.88)" : "(0.95, 0.95, 0.92)";
+      const wName = `${sName}_${uw.isShared ? 'Interior' : 'Perimeter'}_Wall_${wIdx + 1}`;
+      lines.push(`_w_${sIdx}_${wIdx} = h_${sIdx}.create_wall([${uw.p1[0]}, ${uw.p1[1]}], [${uw.p2[0]}, ${uw.p2[1]}], height=${height}, thickness=${thick}, z_bottom=${elev})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_w_${sIdx}_${wIdx}, "${wName}", ifc_class="IfcWall", mat_name="${mat}", rgb=${rgb})`);
+    }
+    lines.push("");
+
+    // 3. Glazed Panels / Windows
+    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
+      const rb = rBounds[rIdx];
+      for (let winIdx = 0; winIdx < rb.windows.length; winIdx++) {
+        const win = rb.windows[winIdx];
+        const winW = Number(win.width || 1.4);
+        const winH = Number(win.height || 1.5);
+        const sillH = Number(win.sill_height || 0.9);
+        const offset = Number(win.offset || 1.0);
+        const wall = String(win.wall || "south").toLowerCase();
+
+        let cx = rb.x + offset + winW / 2;
+        let cy = rb.y;
+        let rotZ = 0;
+        if (wall === "north") {
+          cy = rb.y + rb.l;
+          rotZ = 0;
+        } else if (wall === "east") {
+          cx = rb.x + rb.w;
+          cy = rb.y + offset + winW / 2;
+          rotZ = 90;
+        } else if (wall === "west") {
+          cx = rb.x;
+          cy = rb.y + offset + winW / 2;
+          rotZ = 90;
+        }
+        const cz = elev + sillH + winH / 2;
+        const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
+        lines.push(`_win_${sIdx}_${rIdx}_${winIdx} = h_${sIdx}.create_box(extents=[${winW}, 0.08, ${winH}], pos=[${cx}, ${cy}, ${cz}], rot_z_deg=${rotZ})`);
+        lines.push(`h_${sIdx}.add_mesh_element(_win_${sIdx}_${rIdx}_${winIdx}, "${sName}_${cleanName}_Window_${winIdx + 1}", ifc_class="IfcWindow", mat_name="Low-E Insulated Architectural Glass", rgb=(0.85, 0.92, 0.98), transparency=0.7)`);
+      }
+    }
+    lines.push("");
+
+    // 4. Doors
+    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
+      const rb = rBounds[rIdx];
+      const doorList = rb.doors.length > 0 ? rb.doors : [{ wall: "south", offset: 1.0, width: 0.9, height: 2.1 }];
+      for (let doorIdx = 0; doorIdx < doorList.length; doorIdx++) {
+        const door = doorList[doorIdx];
+        const doorW = Number(door.width || 0.9);
+        const doorH = Number(door.height || 2.1);
+        const offset = Number(door.offset || 1.0);
+        const wall = String(door.wall || "south").toLowerCase();
+
+        let cx = rb.x + offset + doorW / 2;
+        let cy = rb.y;
+        let rotZ = 0;
+        if (wall === "north") {
+          cy = rb.y + rb.l;
+          rotZ = 0;
+        } else if (wall === "east") {
+          cx = rb.x + rb.w;
+          cy = rb.y + offset + doorW / 2;
+          rotZ = 90;
+        } else if (wall === "west") {
+          cx = rb.x;
+          cy = rb.y + offset + doorW / 2;
+          rotZ = 90;
+        }
+        const cz = elev + doorH / 2;
+        const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
+        lines.push(`_door_${sIdx}_${rIdx}_${doorIdx} = h_${sIdx}.create_box(extents=[${doorW}, 0.08, ${doorH}], pos=[${cx}, ${cy}, ${cz}], rot_z_deg=${rotZ})`);
+        lines.push(`h_${sIdx}.add_mesh_element(_door_${sIdx}_${rIdx}_${doorIdx}, "${sName}_${cleanName}_Door_${doorIdx + 1}", ifc_class="IfcDoor", mat_name="Solid Architectural Wood Door", rgb=(0.58, 0.38, 0.22))`);
+      }
+    }
+    lines.push("");
+
+    // 4. Stairs (if multi-storey or has_stairs)
+    if ((plan.has_stairs || storeys.length > 1) && sIdx < storeys.length - 1) {
+      const stairX = rBounds[0].x + 1.0;
+      const stairY = rBounds[0].y + 1.0;
+      lines.push(`# Monolithic Staircase connecting ${sName} to upper level`);
+      lines.push(`_stairs_${sIdx} = h_${sIdx}.create_stairs(start_pt=[${stairX}, ${stairY}, ${elev}], length=3.5, width=1.2, height=${height}, num_steps=16)`);
+      lines.push(`h_${sIdx}.add_mesh_element(_stairs_${sIdx}, "${sName}_Monolithic_Stairs", ifc_class="IfcStair", mat_name="Architectural Hardwood Tread", rgb=(0.76, 0.58, 0.38))`);
+      lines.push("");
+    }
+
+    // 5. Ceiling Slab
+    for (let rIdx = 0; rIdx < rBounds.length; rIdx++) {
+      const rb = rBounds[rIdx];
+      const fp = `[[${rb.x}, ${rb.y}], [${rb.x + rb.w}, ${rb.y}], [${rb.x + rb.w}, ${rb.y + rb.l}], [${rb.x}, ${rb.y + rb.l}]]`;
+      const cleanName = rb.name.replace(/[^a-zA-Z0-9_]/g, '_');
+      lines.push(`_ceil_${sIdx}_${rIdx} = h_${sIdx}.create_slab(${fp}, thickness=0.20, z_elevation=${elev + height})`);
+      lines.push(`h_${sIdx}.add_mesh_element(_ceil_${sIdx}_${rIdx}, "${sName}_${cleanName}_Ceiling", ifc_class="IfcSlab", mat_name="White Gypsum Ceiling Plaster", rgb=(0.98, 0.98, 0.98))`);
+    }
+    lines.push("");
+
+    lines.push(`h_${sIdx}.commit()`);
+    lines.push("");
+  }
+
+  // Roof on top storey
+  if (roofType !== "none") {
+    const minX = isFinite(totalMinX) ? totalMinX - 0.4 : -0.4;
+    const minY = isFinite(totalMinY) ? totalMinY - 0.4 : -0.4;
+    const maxX = isFinite(totalMaxX) ? totalMaxX + 0.4 : 10.4;
+    const maxY = isFinite(totalMaxY) ? totalMaxY + 0.4 : 8.4;
+    const roofFp = `[[${minX}, ${minY}], [${maxX}, ${minY}], [${maxX}, ${maxY}], [${minX}, ${maxY}]]`;
+    const rType = roofType.includes("flat") ? "flat" : roofType.includes("shed") ? "shed" : roofType.includes("hip") ? "hip" : "gable";
+    const roofHeight = rType === "flat" ? 0.3 : 2.4;
+
+    lines.push(`# ========================================================`);
+    lines.push(`# ROOF STRUCTURE: ${rType.toUpperCase()}`);
+    lines.push(`# ========================================================`);
+    lines.push(`_top_st = _st_${storeys.length - 1}`);
+    lines.push(`h_roof = InfraStudioHarness(ifc, _top_st)`);
+    lines.push(`_roof_mesh = h_roof.create_roof(${roofFp}, roof_type="${rType}", height=${roofHeight}, z_elevation=${topZ + 0.2}, thickness=0.30)`);
+    lines.push(`h_roof.add_mesh_element(_roof_mesh, "Architectural_${rType}_Roof", ifc_class="IfcRoof", mat_name="Dark Anthracite Standing Seam Roof", rgb=(0.25, 0.26, 0.28))`);
+    lines.push(`h_roof.commit()`);
+    lines.push("");
+  }
+
+  lines.push("save_and_load_ifc()");
+  lines.push("print('InfraStudio Python harness generation complete and saved.')");
+
+  return lines.join("\n");
+}
+
 function repairPlan(plan: any, brief?: any): any {
   if (!plan || typeof plan !== "object") plan = {};
   for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
@@ -1204,6 +1427,9 @@ function repairPlan(plan: any, brief?: any): any {
     required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
   };
   plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
+  if (!plan.python_code || typeof plan.python_code !== "string" || plan.python_code.trim().length < 50) {
+    plan.python_code = synthesizeBuildingPythonCode(plan, brief);
+  }
 
   return plan;
 }

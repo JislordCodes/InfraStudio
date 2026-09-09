@@ -319,6 +319,79 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         m.apply_translation(pos)
         return m
 
+    def create_wall(p1, p2, height=3.0, thickness=0.2, z_bottom=0.0):
+        dx = float(p2[0]) - float(p1[0])
+        dy = float(p2[1]) - float(p1[1])
+        length = math.hypot(dx, dy)
+        if length < 1e-4:
+            return trimesh.Trimesh()
+        angle_rad = math.atan2(dy, dx)
+        cx = (float(p1[0]) + float(p2[0])) / 2.0
+        cy = (float(p1[1]) + float(p2[1])) / 2.0
+        cz = float(z_bottom) + float(height) / 2.0
+        m = trimesh.primitives.Box(extents=[length, float(thickness), float(height)])
+        R = trimesh.transformations.rotation_matrix(angle_rad, [0, 0, 1])
+        m.apply_transform(R)
+        m.apply_translation([cx, cy, cz])
+        return m
+
+    def create_slab(polygon_2d, thickness=0.3, z_elevation=0.0):
+        pts = [[float(p[0]), float(p[1])] for p in polygon_2d]
+        m = extrude_polygon_safe(pts, height=float(thickness))
+        m.apply_translation([0, 0, float(z_elevation)])
+        return m
+
+    def create_stairs(start_pt=[0, 0, 0], length=3.0, width=1.2, height=3.0, num_steps=16):
+        steps = []
+        n = max(1, int(num_steps))
+        step_h = float(height) / n
+        step_d = float(length) / n
+        x0, y0, z0 = float(start_pt[0]), float(start_pt[1]), float(start_pt[2])
+        for i in range(n):
+            h_curr = step_h * (i + 1)
+            b = trimesh.primitives.Box(extents=[step_d, float(width), h_curr])
+            b.apply_translation([x0 + i * step_d + step_d / 2.0, y0, z0 + h_curr / 2.0])
+            steps.append(b)
+        return trimesh.util.concatenate(steps)
+
+    def create_roof(footprint_2d, roof_type="gable", height=2.0, z_elevation=3.0, thickness=0.25):
+        pts = [[float(p[0]), float(p[1])] for p in footprint_2d]
+        min_x = min(p[0] for p in pts)
+        max_x = max(p[0] for p in pts)
+        min_y = min(p[1] for p in pts)
+        max_y = max(p[1] for p in pts)
+        L = max_x - min_x
+        W = max_y - min_y
+        cx = (min_x + max_x) / 2.0
+        cy = (min_y + max_y) / 2.0
+        rtype = str(roof_type).lower()
+        if "flat" in rtype:
+            m = extrude_polygon_safe(pts, height=float(thickness))
+            m.apply_translation([0, 0, float(z_elevation)])
+            return m
+        elif "shed" in rtype:
+            wedge_pts = [[min_x, 0], [max_x, 0], [max_x, float(height)], [min_x, 0]]
+            m = extrude_polygon_safe(wedge_pts, height=W)
+            R = trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0])
+            m.apply_transform(R)
+            m.apply_translation([0, max_y, float(z_elevation)])
+            return m
+        else:
+            if L >= W:
+                cross = [[min_y, 0], [cy, float(height)], [max_y, 0]]
+                m = extrude_polygon_safe(cross, height=L)
+                R = trimesh.transformations.rotation_matrix(math.pi / 2, [0, 1, 0])
+                m.apply_transform(R)
+                m.apply_translation([min_x, 0, float(z_elevation)])
+                return m
+            else:
+                cross = [[min_x, 0], [cx, float(height)], [max_x, 0]]
+                m = extrude_polygon_safe(cross, height=W)
+                R = trimesh.transformations.rotation_matrix(math.pi / 2, [-1, 0, 0])
+                m.apply_transform(R)
+                m.apply_translation([0, min_y, float(z_elevation)])
+                return m
+
     def add_mesh_element(mesh, name, ifc_class="IfcBuildingElementProxy", mat_name="Structural Steel", rgb=(0.5, 0.5, 0.5), transparency=0.0):
         if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
             return None
@@ -388,6 +461,10 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         "create_corrugated_panel": staticmethod(create_corrugated_panel),
         "create_cutwater_pier": staticmethod(create_cutwater_pier),
         "create_i_beam": staticmethod(create_i_beam),
+        "create_wall": staticmethod(create_wall),
+        "create_slab": staticmethod(create_slab),
+        "create_stairs": staticmethod(create_stairs),
+        "create_roof": staticmethod(create_roof),
         "add_mesh_element": staticmethod(add_mesh_element),
         "commit": staticmethod(commit)
     })()
@@ -717,7 +794,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
           model: targetModel,
           messages: msgs,
           temperature: 0.6,
-          max_tokens: 4096,
+          max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
       });
