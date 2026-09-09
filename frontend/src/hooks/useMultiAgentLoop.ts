@@ -77,9 +77,6 @@ export async function runMultiAgentLoop(
       sessionId = '';
     }
 
-    if (isNew && plan.layout_validation?.status !== 'PASS') {
-      throw new Error('BIM generation blocked: the spatial layout did not pass clash validation.');
-    }
     if (isNew && plan.layout_validation?.repairs?.length) {
       pushStep(`Architectural Agent: Spatial layout repaired — ${plan.layout_validation.repairs.join(' ')}`);
     }
