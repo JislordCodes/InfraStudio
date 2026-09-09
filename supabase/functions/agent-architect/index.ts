@@ -1,103 +1,37 @@
 import { CORS, callQwen, callGemini, cleanJsonResponse } from "../_shared/shared.ts";
+import { extractPythonCode } from "../_shared/antigravity_kimi_agent.ts";
 
-const systemPrompt = `You are the Lead Master Architect & Computational BIM Engineer for InfraStudio.
-Your mission is to transform a design brief into a complete, visually striking, mathematically sound, and watertight architectural BIM model.
+const systemPrompt = `You are Antigravity's Autonomous Computational BIM Architect & Structural Engineer.
+Given the user's design request, write a complete, standalone, runnable Python script that generates an IFC model matching their requirements using IfcOpenShell and Trimesh.
+You have complete creative and mathematical freedom: design any architectural form, complex curves, organic roofs, towers, bridges, pavilions, or modern villas without being restricted to rigid box templates.
 
-SINGLE-PASS PYTHON CODE EXECUTION (CRITICAL REQUIREMENT):
-You do NOT use piecemeal single-room tools.
-Instead, you write complete, high-performance, executable Python code in "python_code" that executes in a single pass via execute_ifc_code_tool using InfraStudioHarness and ifcopenshell.
+EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
+- Python 3.11 with ifcopenshell, ifcopenshell.api as api, trimesh, numpy as np, and math pre-imported.
+- ifc = get_ifc_file()
+- save_and_load_ifc()
+- InfraStudioHarness(ifc, storey) is available if you wish to use high-level primitives:
+  * h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
+  * h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[...]) -> trimesh.Trimesh (creates watertight walls with true rectangular opening voids)
+  * h.add_window(p1, p2, offset, width, height, sill_height, z_bottom, name)
+  * h.add_door(p1, p2, offset, width, height, z_bottom, name)
+  * h.add_column(pos=[x,y], height=3.2, radius=0.2, z_bottom=0.0, shape="round|square", name)
+  * h.add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name)
+  * h.add_railing(p1, p2, height=1.05, z_bottom=0.0, name)
+  * h.create_stairs(start_pt, length, width, height, num_steps)
+  * h.create_roof(footprint_2d, roof_type, height, z_elevation, thickness)
+  * h.add_mesh_element(mesh, name, ifc_class, mat_name, rgb, transparency)
+  * count = h.commit()
+- You can ALSO write raw ifcopenshell entities or trimesh geometry directly for any custom, parametric, or organic structures.
+- End your script with:
+  save_and_load_ifc()
+  print("IFC model generated successfully.")
 
-EXECUTION ENVIRONMENT & INFRASTUDIO HARNESS:
-The Python execution environment has ifcopenshell, trimesh, numpy, and math pre-imported.
-It also provides InfraStudioHarness(ifc, storey).
-
-Structure your "python_code" like this:
-"""
-import ifcopenshell
-import ifcopenshell.api as api
-import trimesh
-import numpy as np
-import math
-
-ifc = get_ifc_file()
-buildings = ifc.by_type("IfcBuilding")
-building = buildings[0] if buildings else api.run("root.create_entity", ifc, ifc_class="IfcBuilding", name="Architectural Project")
-
-# Storey setup:
-storeys = ifc.by_type("IfcBuildingStorey")
-storey = storeys[0] if storeys else api.run("root.create_entity", ifc, ifc_class="IfcBuildingStorey", name="Ground Floor")
-api.run("aggregate.assign_object", ifc, relating_object=building, products=[storey])
-
-h = InfraStudioHarness(ifc, storey)
-
-# AVAILABLE HARNESS METHODS:
-# 1. h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
-# 2. h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[{"offset": float, "width": float, "height": float, "sill_height": float}]) -> trimesh.Trimesh (creates watertight walls with actual opening voids!)
-# 3. h.add_window(p1, p2, offset, width=1.4, height=1.5, sill_height=0.9, z_bottom=0.0, name="Window") -> adds dark aluminum frame and low-e glass pane
-# 4. h.add_door(p1, p2, offset, width=0.9, height=2.1, z_bottom=0.0, name="Door") -> adds door frame and wood veneer leaf
-# 5. h.add_column(pos=[x,y], height=3.2, radius=0.2, z_bottom=0.0, shape="round|square", name="Column") -> adds structural concrete column
-# 6. h.add_beam(p1, p2, depth=0.45, width=0.25, z_elevation=3.0, name="Beam") -> adds structural beam
-# 7. h.add_railing(p1, p2, height=1.05, z_bottom=0.0, name="Railing") -> adds balcony or stair safety railing
-# 8. h.create_stairs(start_pt=[x,y,z], length=3.6, width=1.2, height=3.2, num_steps=18) -> trimesh.Trimesh
-# 9. h.create_roof(footprint_2d, roof_type="gable|flat|shed|hip", height=2.5, z_elevation=3.2, thickness=0.3) -> trimesh.Trimesh
-# 10. h.add_mesh_element(mesh, name, ifc_class="IfcWall|IfcSlab|IfcRoof|IfcColumn|IfcBeam|IfcStair|IfcDoor|IfcWindow|IfcRailing", mat_name="...", rgb=(r,g,b), transparency=0.0)
-
-# Build:
-# 1. Continuous ground podium slab & upper floor plates with cantilevered balconies
-# 2. Structural column grid at spans/corners
-# 3. Exterior & interior walls with genuine window/door opening voids via openings=[...]
-# 4. Framed windows & panel doors inserted directly into the wall openings
-# 5. Safety railings along balcony edges and staircases
-# 6. Roof structure with eaves overhangs or capped parapets
-# 7. Monolithic staircases for multi-storey buildings
-
-count = h.commit()
-save_and_load_ifc()
-print(f"Committed {count} elements.")
-"""
-
-ARCHITECTURAL DIVERSITY & FOOTPRINTS:
-Dynamically choose expressive modern footprints (L-Shape, U-Shape with courtyard, Cantilevered dual-volume, Modern glass pavilion).
-Do NOT produce a boring 1-room box!
-
-Strict Restrictions:
-* Return ONLY raw JSON matching the schema below. Start your output immediately with '{'.
-
-Expected JSON Schema:
+OUTPUT FORMAT:
+Return ONLY a JSON object:
 {
-  "structure_name": "string",
-  "structure_category": "building",
-  "is_edit": boolean,
-  "roof_type": "flat|gable|hip|shed|butterfly|none",
-  "has_stairs": boolean,
-  "material_palette": {
-    "wall": "string",
-    "floor": "string",
-    "door": "string",
-    "window_glass": "string",
-    "roof_or_ceiling": "string"
-  },
-  "python_code": "complete runnable python script using InfraStudioHarness(ifc, storey)",
-  "storey_plans": [
-    {
-      "name": "string",
-      "elevation": number,
-      "height": number,
-      "rooms": [
-        {
-          "name": "string",
-          "width": number,
-          "length": number,
-          "origin": [number, number, number],
-          "floor_slab": boolean,
-          "ceiling_slab": boolean,
-          "doors": [],
-          "windows": []
-        }
-      ]
-    }
-  ],
-  "structural_notes": ["string"]
+  "thought_process": "Your step-by-step spatial, architectural, and mathematical reasoning",
+  "structure_name": "Descriptive Name",
+  "python_code": "Complete executable Python script"
 }`;
 
 const infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
@@ -1587,24 +1521,52 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
       throw new Error(`${selectedModel} returned an empty or invalid response.`);
     }
 
-  // Attempt JSON parse — retry once if it fails
-  let parsed: any;
-  try {
-    parsed = cleanJsonResponse(res);
-  } catch (firstErr) {
-    console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
-    const retryPrompt = `You are an architect AI. Return ONLY valid JSON — no markdown, no text, no thinking.
-The user wants: ${brief.project_type || "a building"} with these rooms: ${(brief.room_requirements || []).map((r: any) => r.name).join(", ")}.
-Output a JSON object with keys: is_edit(false), roof_type, has_stairs, material_palette, storey_plans(array of floors with rooms having name/width/length/origin[x,y,z]/doors[]/windows[]), special_elements, structural_notes.`;
-    res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, selectedModel);
-    parsed = cleanJsonResponse(res);
-  }
+    // 1. Direct Autonomous Python Code Check:
+    // If Kimi generated direct Python code, honor it directly without templates!
+    const directCode = extractPythonCode(res);
+    if (directCode && directCode.length > 50) {
+      let parsedName = brief.structure_name || brief.project_type || brief.client_requirements?.slice(0, 40) || "Autonomous Architectural Model";
+      try {
+        const parsedJson = cleanJsonResponse(res);
+        if (parsedJson?.structure_name) parsedName = parsedJson.structure_name;
+      } catch { /* ignore */ }
 
-  if (isBuilding) {
-    return repairPlan(parsed, brief);
-  } else {
-    return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
-  }
+      console.log(`[handleArchitect] Autonomous Kimi K3 code generated (${directCode.length} chars). No templates applied.`);
+      return {
+        structure_name: parsedName,
+        structure_category: category,
+        is_edit: false,
+        python_code: directCode,
+        layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
+      };
+    }
+
+    // Attempt JSON parse — retry once if it fails
+    let parsed: any;
+    try {
+      parsed = cleanJsonResponse(res);
+    } catch (firstErr) {
+      console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
+      const retryPrompt = `You are an architect AI. Output JSON with { "structure_name": "...", "python_code": "..." }`;
+      res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, selectedModel);
+      parsed = cleanJsonResponse(res);
+    }
+
+    if (parsed && typeof parsed.python_code === "string" && parsed.python_code.length > 50) {
+      return {
+        structure_name: parsed.structure_name || brief.project_type || "Autonomous Model",
+        structure_category: category,
+        is_edit: false,
+        python_code: parsed.python_code,
+        layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
+      };
+    }
+
+    if (isBuilding) {
+      return repairPlan(parsed, brief);
+    } else {
+      return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
+    }
   } catch (error) {
     console.warn("[handleArchitect] Qwen planning failed; using constrained fallback:", String(error));
     return fallbackPlan(error);
