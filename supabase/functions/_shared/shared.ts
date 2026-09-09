@@ -644,21 +644,23 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 }
 
 function getTargetModel(model: string): string {
-  if (model === "qwen3.8-max" || model === "qwen3.8-max-preview") {
-    // The current Model Studio quota is attached to qwen3.8-max. The preview
-    // alias can be entitlement/plan-specific and is not interchangeable.
+  const m = (model || "").toLowerCase();
+  if (m.includes("kimi") || m === "kimi-k3") {
+    return "kimi-k3";
+  }
+  if (m.includes("astra") || m === "gpt-6-astra") {
+    return "gpt-6-astra";
+  }
+  if (m === "qwen3.8-max" || m === "qwen3.8-max-preview") {
     return "qwen3.8-max";
   }
-  if (model === "qwen-max" || !model || model === "glm-5.1") {
+  if (m === "qwen-max") {
     return "qwen-max";
   }
-  if (model === "kimi-k2.7-code") {
-    return "qwen-max";
-  }
-  if (model === "qwen3.7-plus" || model === "qwen-plus") {
+  if (m === "qwen3.7-plus" || m === "qwen-plus") {
     return "qwen-plus";
   }
-  return model;
+  return "kimi-k3";
 }
 
 function getQwenEndpoints(): string[] {
@@ -670,18 +672,21 @@ function getQwenEndpoints(): string[] {
   const base = configured?.trim().replace(/\/+$/, "");
   if (base) return [`${base}/chat/completions`];
   return [
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
   ];
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "glm-5.1"): Promise<string> {
-  const explabsKey = getExplabsApiKey();
-  if (explabsKey) {
-    try {
-      return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
-    } catch (err) {
-      console.warn("[callQwen] Fallback from Astra error:", err);
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "kimi-k3"): Promise<string> {
+  const targetModel = getTargetModel(model);
+  if (targetModel === "gpt-6-astra") {
+    const explabsKey = getExplabsApiKey();
+    if (explabsKey) {
+      try {
+        return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
+      } catch (err) {
+        console.warn("[callQwen] Fallback from Astra error:", err);
+      }
     }
   }
 
@@ -695,9 +700,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
     msgs.push({ role: "user", content: userMessage });
   }
 
-  const targetModel = getTargetModel(model);
   let lastError: any = null;
-
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
 
@@ -713,8 +716,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
-          reasoning_effort: targetModel === "qwen3.8-max" ? "medium" : undefined,
+          temperature: 0.6,
           max_tokens: 4096,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
@@ -723,7 +725,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
-        lastError = new Error(`Qwen Error (${res.status}): ${errText}`);
+        lastError = new Error(`Model Error (${res.status}): ${errText}`);
         continue;
       }
       
@@ -742,36 +744,39 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "qwen3.8-max"): Promise<any> {
-  const explabsKey = getExplabsApiKey();
-  if (explabsKey) {
-    try {
-      const msgs = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage }
-      ];
-      const payload: any = {
-        model: "gpt-6-astra",
-        messages: msgs
-      };
-      if (tools && tools.length > 0) {
-        payload.tools = tools;
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "kimi-k3"): Promise<any> {
+  const targetModel = getTargetModel(model);
+  if (targetModel === "gpt-6-astra") {
+    const explabsKey = getExplabsApiKey();
+    if (explabsKey) {
+      try {
+        const msgs = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage }
+        ];
+        const payload: any = {
+          model: "gpt-6-astra",
+          messages: msgs
+        };
+        if (tools && tools.length > 0) {
+          payload.tools = tools;
+        }
+        const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${explabsKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data.choices?.[0]?.message;
+        }
+        console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
+      } catch (err) {
+        console.warn("[callGLM Astra] Fallback on error:", err);
       }
-      const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${explabsKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.choices?.[0]?.message;
-      }
-      console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
-    } catch (err) {
-      console.warn("[callGLM Astra] Fallback on error:", err);
     }
   }
 
@@ -783,7 +788,6 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
     { role: "user", content: userMessage }
   ];
 
-  const targetModel = getTargetModel(model);
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
 
@@ -799,8 +803,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
           model: targetModel,
           messages: msgs,
           tools: (tools && tools.length > 0) ? tools : undefined,
-          temperature: targetModel === "qwen3.8-max" ? 0.6 : 0.1,
-          reasoning_effort: targetModel === "qwen3.8-max" ? "medium" : undefined,
+          temperature: 0.6,
           max_tokens: 4096
         })
       });
@@ -820,7 +823,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
   throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
 }
 
-export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "glm-5.1"): Promise<ReadableStream<Uint8Array>> {
+export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "kimi-k3"): Promise<ReadableStream<Uint8Array>> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");

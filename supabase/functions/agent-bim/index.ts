@@ -715,7 +715,7 @@ h.add_mesh_element(_m_${i}, "${name}", ifc_class="${ifcClass}", mat_name="${mat}
           executionError = "";
         }
 
-        const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, "qwen3.8-max");
+        const glmMsg = await callGLM(freeformPrompt, currentPlan, allTools, payload.model || "kimi-k3");
         const toolCalls = glmMsg.tool_calls || [];
         if (toolCalls.length === 0) {
           executionError = "No tool calls were produced. You MUST call create_trimesh_ifc or other tools to build the structure.";
@@ -852,7 +852,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "qwen3.8-max");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, payload.model || "kimi-k3");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";
