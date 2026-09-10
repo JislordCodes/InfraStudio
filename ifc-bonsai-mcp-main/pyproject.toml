@@ -38,6 +38,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
+    "google-antigravity>=0.1.16",
     
     # Web server capabilities
     "fastapi>=0.111.0",
