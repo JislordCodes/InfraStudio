@@ -25,6 +25,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 - Python 3.11 with ifcopenshell, ifcopenshell.api as api, trimesh, numpy as np, and math pre-imported.
 - ifc = get_ifc_file()
 - save_and_load_ifc()
+- SANDBOX RULES:
+  * Do NOT import 'os', 'sys', 'subprocess', or any filesystem/OS modules (blocked by EC2 security sandbox).
+  * Do NOT define custom Python classes; write clean procedural/functional code.
+  * Write standard multiline Python code with 4-space indentation. Do NOT join statements with semicolons (;).
 - InfraStudioHarness(ifc, storey) is available if you wish to use high-level primitives:
   * h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
   * h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[...]) -> trimesh.Trimesh (creates watertight walls with true rectangular opening voids)
@@ -45,10 +49,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 OUTPUT FORMAT:
 Return ONLY a JSON object:
 {
-  "thought_process": "Your step-by-step spatial, architectural, and mathematical reasoning",
   "structure_name": "Descriptive Name",
   "python_code": "Complete executable Python script"
-}`;
+}
+Do NOT include thought_process or markdown explanations in the JSON. Focus directly on executable python_code.`;
 
 /**
  * Extracts raw Python code from LLM response (supports JSON or markdown code block).
@@ -112,10 +116,11 @@ export async function runAntigravityKimiAgent(
 
     try {
       let promptMessage = "";
+      const stepModel = iterations === 1 ? model : "qwen-max";
       if (iterations === 1) {
-        promptMessage = `User Design Brief: ${promptText}\n\nDesign a complete, high-quality, watertight architectural BIM model using InfraStudioHarness. Return JSON with thought_process and python_code.`;
+        promptMessage = `User Design Brief: ${promptText}\n\nDesign a complete, high-quality, watertight architectural BIM model using InfraStudioHarness. Return JSON with structure_name and python_code.`;
       } else {
-        logStep(`🔧 Antigravity Agent: Self-healing error from previous pass (Attempt ${iterations}/${maxRetries})...`);
+        logStep(`🔧 Antigravity Agent: Fast self-healing error from previous pass with ${stepModel} (Attempt ${iterations}/${maxRetries})...`);
         promptMessage = `PREVIOUS PYTHON CODE EXECUTION FAILED ON EC2 BONSAI WITH ERROR:\n${errorFeedback}\n\nFAILED CODE:\n\`\`\`python\n${code}\n\`\`\`\n\nAnalyze why this failed, repair the geometry/parameters, ensure all InfraStudioHarness methods are valid, and return the corrected JSON with repaired python_code.`;
       }
 
@@ -123,18 +128,25 @@ export async function runAntigravityKimiAgent(
         ANTIGRAVITY_SYSTEM_PROMPT,
         promptMessage,
         true,
-        model
+        stepModel
       );
 
       code = extractPythonCode(rawResponse);
       if (!code || code.length < 50) {
-        throw new Error(`Failed to extract valid Python code from ${model} response.`);
+        throw new Error(`Failed to extract valid Python code from ${stepModel} response.`);
       }
 
-      logStep(`⚡ Antigravity Agent: Executing ${code.length} bytes of Python code on EC2 Bonsai MCP...`);
+      // Pre-execution code sanitization:
+      let codeToRun = code;
+      codeToRun = codeToRun.replace(/import\s+InfraStudioHarness\s+as\s+h;?/g, "h = InfraStudioHarness()");
+      codeToRun = codeToRun.replace(/import\s+InfraStudioHarness;?/g, "");
+      codeToRun = codeToRun.replace(/from\s+InfraStudioHarness\s+import\s+[^;\n]+;?/g, "");
+      codeToRun = codeToRun.replace(/import\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, "# removed system import");
+
+      logStep(`⚡ Antigravity Agent: Executing ${codeToRun.length} bytes of Python code on EC2 Bonsai MCP...`);
 
       // Execute on EC2 Bonsai MCP server
-      const toolRes = await mcpCallTool("execute_ifc_code_tool", { code }, currentSessionId);
+      const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: codeToRun }, currentSessionId);
       currentSessionId = toolRes.session;
 
       logStep(`✅ Antigravity Agent: Execution succeeded! Model generated cleanly.`);

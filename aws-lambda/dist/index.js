@@ -52656,6 +52656,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 - Python 3.11 with ifcopenshell, ifcopenshell.api as api, trimesh, numpy as np, and math pre-imported.
 - ifc = get_ifc_file()
 - save_and_load_ifc()
+- SANDBOX RULES:
+  * Do NOT import 'os', 'sys', 'subprocess', or any filesystem/OS modules (blocked by EC2 security sandbox).
+  * Do NOT define custom Python classes; write clean procedural/functional code.
+  * Write standard multiline Python code with 4-space indentation. Do NOT join statements with semicolons (;).
 - InfraStudioHarness(ifc, storey) is available if you wish to use high-level primitives:
   * h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
   * h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[...]) -> trimesh.Trimesh (creates watertight walls with true rectangular opening voids)
@@ -52674,12 +52678,12 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
   print("IFC model generated successfully.")
 
 OUTPUT FORMAT:
-Return ONLY a JSON object:
+Return ONLY a JSON object with:
 {
-  "thought_process": "Your step-by-step spatial, architectural, and mathematical reasoning",
   "structure_name": "Descriptive Name",
   "python_code": "Complete executable Python script"
-}`;
+}
+Do NOT include thought_process or explanations in the JSON. Focus generation directly on python_code.`;
 var infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
 Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (cofferdams, bridge piers, structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).
 
@@ -53072,6 +53076,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 - Python 3.11 with ifcopenshell, ifcopenshell.api as api, trimesh, numpy as np, and math pre-imported.
 - ifc = get_ifc_file()
 - save_and_load_ifc()
+- SANDBOX RULES:
+  * Do NOT import 'os', 'sys', 'subprocess', or any filesystem/OS modules (blocked by EC2 security sandbox).
+  * Do NOT define custom Python classes; write clean procedural/functional code.
+  * Write standard multiline Python code with 4-space indentation. Do NOT join statements with semicolons (;).
 - InfraStudioHarness(ifc, storey) is available if you wish to use high-level primitives:
   * h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
   * h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[...]) -> trimesh.Trimesh (creates watertight walls with true rectangular opening voids)
@@ -53092,10 +53100,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 OUTPUT FORMAT:
 Return ONLY a JSON object:
 {
-  "thought_process": "Your step-by-step spatial, architectural, and mathematical reasoning",
   "structure_name": "Descriptive Name",
   "python_code": "Complete executable Python script"
-}`;
+}
+Do NOT include thought_process or markdown explanations in the JSON. Focus directly on executable python_code.`;
 function extractPythonCode(response) {
   if (!response || typeof response !== "string") return "";
   const trimmed = response.trim();
@@ -53135,12 +53143,13 @@ async function runAntigravityKimiAgent(brief, initialSessionId, options = {}) {
     iterations++;
     try {
       let promptMessage = "";
+      const stepModel = iterations === 1 ? model : "qwen-max";
       if (iterations === 1) {
         promptMessage = `User Design Brief: ${promptText}
 
-Design a complete, high-quality, watertight architectural BIM model using InfraStudioHarness. Return JSON with thought_process and python_code.`;
+Design a complete, high-quality, watertight architectural BIM model using InfraStudioHarness. Return JSON with structure_name and python_code.`;
       } else {
-        logStep(`\u{1F527} Antigravity Agent: Self-healing error from previous pass (Attempt ${iterations}/${maxRetries})...`);
+        logStep(`\u{1F527} Antigravity Agent: Fast self-healing error from previous pass with ${stepModel} (Attempt ${iterations}/${maxRetries})...`);
         promptMessage = `PREVIOUS PYTHON CODE EXECUTION FAILED ON EC2 BONSAI WITH ERROR:
 ${errorFeedback}
 
@@ -53155,14 +53164,19 @@ Analyze why this failed, repair the geometry/parameters, ensure all InfraStudioH
         ANTIGRAVITY_SYSTEM_PROMPT,
         promptMessage,
         true,
-        model
+        stepModel
       );
       code = extractPythonCode(rawResponse);
       if (!code || code.length < 50) {
-        throw new Error(`Failed to extract valid Python code from ${model} response.`);
+        throw new Error(`Failed to extract valid Python code from ${stepModel} response.`);
       }
-      logStep(`\u26A1 Antigravity Agent: Executing ${code.length} bytes of Python code on EC2 Bonsai MCP...`);
-      const toolRes = await mcpCallTool("execute_ifc_code_tool", { code }, currentSessionId);
+      let codeToRun = code;
+      codeToRun = codeToRun.replace(/import\s+InfraStudioHarness\s+as\s+h;?/g, "h = InfraStudioHarness()");
+      codeToRun = codeToRun.replace(/import\s+InfraStudioHarness;?/g, "");
+      codeToRun = codeToRun.replace(/from\s+InfraStudioHarness\s+import\s+[^;\n]+;?/g, "");
+      codeToRun = codeToRun.replace(/import\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, "# removed system import");
+      logStep(`\u26A1 Antigravity Agent: Executing ${codeToRun.length} bytes of Python code on EC2 Bonsai MCP...`);
+      const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: codeToRun }, currentSessionId);
       currentSessionId = toolRes.session;
       logStep(`\u2705 Antigravity Agent: Execution succeeded! Model generated cleanly.`);
       return {
@@ -53979,11 +53993,14 @@ function getQwenEndpoints() {
   if (proxy?.trim()) return [proxy.trim().replace(/\/+$/, "")];
   const configured = typeof Deno !== "undefined" ? Deno.env.get("QWEN_BASE_URL") : process.env.QWEN_BASE_URL;
   const base = configured?.trim().replace(/\/+$/, "");
-  if (base) return [`${base}/chat/completions`];
-  return [
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  const list2 = [
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
   ];
+  if (base && !base.includes("dashscope-intl")) {
+    list2.push(`${base}/chat/completions`);
+  }
+  list2.push("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+  return list2;
 }
 async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "kimi-k3") {
   const targetModel = getTargetModel(model);
@@ -54009,19 +54026,21 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "k
   let lastError = null;
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  const alibabaModel = targetModel === "gpt-6-astra" ? "kimi-k3" : targetModel;
+  const tokenLimit = alibabaModel === "kimi-k3" ? 4096 : 8192;
   for (const endpoint of endpoints) {
     try {
-      console.log(`[callQwen] Invoking ${targetModel} via ${endpoint}...`);
+      console.log(`[callQwen] Invoking ${alibabaModel} via ${endpoint}...`);
       const res = await fetch(endpoint, {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(45e4),
-        // generous timeout for long-horizon reasoning models
+        signal: AbortSignal.timeout(48e4),
+        // 8 minutes on AWS Lambda (Lambda max is 600s)
         body: JSON.stringify({
-          model: targetModel,
+          model: alibabaModel,
           messages: msgs,
-          temperature: 0.5,
-          max_tokens: 8192,
+          temperature: 0.6,
+          max_tokens: tokenLimit,
           response_format: jsonMode ? { type: "json_object" } : void 0
         })
       });
@@ -54042,12 +54061,36 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "k
       console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
     }
   }
+  if (alibabaModel === "kimi-k3") {
+    console.warn(`[callQwen] Primary kimi-k3 failed or timed out. Falling back to high-speed qwen-max engine...`);
+    try {
+      for (const endpoint of endpoints) {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(9e4),
+          body: JSON.stringify({
+            model: "qwen-max",
+            messages: msgs,
+            temperature: 0.6,
+            max_tokens: 8192,
+            response_format: jsonMode ? { type: "json_object" } : void 0
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const choice = data.choices?.[0];
+          return choice?.message?.content || "";
+        }
+      }
+    } catch (qErr) {
+      console.error("[callQwen] qwen-max fallback also failed:", qErr.message || qErr);
+    }
+  }
   if (getExplabsApiKey()) {
-    console.warn(`[callQwen] Primary endpoints failed for ${targetModel}. Falling back to fast Astra gpt-6-astra engine...`);
     try {
       return await callAstra(systemPrompt4, userMessage, jsonMode, "gpt-6-astra");
     } catch (astraErr) {
-      console.error("[callQwen] Astra fallback also failed:", astraErr);
     }
   }
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
@@ -54096,6 +54139,7 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k3") {
   ];
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  const alibabaModel = targetModel === "gpt-6-astra" ? "kimi-k3" : targetModel;
   let lastErrText = "";
   for (const endpoint of endpoints) {
     try {
@@ -54103,7 +54147,7 @@ async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k3") {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: targetModel,
+          model: alibabaModel,
           messages: msgs,
           tools: tools && tools.length > 0 ? tools : void 0,
           temperature: 0.6,
@@ -54967,9 +55011,14 @@ result = h.create_box(extents=[${l3}, ${w}, ${h5}], pos=[${x}, ${y}, ${z}], rot_
     const executedTools = ["initialize_project"];
     const toolAudit = [];
     if (payload2.plan?.python_code && typeof payload2.plan.python_code === "string" && payload2.plan.python_code.trim().length > 20) {
-      console.log(`[build_code] Executing direct Python harness code from plan (${payload2.plan.python_code.length} chars)...`);
+      let codeToExecute = payload2.plan.python_code;
+      codeToExecute = codeToExecute.replace(/import\s+InfraStudioHarness\s+as\s+h;?/g, "h = InfraStudioHarness()");
+      codeToExecute = codeToExecute.replace(/import\s+InfraStudioHarness;?/g, "");
+      codeToExecute = codeToExecute.replace(/from\s+InfraStudioHarness\s+import\s+[^;\n]+;?/g, "");
+      codeToExecute = codeToExecute.replace(/import\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, "# removed system import");
+      console.log(`[build_code] Executing direct Python harness code from plan (${codeToExecute.length} chars)...`);
       try {
-        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: payload2.plan.python_code }, mcpSessionId);
+        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: codeToExecute }, mcpSessionId);
         mcpSessionId = toolRes.session;
         executedTools.push("execute_ifc_code_tool");
         executedMutation = true;
@@ -54979,7 +55028,7 @@ result = h.create_box(extents=[${l3}, ${w}, ${h5}], pos=[${x}, ${y}, ${z}], rot_
           const selfHealed = await runAntigravityKimiAgent(
             { brief: payload2.plan, failed_code: payload2.plan.python_code, error: String(pErr?.message || pErr) },
             mcpSessionId,
-            { model: "kimi-k3", maxRetries: 2 }
+            { model: "qwen-max", maxRetries: 2 }
           );
           if (selfHealed.success) {
             mcpSessionId = selfHealed.mcpSessionId;

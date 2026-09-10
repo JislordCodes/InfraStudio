@@ -12,6 +12,7 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 - SANDBOX RULES:
   * Do NOT import 'os', 'sys', 'subprocess', or any filesystem/OS modules (blocked by EC2 security sandbox).
   * Do NOT define custom Python classes; write clean procedural/functional code.
+  * Write standard multiline Python code with 4-space indentation. Do NOT join statements with semicolons (;).
 - InfraStudioHarness(ifc, storey) is available if you wish to use high-level primitives:
   * h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
   * h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[...]) -> trimesh.Trimesh (creates watertight walls with true rectangular opening voids)
@@ -30,12 +31,12 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
   print("IFC model generated successfully.")
 
 OUTPUT FORMAT:
-Return ONLY a JSON object:
+Return ONLY a JSON object with:
 {
-  "thought_process": "Your step-by-step spatial, architectural, and mathematical reasoning",
   "structure_name": "Descriptive Name",
   "python_code": "Complete executable Python script"
-}`;
+}
+Do NOT include thought_process or explanations in the JSON. Focus generation directly on python_code.`;
 
 const infrastructurePrompt = `You are the Lead Structural Engineering Agent for InfraStudio.
 Your mission is to transform a structured design brief into a mathematically sound, complete, component-based structural model for non-buildings and engineering structures (cofferdams, bridge piers, structural frames, column grids, foundations/pad bases, beam networks, bridges, towers, MEP systems).

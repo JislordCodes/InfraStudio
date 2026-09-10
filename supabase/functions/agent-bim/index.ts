@@ -565,7 +565,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
           const selfHealed = await runAntigravityKimiAgent(
             { brief: payload.plan, failed_code: payload.plan.python_code, error: String(pErr?.message || pErr) },
             mcpSessionId,
-            { model: payload.model || "kimi-k3", maxRetries: 2 }
+            { model: "qwen-max", maxRetries: 2 }
           );
           if (selfHealed.success) {
             mcpSessionId = selfHealed.mcpSessionId;

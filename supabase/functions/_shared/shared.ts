@@ -936,11 +936,14 @@ function getQwenEndpoints(): string[] {
     ? Deno.env.get("QWEN_BASE_URL")
     : process.env.QWEN_BASE_URL;
   const base = configured?.trim().replace(/\/+$/, "");
-  if (base) return [`${base}/chat/completions`];
-  return [
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  const list = [
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
   ];
+  if (base && !base.includes("dashscope-intl")) {
+    list.push(`${base}/chat/completions`);
+  }
+  list.push("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+  return list;
 }
 
 export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "kimi-k3"): Promise<string> {
@@ -970,6 +973,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
   const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
+  const tokenLimit = alibabaModel === "kimi-k3" ? 4096 : 8192;
 
   for (const endpoint of endpoints) {
     try {
@@ -979,12 +983,12 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(alibabaModel === "kimi-k3" ? 160000 : 120000),
+        signal: AbortSignal.timeout(480000), // 8 minutes on AWS Lambda (Lambda max is 600s)
         body: JSON.stringify({
           model: alibabaModel,
           messages: msgs,
           temperature: 0.6,
-          max_tokens: 8192,
+          max_tokens: tokenLimit,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
       });
