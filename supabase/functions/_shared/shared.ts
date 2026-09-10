@@ -979,7 +979,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(450000), // generous timeout for long-horizon reasoning models
+        signal: AbortSignal.timeout(alibabaModel === "kimi-k3" ? 160000 : 120000),
         body: JSON.stringify({
           model: alibabaModel,
           messages: msgs,
@@ -1008,13 +1008,42 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
     }
   }
 
-  // Automatic high-speed failover to Astra if Kimi endpoint fails or times out
+  // Failover 1: High-speed qwen-max engine on Alibaba (if kimi-k3 failed or timed out)
+  if (alibabaModel === "kimi-k3") {
+    console.warn(`[callQwen] Primary kimi-k3 failed or timed out. Falling back to high-speed qwen-max engine...`);
+    try {
+      for (const endpoint of endpoints) {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: endpoints[0].includes("functions/v1/qwen-proxy")
+            ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
+            : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(90000),
+          body: JSON.stringify({
+            model: "qwen-max",
+            messages: msgs,
+            temperature: 0.6,
+            max_tokens: 8192,
+            response_format: jsonMode ? { type: "json_object" } : undefined
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const choice = data.choices?.[0];
+          return choice?.message?.content || "";
+        }
+      }
+    } catch (qErr: any) {
+      console.error("[callQwen] qwen-max fallback also failed:", qErr.message || qErr);
+    }
+  }
+
+  // Failover 2: Astra (if explabs key is available and has credits)
   if (getExplabsApiKey()) {
-    console.warn(`[callQwen] Primary endpoints failed for ${targetModel}. Falling back to fast Astra gpt-6-astra engine...`);
     try {
       return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
     } catch (astraErr) {
-      console.error("[callQwen] Astra fallback also failed:", astraErr);
+      // ignore
     }
   }
 
