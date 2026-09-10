@@ -90,6 +90,19 @@ false = False
 Infinity = float('inf')
 inf = float('inf')
 
+ifc = None
+try:
+    ifc = get_ifc_file()
+except Exception:
+    pass
+
+storey = None
+try:
+    _st_list = ifc.by_type("IfcBuildingStorey") if ifc else []
+    storey = _st_list[0] if _st_list else None
+except Exception:
+    pass
+
 try:
     _orig_apply_transform = trimesh.primitives.Primitive.apply_transform
     def _safe_apply_transform(self, matrix):
@@ -657,9 +670,76 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         "add_beam": staticmethod(add_beam),
         "commit": staticmethod(commit)
     })()
+
+h = None
+try:
+    h = InfraStudioHarness()
+except Exception:
+    pass
 `;
-  const sanitized = code.replace(/\.is_empty/g, '.size == 0');
-  return safeHeader + '\n' + sanitized;
+
+  // Pre-sanitization: normalize line endings, strip markdown blocks, remove blocked imports
+  let preCleaned = code
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/```python[\s\S]*?```/g, m => m.slice(9, -3))
+    .replace(/```[\s\S]*?```/g, m => m.slice(3, -3))
+    .replace(/import\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, '# removed system import\n')
+    .replace(/from\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, '# removed system import\n')
+    .replace(/import\s+(infrastudio|InfraStudioHarness)\s+as\s+h;?/gi, 'h = InfraStudioHarness()\n')
+    .replace(/from\s+InfraStudioHarness\s+import\s+[^;\n]+;?/gi, '')
+    .replace(/import\s+(infrastudio|InfraStudioHarness);?/gi, '')
+    .replace(/infrastudio\.InfraStudioHarness/gi, 'InfraStudioHarness')
+    .replace(/\.is_empty/g, '.size == 0');
+
+  // Fix compound statements followed by semicolon (e.g. "for ...:;" -> "for ...:\n")
+  preCleaned = preCleaned.replace(/:\s*;\s*/g, ':\n');
+
+  // Fix comments followed by code on the same line (e.g. "# comment; code" -> "# comment\ncode")
+  preCleaned = preCleaned.replace(/#([^;\n]*);([^\n]*)/g, '# $1\n$2');
+
+  // Split semicolons while strictly preserving each line's existing indentation
+  const rawLines = preCleaned.split('\n');
+  const formattedLines: string[] = [];
+
+  for (const line of rawLines) {
+    if (!line.includes(';') || line.trim().startsWith('#')) {
+      formattedLines.push(line);
+      continue;
+    }
+
+    let inSingle = false;
+    let inDouble = false;
+    let currentChunk = '';
+    const parts: string[] = [];
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === "'" && !inDouble) inSingle = !inSingle;
+      else if (ch === '"' && !inSingle) inDouble = !inDouble;
+
+      if (ch === ';' && !inSingle && !inDouble) {
+        if (currentChunk.trim()) parts.push(currentChunk.trim());
+        currentChunk = '';
+      } else {
+        currentChunk += ch;
+      }
+    }
+    if (currentChunk.trim()) parts.push(currentChunk.trim());
+
+    const baseIndent = line.match(/^\s*/)?.[0] || '';
+    for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+      const part = parts[pIdx];
+      if (pIdx > 0 && parts[pIdx - 1].endsWith(':')) {
+        formattedLines.push(baseIndent + '    ' + part);
+      } else {
+        formattedLines.push(baseIndent + part);
+      }
+    }
+  }
+
+  const sanitized = formattedLines.join('\n');
+  return safeHeader.trim() + '\n' + sanitized;
 }
 
 export async function mcpCallTool(name: string, args: Record<string, unknown>, clientSessionId: string): Promise<{ resultText: string, session: string }> {
@@ -937,16 +1017,16 @@ function getQwenEndpoints(): string[] {
     : process.env.QWEN_BASE_URL;
   const base = configured?.trim().replace(/\/+$/, "");
   const list = [
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://ws-sq2piu8admaum4we.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   ];
-  if (base && !base.includes("dashscope-intl")) {
+  if (base && !list.includes(`${base}/chat/completions`) && !base.includes("dashscope.aliyuncs.com")) {
     list.push(`${base}/chat/completions`);
   }
-  list.push("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
   return list;
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "kimi-k3"): Promise<string> {
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "qwen-max"): Promise<string> {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -1054,7 +1134,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "kimi-k3"): Promise<any> {
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "qwen-max"): Promise<any> {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();

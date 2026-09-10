@@ -52672,7 +52672,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
   * h.create_roof(footprint_2d, roof_type, height, z_elevation, thickness)
   * h.add_mesh_element(mesh, name, ifc_class, mat_name, rgb, transparency)
   * count = h.commit()
-- You can ALSO write raw ifcopenshell entities or trimesh geometry directly for any custom, parametric, or organic structures.
+- EFFICIENCY & COMPLETENESS:
+  * Keep the Python script structured, concise, and complete (100-250 lines).
+  * Use loops and parametric calculations for grids, columns, and windows.
+  * Ensure the script is 100% complete and self-contained without truncation.
 - End your script with:
   save_and_load_ifc()
   print("IFC model generated successfully.")
@@ -52787,7 +52790,17 @@ function synthesizeBuildingPythonCode(plan, brief) {
     const rooms = Array.isArray(storey.rooms) && storey.rooms.length > 0 ? storey.rooms : [];
     const rBounds = [];
     if (rooms.length === 0) {
-      rBounds.push({ name: "Living Space", x: 0, y: 0, w: 10, l: 8, windows: [], doors: [] });
+      if (sIdx === 0) {
+        rBounds.push({ name: "Grand Living Hall", x: 0, y: 0, w: 10, l: 8, windows: [{ wall: "south", offset: 2, width: 3.5, height: 2.4, sill_height: 0.2 }, { wall: "east", offset: 1.5, width: 2.5, height: 2.2, sill_height: 0.4 }], doors: [{ wall: "south", offset: 7, width: 1.8, height: 2.2 }] });
+        rBounds.push({ name: "Dining & Kitchen Pavilion", x: 10, y: 0, w: 7, l: 8, windows: [{ wall: "south", offset: 1.5, width: 2.2, height: 2, sill_height: 0.8 }, { wall: "east", offset: 2, width: 3, height: 2.2, sill_height: 0.4 }], doors: [] });
+        rBounds.push({ name: "Entrance Foyer & Gallery", x: 0, y: 8, w: 6, l: 6, windows: [], doors: [{ wall: "north", offset: 2, width: 1.6, height: 2.3 }] });
+        rBounds.push({ name: "Garden Terrace Lounge", x: 6, y: 8, w: 11, l: 6, windows: [{ wall: "north", offset: 2.5, width: 4, height: 2.4, sill_height: 0.1 }, { wall: "east", offset: 1.5, width: 2.5, height: 2.2, sill_height: 0.4 }], doors: [] });
+      } else {
+        rBounds.push({ name: "Master Suite", x: 0, y: 0, w: 9, l: 8, windows: [{ wall: "south", offset: 1.5, width: 3, height: 2.3, sill_height: 0.2 }, { wall: "west", offset: 2, width: 2, height: 1.8, sill_height: 0.8 }], doors: [] });
+        rBounds.push({ name: "Upper Observatory & Lounge", x: 9, y: 0, w: 8, l: 8, windows: [{ wall: "south", offset: 1.5, width: 3.5, height: 2.4, sill_height: 0.1 }, { wall: "east", offset: 2, width: 3, height: 2.2, sill_height: 0.4 }], doors: [] });
+        rBounds.push({ name: "Bedroom Suite 2", x: 0, y: 8, w: 8, l: 6, windows: [{ wall: "north", offset: 2, width: 2.5, height: 2, sill_height: 0.6 }, { wall: "west", offset: 1.5, width: 2, height: 1.8, sill_height: 0.8 }], doors: [] });
+        rBounds.push({ name: "Sky Studio", x: 8, y: 8, w: 9, l: 6, windows: [{ wall: "north", offset: 2, width: 3, height: 2.2, sill_height: 0.4 }, { wall: "east", offset: 1.5, width: 2.5, height: 2.2, sill_height: 0.4 }], doors: [] });
+      }
     } else {
       for (const r5 of rooms) {
         const ox = Number(r5.origin?.[0] || 0);
@@ -52985,7 +52998,7 @@ async function handleArchitect(rawBrief) {
 
 PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
-  const selectedModel = brief.model || rawBrief?.model || "kimi-k3";
+  const selectedModel = brief.model || rawBrief?.model || "qwen-max";
   try {
     let res = await callQwen(prompt, promptStr, true, selectedModel);
     if (!res || res.trim().length < 5) {
@@ -53307,6 +53320,19 @@ true = True
 false = False
 Infinity = float('inf')
 inf = float('inf')
+
+ifc = None
+try:
+    ifc = get_ifc_file()
+except Exception:
+    pass
+
+storey = None
+try:
+    _st_list = ifc.by_type("IfcBuildingStorey") if ifc else []
+    storey = _st_list[0] if _st_list else None
+except Exception:
+    pass
 
 try:
     _orig_apply_transform = trimesh.primitives.Primitive.apply_transform
@@ -53875,9 +53901,51 @@ def InfraStudioHarness(ifc_file=None, storey=None):
         "add_beam": staticmethod(add_beam),
         "commit": staticmethod(commit)
     })()
+
+h = None
+try:
+    h = InfraStudioHarness()
+except Exception:
+    pass
 `;
-  const sanitized = code.replace(/\.is_empty/g, ".size == 0");
-  return safeHeader + "\n" + sanitized;
+  let preCleaned = code.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/```python[\s\S]*?```/g, (m3) => m3.slice(9, -3)).replace(/```[\s\S]*?```/g, (m3) => m3.slice(3, -3)).replace(/import\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, "# removed system import\n").replace(/from\s+(os|sys|subprocess|shutil)[^\n;]*;?/g, "# removed system import\n").replace(/import\s+(infrastudio|InfraStudioHarness)\s+as\s+h;?/gi, "h = InfraStudioHarness()\n").replace(/from\s+InfraStudioHarness\s+import\s+[^;\n]+;?/gi, "").replace(/import\s+(infrastudio|InfraStudioHarness);?/gi, "").replace(/infrastudio\.InfraStudioHarness/gi, "InfraStudioHarness").replace(/\.is_empty/g, ".size == 0");
+  preCleaned = preCleaned.replace(/:\s*;\s*/g, ":\n");
+  preCleaned = preCleaned.replace(/#([^;\n]*);([^\n]*)/g, "# $1\n$2");
+  const rawLines = preCleaned.split("\n");
+  const formattedLines = [];
+  for (const line of rawLines) {
+    if (!line.includes(";") || line.trim().startsWith("#")) {
+      formattedLines.push(line);
+      continue;
+    }
+    let inSingle = false;
+    let inDouble = false;
+    let currentChunk = "";
+    const parts = [];
+    for (let i5 = 0; i5 < line.length; i5++) {
+      const ch = line[i5];
+      if (ch === "'" && !inDouble) inSingle = !inSingle;
+      else if (ch === '"' && !inSingle) inDouble = !inDouble;
+      if (ch === ";" && !inSingle && !inDouble) {
+        if (currentChunk.trim()) parts.push(currentChunk.trim());
+        currentChunk = "";
+      } else {
+        currentChunk += ch;
+      }
+    }
+    if (currentChunk.trim()) parts.push(currentChunk.trim());
+    const baseIndent = line.match(/^\s*/)?.[0] || "";
+    for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+      const part = parts[pIdx];
+      if (pIdx > 0 && parts[pIdx - 1].endsWith(":")) {
+        formattedLines.push(baseIndent + "    " + part);
+      } else {
+        formattedLines.push(baseIndent + part);
+      }
+    }
+  }
+  const sanitized = formattedLines.join("\n");
+  return safeHeader.trim() + "\n" + sanitized;
 }
 async function mcpCallTool(name, args, clientSessionId) {
   if (args) {
@@ -53994,15 +54062,15 @@ function getQwenEndpoints() {
   const configured = typeof Deno !== "undefined" ? Deno.env.get("QWEN_BASE_URL") : process.env.QWEN_BASE_URL;
   const base = configured?.trim().replace(/\/+$/, "");
   const list2 = [
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "https://ws-sq2piu8admaum4we.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   ];
-  if (base && !base.includes("dashscope-intl")) {
+  if (base && !list2.includes(`${base}/chat/completions`) && !base.includes("dashscope.aliyuncs.com")) {
     list2.push(`${base}/chat/completions`);
   }
-  list2.push("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
   return list2;
 }
-async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "kimi-k3") {
+async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "qwen-max") {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -54095,7 +54163,7 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "k
   }
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
-async function callGLM(systemPrompt4, userMessage, tools, model = "kimi-k3") {
+async function callGLM(systemPrompt4, userMessage, tools, model = "qwen-max") {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -54313,7 +54381,7 @@ Task: Parse the LATEST user message in context of conversation history. If the u
   let result = null;
   const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
   try {
-    const res = await callQwen(systemPrompt2, formattedPrompt, true, payload2?.model || "kimi-k3");
+    const res = await callQwen(systemPrompt2, formattedPrompt, true, payload2?.model || "qwen-max");
     result = cleanJsonResponse(res);
   } catch (err) {
     console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
@@ -55223,7 +55291,7 @@ ${executionError}
 Retry with concrete mutation tool calls.`;
         executionError = "";
       }
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, payload2.model || "kimi-k3");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, payload2.model || "qwen-max");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

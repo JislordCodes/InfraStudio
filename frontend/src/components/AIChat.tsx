@@ -28,6 +28,16 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [currentSteps, setCurrentSteps] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 640 : false);
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return (typeof localStorage !== 'undefined' && localStorage.getItem('infrastudio_preferred_model')) || 'qwen-max';
+  });
+
+  const handleModelChange = (model: string) => {
+    setSelectedModel(model);
+    try {
+      localStorage.setItem('infrastudio_preferred_model', model);
+    } catch {}
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -163,7 +173,8 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
             content: toolMsg.content || '',
             tool_call_id: toolMsg.tool_call_id,
           });
-        }
+        },
+        selectedModel
       );
 
       if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
@@ -330,6 +341,16 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                     <span className="xs:hidden">IFC</span>
                   </a>
                 )}
+                <select
+                  value={selectedModel}
+                  onChange={(e) => handleModelChange(e.target.value)}
+                  className="bg-white/10 hover:bg-white/15 text-neutral-200 text-[10px] sm:text-xs font-medium px-2 py-1 rounded-lg border border-white/10 outline-none cursor-pointer transition-colors shrink-0"
+                  title="Select AI Engine"
+                >
+                  <option value="qwen-max" className="bg-neutral-900 text-white">⚡ Qwen Max (Fast)</option>
+                  <option value="kimi-k3" className="bg-neutral-900 text-white">🧠 Kimi K3 (Reasoning)</option>
+                  <option value="gpt-6-astra" className="bg-neutral-900 text-white">✨ GPT-6 Astra</option>
+                </select>
               </div>
               <button onClick={() => setExpanded(false)} className="p-1 text-neutral-400 hover:text-white transition-colors shrink-0">
                 <ChevronDown className="w-4 h-4" />

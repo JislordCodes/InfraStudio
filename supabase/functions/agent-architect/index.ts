@@ -25,7 +25,10 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
   * h.create_roof(footprint_2d, roof_type, height, z_elevation, thickness)
   * h.add_mesh_element(mesh, name, ifc_class, mat_name, rgb, transparency)
   * count = h.commit()
-- You can ALSO write raw ifcopenshell entities or trimesh geometry directly for any custom, parametric, or organic structures.
+- EFFICIENCY & COMPLETENESS:
+  * Keep the Python script structured, concise, and complete (100-250 lines).
+  * Use loops and parametric calculations for grids, columns, and windows.
+  * Ensure the script is 100% complete and self-contained without truncation.
 - End your script with:
   save_and_load_ifc()
   print("IFC model generated successfully.")
@@ -1074,7 +1077,17 @@ export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
     const rBounds: RBound[] = [];
 
     if (rooms.length === 0) {
-      rBounds.push({ name: "Living Space", x: 0, y: 0, w: 10, l: 8, windows: [], doors: [] });
+      if (sIdx === 0) {
+        rBounds.push({ name: "Grand Living Hall", x: 0, y: 0, w: 10, l: 8, windows: [{ wall: "south", offset: 2.0, width: 3.5, height: 2.4, sill_height: 0.2 }, { wall: "east", offset: 1.5, width: 2.5, height: 2.2, sill_height: 0.4 }], doors: [{ wall: "south", offset: 7.0, width: 1.8, height: 2.2 }] });
+        rBounds.push({ name: "Dining & Kitchen Pavilion", x: 10, y: 0, w: 7, l: 8, windows: [{ wall: "south", offset: 1.5, width: 2.2, height: 2.0, sill_height: 0.8 }, { wall: "east", offset: 2.0, width: 3.0, height: 2.2, sill_height: 0.4 }], doors: [] });
+        rBounds.push({ name: "Entrance Foyer & Gallery", x: 0, y: 8, w: 6, l: 6, windows: [], doors: [{ wall: "north", offset: 2.0, width: 1.6, height: 2.3 }] });
+        rBounds.push({ name: "Garden Terrace Lounge", x: 6, y: 8, w: 11, l: 6, windows: [{ wall: "north", offset: 2.5, width: 4.0, height: 2.4, sill_height: 0.1 }, { wall: "east", offset: 1.5, width: 2.5, height: 2.2, sill_height: 0.4 }], doors: [] });
+      } else {
+        rBounds.push({ name: "Master Suite", x: 0, y: 0, w: 9, l: 8, windows: [{ wall: "south", offset: 1.5, width: 3.0, height: 2.3, sill_height: 0.2 }, { wall: "west", offset: 2.0, width: 2.0, height: 1.8, sill_height: 0.8 }], doors: [] });
+        rBounds.push({ name: "Upper Observatory & Lounge", x: 9, y: 0, w: 8, l: 8, windows: [{ wall: "south", offset: 1.5, width: 3.5, height: 2.4, sill_height: 0.1 }, { wall: "east", offset: 2.0, width: 3.0, height: 2.2, sill_height: 0.4 }], doors: [] });
+        rBounds.push({ name: "Bedroom Suite 2", x: 0, y: 8, w: 8, l: 6, windows: [{ wall: "north", offset: 2.0, width: 2.5, height: 2.0, sill_height: 0.6 }, { wall: "west", offset: 1.5, width: 2.0, height: 1.8, sill_height: 0.8 }], doors: [] });
+        rBounds.push({ name: "Sky Studio", x: 8, y: 8, w: 9, l: 6, windows: [{ wall: "north", offset: 2.0, width: 3.0, height: 2.2, sill_height: 0.4 }, { wall: "east", offset: 1.5, width: 2.5, height: 2.2, sill_height: 0.4 }], doors: [] });
+      }
     } else {
       for (const r of rooms) {
         const ox = Number(r.origin?.[0] || 0);
@@ -1483,7 +1496,7 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  const selectedModel = brief.model || rawBrief?.model || "kimi-k3";
+  const selectedModel = brief.model || rawBrief?.model || "qwen-max";
   try {
     let res = await callQwen(prompt, promptStr, true, selectedModel);
     if (!res || res.trim().length < 5) {
