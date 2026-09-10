@@ -9,6 +9,9 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 - Python 3.11 with ifcopenshell, ifcopenshell.api as api, trimesh, numpy as np, and math pre-imported.
 - ifc = get_ifc_file()
 - save_and_load_ifc()
+- SANDBOX RULES:
+  * Do NOT import 'os', 'sys', 'subprocess', or any filesystem/OS modules (blocked by EC2 security sandbox).
+  * Do NOT define custom Python classes; write clean procedural/functional code.
 - InfraStudioHarness(ifc, storey) is available if you wish to use high-level primitives:
   * h.create_slab(polygon_2d, thickness=0.30, z_elevation=0.0) -> trimesh.Trimesh
   * h.create_wall(p1, p2, height=3.2, thickness=0.25, z_bottom=0.0, openings=[...]) -> trimesh.Trimesh (creates watertight walls with true rectangular opening voids)
@@ -1479,7 +1482,7 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  const selectedModel = brief.model || rawBrief?.model || "kimi-k3";
+  const selectedModel = brief.model || rawBrief?.model || "gpt-6-astra";
   try {
     let res = await callQwen(prompt, promptStr, true, selectedModel);
     if (!res || res.trim().length < 5) {

@@ -50,7 +50,7 @@ export async function runMultiAgentLoop(
   try {
     // 1. Interpreter
     pushStep("Interpreter Agent: Processing request...");
-    const brief = await callEdge('agent-interpreter', { messages, sessionId });
+    const brief = await callEdge('agent-interpreter', { messages, sessionId, model: 'gpt-6-astra' });
     if (brief.needs_clarification) {
       const question = brief.clarifying_question || "Please describe the building or infrastructure you want, including scale and key spaces.";
       pushStep("Interpreter Agent: More design information is needed before modelling.");
@@ -62,8 +62,8 @@ export async function runMultiAgentLoop(
     pushStep(`Interpreter Agent: Classified as '${structureCategory}' structure (is_edit: ${isEdit}).`);
     
     // 2. Architect
-    pushStep("Architectural Agent: Planning layout...");
-    const plan = await callEdge('agent-architect', { ...brief, client_requirements: userMessage, prompt: userMessage });
+    pushStep("Architectural Agent: Planning layout with Astra AI...");
+    const plan = await callEdge('agent-architect', { ...brief, client_requirements: userMessage, prompt: userMessage, model: 'gpt-6-astra' });
 
     // Force plan.is_edit if interpreter determined it is an edit
     if (isEdit) plan.is_edit = true;
@@ -87,7 +87,8 @@ export async function runMultiAgentLoop(
       const bimRes = await callEdge('agent-bim', {
         action: 'build_code',
         plan: plan,
-        mcpSessionId: sessionId
+        mcpSessionId: sessionId,
+        model: 'gpt-6-astra'
       });
       ifc_url = bimRes.ifc_url;
       sessionId = bimRes.mcpSessionId;

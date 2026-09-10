@@ -92,7 +92,7 @@ export async function handleReviewer(payload: any): Promise<any> {
   };
   let result: any = null;
   try {
-    const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, payload.model || "kimi-k3");
+    const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, payload.model || "gpt-6-astra");
     result = cleanJsonResponse(res);
   } catch (err) {
     console.warn("[handleReviewer] LLM unavailable, using deterministic review results:", err);

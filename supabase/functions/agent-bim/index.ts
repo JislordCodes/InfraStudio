@@ -558,7 +558,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
           const selfHealed = await runAntigravityKimiAgent(
             { brief: payload.plan, failed_code: payload.plan.python_code, error: String(pErr?.message || pErr) },
             mcpSessionId,
-            { model: "kimi-k3", maxRetries: 2 }
+            { model: payload.model || "gpt-6-astra", maxRetries: 2 }
           );
           if (selfHealed.success) {
             mcpSessionId = selfHealed.mcpSessionId;
@@ -768,7 +768,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, payload.model || "kimi-k3");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, payload.model || "gpt-6-astra");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

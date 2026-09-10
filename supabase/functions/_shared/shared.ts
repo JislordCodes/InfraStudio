@@ -926,6 +926,9 @@ function getTargetModel(model: string): string {
   if (m === "qwen3.7-plus" || m === "qwen-plus") {
     return "qwen-plus";
   }
+  if (getExplabsApiKey()) {
+    return "gpt-6-astra";
+  }
   return "kimi-k3";
 }
 
@@ -943,7 +946,7 @@ function getQwenEndpoints(): string[] {
   ];
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "kimi-k3"): Promise<string> {
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gpt-6-astra"): Promise<string> {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -982,7 +985,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          temperature: 0.5,
+          temperature: 0.6,
           max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
@@ -1020,7 +1023,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "kimi-k3"): Promise<any> {
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "gpt-6-astra"): Promise<any> {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -1099,7 +1102,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
   throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
 }
 
-export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "kimi-k3"): Promise<ReadableStream<Uint8Array>> {
+export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "gpt-6-astra"): Promise<ReadableStream<Uint8Array>> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
