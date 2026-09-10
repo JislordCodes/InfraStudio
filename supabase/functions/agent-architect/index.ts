@@ -1,4 +1,4 @@
-import { CORS, callQwen, callGemini, cleanJsonResponse } from "../_shared/shared.ts";
+import { CORS, callQwen, callGemini, callAstra, cleanJsonResponse } from "../_shared/shared.ts";
 import { extractPythonCode } from "../_shared/antigravity_kimi_agent.ts";
 
 const systemPrompt = `You are Antigravity's Autonomous Computational BIM Architect & Structural Engineer.
@@ -1474,41 +1474,6 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
   const category = brief.structure_category || (/cofferdam|coffer|bridge|rail|road|pier|jetty|pier/i.test(textCheck) ? "infrastructure" : "building");
   const isBuilding = category === "building";
   const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
-  const fallbackPlan = (reason: unknown) => {
-    const modelFailure = String(reason instanceof Error ? reason.message : reason).slice(0, 280);
-    try {
-      if (isBuilding) {
-        return repairPlan({
-          is_edit: false,
-          generation_source: "constraint_program_fallback",
-          model_status: "qwen_unavailable",
-          model_failure: modelFailure,
-          roof_type: "flat",
-          has_stairs: false,
-          structural_notes: ["Generated from the validated spatial programme after the AI planner was unavailable."],
-          storey_plans: minimumBuildingPlan(brief),
-        }, brief);
-      }
-      return ensureInfrastructurePlan({
-        structure_category: category,
-        is_edit: false,
-        generation_source: "constraint_program_fallback",
-        model_status: "qwen_unavailable",
-        model_failure: modelFailure,
-      }, brief);
-    } catch (fbErr) {
-      console.error("[fallbackPlan] Error in fallback generator:", fbErr);
-      const minStoreys = minimumBuildingPlan(brief);
-      return {
-        is_edit: false,
-        structure_category: category,
-        storey_plans: minStoreys,
-        layout_validation: { status: "PASS", repairs: ["Generated minimal safe building plan."], constraint_audits: [] },
-        python_code: synthesizeBuildingPythonCode({ storey_plans: minStoreys }, brief)
-      };
-    }
-  };
-  
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
@@ -1522,7 +1487,6 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
     }
 
     // 1. Direct Autonomous Python Code Check:
-    // If Kimi generated direct Python code, honor it directly without templates!
     const directCode = extractPythonCode(res);
     if (directCode && directCode.length > 50) {
       let parsedName = brief.structure_name || brief.project_type || brief.client_requirements?.slice(0, 40) || "Autonomous Architectural Model";
@@ -1531,7 +1495,7 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
         if (parsedJson?.structure_name) parsedName = parsedJson.structure_name;
       } catch { /* ignore */ }
 
-      console.log(`[handleArchitect] Autonomous Kimi K3 code generated (${directCode.length} chars). No templates applied.`);
+      console.log(`[handleArchitect] Autonomous ${selectedModel} code generated (${directCode.length} chars). No templates applied.`);
       return {
         structure_name: parsedName,
         structure_category: category,
@@ -1541,14 +1505,14 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
       };
     }
 
-    // Attempt JSON parse — retry once if it fails
+    // Attempt JSON parse — retry once with direct prompt if needed
     let parsed: any;
     try {
       parsed = cleanJsonResponse(res);
     } catch (firstErr) {
-      console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
-      const retryPrompt = `You are an architect AI. Output JSON with { "structure_name": "...", "python_code": "..." }`;
-      res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, selectedModel);
+      console.warn("[handleArchitect] First parse failed, retrying with direct code prompt:", String(firstErr).slice(0, 120));
+      const retryPrompt = `You are Antigravity BIM Architect. Write Python code using IfcOpenShell and Trimesh to create the requested structure: ${brief.client_requirements || brief.project_type}. Return JSON with { "structure_name": "...", "python_code": "..." }`;
+      res = await callQwen(retryPrompt, JSON.stringify(brief), true, selectedModel);
       parsed = cleanJsonResponse(res);
     }
 
@@ -1562,14 +1526,33 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
       };
     }
 
-    if (isBuilding) {
-      return repairPlan(parsed, brief);
-    } else {
-      return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
-    }
+    throw new Error("Model response did not contain executable Python code.");
   } catch (error) {
-    console.warn("[handleArchitect] Qwen planning failed; using constrained fallback:", String(error));
-    return fallbackPlan(error);
+    console.warn(`[handleArchitect] ${selectedModel} failed (${error instanceof Error ? error.message : String(error)}). Attempting emergency Astra synthesis...`);
+    try {
+      const astraRes = await callAstra(prompt, promptStr, true, "gpt-6-astra");
+      const astraCode = extractPythonCode(astraRes);
+      if (astraCode && astraCode.length > 50) {
+        let astraName = brief.structure_name || brief.project_type || "Astra Architectural Model";
+        try {
+          const parsedAstra = cleanJsonResponse(astraRes);
+          if (parsedAstra?.structure_name) astraName = parsedAstra.structure_name;
+        } catch { /* ignore */ }
+
+        console.log(`[handleArchitect] Emergency Astra code generated (${astraCode.length} chars).`);
+        return {
+          structure_name: astraName,
+          structure_category: category,
+          is_edit: false,
+          python_code: astraCode,
+          layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
+        };
+      }
+    } catch (aErr) {
+      console.error("[handleArchitect] Emergency Astra synthesis also failed:", aErr);
+    }
+
+    throw new Error(`Architectural AI synthesis failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

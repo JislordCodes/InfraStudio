@@ -978,11 +978,11 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(140000), // stay below the Supabase proxy wall-clock limit
+        signal: AbortSignal.timeout(450000), // generous timeout for long-horizon reasoning models
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          temperature: 0.6,
+          temperature: 0.5,
           max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
@@ -1004,6 +1004,16 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
     } catch (err: any) {
       lastError = err;
       console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
+    }
+  }
+
+  // Automatic high-speed failover to Astra if Kimi endpoint fails or times out
+  if (getExplabsApiKey()) {
+    console.warn(`[callQwen] Primary endpoints failed for ${targetModel}. Falling back to fast Astra gpt-6-astra engine...`);
+    try {
+      return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
+    } catch (astraErr) {
+      console.error("[callQwen] Astra fallback also failed:", astraErr);
     }
   }
 

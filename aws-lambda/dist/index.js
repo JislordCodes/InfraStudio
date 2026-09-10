@@ -52736,7 +52736,6 @@ Expected JSON Schema:
   },
   "structural_notes": ["string"]
 }`;
-var WALLS = ["south", "east", "north", "west"];
 function requestedText(brief) {
   return [
     brief?.project_type,
@@ -52744,844 +52743,8 @@ function requestedText(brief) {
     ...brief?.special_features || [],
     ...brief?.constraints || [],
     ...(brief?.component_requirements || []).map((c5) => `${c5.name || ""} ${c5.type || ""} ${c5.description || ""}`),
-    ...(brief?.room_requirements || []).map((room2) => room2.name)
+    ...(brief?.room_requirements || []).map((room) => room.name)
   ].filter(Boolean).join(" ").toLowerCase();
-}
-function room(name, width, length, x, y, z) {
-  return {
-    name,
-    width,
-    length,
-    origin: [x, y, z],
-    floor_slab: true,
-    ceiling_slab: true,
-    doors: [],
-    windows: []
-  };
-}
-function apartmentProgram(brief) {
-  const requestedStoreys = Math.max(2, Math.min(12, Number(brief?.storeys?.length || 4)));
-  const plans = [];
-  for (let floor = 0; floor < requestedStoreys; floor++) {
-    const z = floor * 3.2;
-    const rooms = floor === 0 ? [
-      room("Entrance Lobby", 5, 4, 0, 0, z),
-      room("Reception", 4, 4, 5, 0, z),
-      room("Stair and Lift Core", 4, 5, 0, 4, z),
-      room("Ground Floor Corridor", 10, 2, 4, 4, z),
-      room("Service Room", 4, 3, 10, 0, z),
-      room("Accessible Apartment", 7, 7, 10, 3, z)
-    ] : [
-      room("Stair and Lift Core", 4, 5, 0, 0, z),
-      room("Central Corridor", 14, 2, 4, 3, z),
-      room(`Apartment ${floor}A Living Kitchen`, 7, 5, 4, 0, z),
-      room(`Apartment ${floor}A Bedroom`, 5, 4, 11, 0, z),
-      room(`Apartment ${floor}A Bathroom`, 3, 3, 16, 0, z),
-      room(`Apartment ${floor}B Living Kitchen`, 7, 5, 4, 5, z),
-      room(`Apartment ${floor}B Bedroom`, 5, 4, 11, 5, z),
-      room(`Apartment ${floor}B Bathroom`, 3, 3, 16, 5, z)
-    ];
-    plans.push({ name: floor === 0 ? "Ground Floor" : `Level ${floor}`, elevation: z, height: 3.2, rooms });
-  }
-  return plans;
-}
-function apartmentUnitProgram(brief) {
-  const requested = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
-  const requestedNames = requested.map((item) => String(item.name || "").toLowerCase()).join(" ");
-  const text = requestedText(brief);
-  const numberedBedrooms = /* @__PURE__ */ new Set();
-  requestedNames.replace(/bed(?:room)?\s*(\d+)/g, (_match, number) => {
-    numberedBedrooms.add(String(number));
-    return "";
-  });
-  const explicitBedroomRooms = requested.filter((item) => {
-    const name = String(item.name || "").toLowerCase();
-    return /bed(room)?/.test(name) && !/bath|toilet|wc|ensuite|en-suite/.test(name);
-  }).length;
-  const textBedroomMatch = text.match(/\b(\d+)\s*(?:bed|bedroom)\b/);
-  const wordBedroomCount = /\bthree\s*(?:bed|bedroom)/.test(text) ? 3 : /\btwo\s*(?:bed|bedroom)/.test(text) ? 2 : /\bone\s*(?:bed|bedroom)/.test(text) ? 1 : 0;
-  const bedrooms = Math.max(1, Math.min(6, Number(textBedroomMatch?.[1] || 0) || wordBedroomCount || numberedBedrooms.size || explicitBedroomRooms || 1));
-  const variant = Math.abs(Number(brief?.design_seed || Date.now())) % 4;
-  const rooms = [];
-  if (variant === 0) {
-    rooms.push(room("Parlour / Living Room", 6, 5, 0, 0, 0), room("Kitchen", 3, 5, 6, 0, 0));
-    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
-      const y = 5 + bedroom * 4;
-      rooms.push(room(`Bedroom ${bedroom + 1}`, 4.5, 4, 0, y, 0));
-      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.5, 2, 4.5, y, 0));
-    }
-  } else if (variant === 1) {
-    rooms.push(room("Parlour / Living Room", 5.8, 4.8, 3.2, 0, 0), room("Kitchen", 3.4, 3.6, 9, 0, 0));
-    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
-      if (bedroom % 2 === 0) {
-        const y = 4.8 + Math.floor(bedroom / 2) * 4.2;
-        rooms.push(room(`Bedroom ${bedroom + 1}`, 4.4, 4.2, 3.2, y, 0));
-        rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.4, 2.2, 7.6, y, 0));
-      } else {
-        const y = 0 + Math.floor(bedroom / 2) * 4.2;
-        rooms.push(room(`Bedroom ${bedroom + 1}`, 4.2, 4.2, -1, y, 0));
-        rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.2, 2.2, -3.2, y, 0));
-      }
-    }
-  } else if (variant === 2) {
-    rooms.push(room("Entry Hall", 3.2, 3.2, 0, 0, 0), room("Parlour / Living Room", 6.2, 4.6, 3.2, 0, 0), room("Kitchen", 3.4, 4.6, 9.4, 0, 0));
-    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
-      const x = bedroom % 2 === 0 ? 0 : 5.2;
-      const y = 3.2 + Math.floor(bedroom / 2) * 6.4;
-      rooms.push(room(`Bedroom ${bedroom + 1}`, 5.2, 4.2, x, y, 0));
-      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.6, 2.2, x + 2.6, y + 4.2, 0));
-    }
-  } else {
-    rooms.push(room("Parlour / Living Room", 5.4, 5.2, 0, 0, 0), room("Kitchen", 3.8, 3.2, 5.4, 0, 0), room("Dining Nook", 3.8, 2, 5.4, 3.2, 0));
-    for (let bedroom = 0; bedroom < bedrooms; bedroom++) {
-      const y = bedroom === 0 ? 5.2 : 5.2 + (bedroom - 1) * 4.1;
-      const x = bedroom === 0 ? 0 : 4.6;
-      rooms.push(room(`Bedroom ${bedroom + 1}`, 4.6, 4.1, x, y, 0));
-      rooms.push(room(`Bedroom ${bedroom + 1} En-suite Bathroom`, 2.3, 2.1, x + 4.6, y, 0));
-    }
-  }
-  const living = rooms.find((item) => /living|parlour/.test(String(item.name).toLowerCase())) || rooms[0];
-  const kitchen = rooms.find((item) => /kitchen/.test(String(item.name).toLowerCase())) || rooms[1];
-  if (living) living.windows = [{ wall: "south", offset: 2.1, width: 1.8, height: 1.4, sill_height: 0.9 }];
-  if (kitchen) kitchen.windows = [{ wall: "east", offset: 1.2, width: 1.2, height: 1.2, sill_height: 1 }];
-  rooms.filter((item) => /^Bedroom \d+$/.test(String(item.name))).forEach((item) => {
-    item.windows = [{ wall: "west", offset: 1.5, width: 1.2, height: 1.2, sill_height: 0.9 }];
-  });
-  return [{ name: `Ground Floor Apartment Variant ${variant + 1}`, elevation: 0, height: 3.2, rooms }];
-}
-function creativeHouseProgram(seed) {
-  const variant = Math.abs(seed) % 3;
-  if (variant === 0) {
-    return {
-      roof: "hip",
-      footprint: [[0, 0], [10, 0], [10, 5], [6, 5], [6, 9], [0, 9]],
-      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
-        room("Living Room", 6, 5, 0, 0, 0),
-        room("Kitchen Dining", 4, 3, 6, 0, 0),
-        room("Primary Bedroom", 4, 4, 0, 5, 0),
-        room("Bathroom", 2, 2.5, 4, 5, 0),
-        room("Study", 4, 2, 6, 3, 0)
-      ] }]
-    };
-  }
-  if (variant === 1) {
-    return {
-      roof: "gable",
-      footprint: [[0, 0], [12, 0], [12, 4], [8, 4], [8, 8], [4, 8], [4, 4], [0, 4]],
-      storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
-        room("Living Room", 4, 4, 4, 0, 0),
-        room("Kitchen Dining", 4, 4, 8, 0, 0),
-        room("Entry Hall", 4, 4, 0, 0, 0),
-        room("Primary Bedroom", 4, 4, 4, 4, 0),
-        room("Bathroom", 2, 4, 2, 4, 0)
-      ] }]
-    };
-  }
-  return {
-    roof: "shed",
-    footprint: [[0, 0], [12, 0], [12, 9], [8, 9], [8, 5], [4, 5], [4, 9], [0, 9]],
-    storeys: [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [
-      room("Living Room", 4, 5, 4, 0, 0),
-      room("Kitchen Dining", 4, 5, 8, 0, 0),
-      room("Entry Hall", 4, 5, 0, 0, 0),
-      room("Primary Bedroom", 4, 4, 0, 5, 0),
-      room("Bathroom", 4, 4, 8, 5, 0)
-    ] }]
-  };
-}
-function minimumBuildingPlan(brief) {
-  const text = requestedText(brief);
-  if (brief?.autonomous_design) return creativeHouseProgram(Number(brief?.design_seed || Date.now())).storeys;
-  if (/residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text)) return apartmentProgram(brief);
-  if (/apartment/.test(text)) return apartmentUnitProgram(brief);
-  const requirements = Array.isArray(brief?.room_requirements) ? brief.room_requirements : [];
-  const rooms = [];
-  const source = requirements.length ? requirements : [
-    { name: "Entrance Hall", suggested_area: 10 },
-    { name: "Living Room", suggested_area: 28 },
-    { name: "Kitchen", suggested_area: 16 },
-    { name: "Bedroom", suggested_area: 16 },
-    { name: "Bathroom", suggested_area: 7 }
-  ];
-  let x = 0, y = 0;
-  source.forEach((requirement, index) => {
-    const area = Math.max(7, Number(requirement.suggested_area || 16));
-    const width = Math.max(2.8, Math.round(Math.sqrt(area) * 10) / 10);
-    const length = Math.max(2.8, Math.round(area / width * 10) / 10);
-    rooms.push(room(requirement.name || `Room ${index + 1}`, width, length, x, y, 0));
-    if (index % 2 === 0) x += width;
-    else {
-      y += length;
-      x = 0;
-    }
-  });
-  return [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms }];
-}
-function bridgeProgram(name) {
-  const components = [];
-  const span = 48, deckWidth = 12, deckZ = 9;
-  components.push({ name: "Bridge deck slab", ifc_class: "IfcSlab", geometry_type: "box", dimensions: { length: span, width: deckWidth, height: 0.8 }, position: [span / 2, 0, deckZ], material: "reinforced concrete" });
-  components.push({ name: "West abutment", ifc_class: "IfcFooting", geometry_type: "box", dimensions: { length: 2.5, width: deckWidth + 2, height: 7 }, position: [0, 0, 3.5], material: "reinforced concrete" });
-  components.push({ name: "East abutment", ifc_class: "IfcFooting", geometry_type: "box", dimensions: { length: 2.5, width: deckWidth + 2, height: 7 }, position: [span, 0, 3.5], material: "reinforced concrete" });
-  [16, 32].forEach((x, i5) => {
-    components.push({ name: `Pier ${i5 + 1} footing`, ifc_class: "IfcFooting", geometry_type: "box", dimensions: { length: 5, width: 5, height: 1.2 }, position: [x, 0, 0.6], material: "reinforced concrete" });
-    components.push({ name: `Pier ${i5 + 1}`, ifc_class: "IfcColumn", geometry_type: "box", dimensions: { length: 3, width: 4, height: 7.2 }, position: [x, 0, 4.2], material: "reinforced concrete" });
-  });
-  [-4.5, 4.5].forEach((y, i5) => components.push({ name: `Main steel girder ${i5 + 1}`, ifc_class: "IfcBeam", geometry_type: "box", dimensions: { length: span, width: 0.7, height: 1.6 }, position: [span / 2, y, deckZ - 1.1], material: "structural steel" }));
-  [-6, 6].forEach((y, i5) => components.push({ name: `Safety parapet ${i5 + 1}`, ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: span, width: 0.15, height: 1.3 }, position: [span / 2, y, deckZ + 1], material: "galvanized steel" }));
-  return components;
-}
-function railwayProgram() {
-  const components = [
-    { name: "Railway ballast bed", ifc_class: "IfcSlab", geometry_type: "box", dimensions: { length: 80, width: 6, height: 0.5 }, position: [40, 0, 0], material: "crushed stone ballast" },
-    { name: "Left rail", ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 80, width: 0.15, height: 0.18 }, position: [40, -0.75, 0.55], material: "steel rail" },
-    { name: "Right rail", ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 80, width: 0.15, height: 0.18 }, position: [40, 0.75, 0.55], material: "steel rail" }
-  ];
-  for (let x = 0; x <= 80; x += 1) components.push({ name: `Sleeper ${x + 1}`, ifc_class: "IfcMember", geometry_type: "box", dimensions: { length: 0.25, width: 2.8, height: 0.2 }, position: [x, 0, 0.35], material: "precast concrete" });
-  return components;
-}
-function cofferdamProgram(name) {
-  const components = [];
-  const W = 16, L = 24, H_pile = 12, Z_water = 4;
-  for (let x = -L / 2; x < L / 2; x += 2.4) {
-    components.push({
-      name: `Sheet_Pile_South_${components.length}`,
-      ifc_class: "IfcWall",
-      geometry_type: "corrugated_panel",
-      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
-      position: [x, -W / 2, 0],
-      rotation_z: 0,
-      material: "Structural Steel AZ-36",
-      rgb: [0.32, 0.34, 0.36]
-    });
-    components.push({
-      name: `Sheet_Pile_North_${components.length}`,
-      ifc_class: "IfcWall",
-      geometry_type: "corrugated_panel",
-      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
-      position: [x + 2.4, W / 2, 0],
-      rotation_z: 180,
-      material: "Structural Steel AZ-36",
-      rgb: [0.32, 0.34, 0.36]
-    });
-  }
-  for (let y = -W / 2; y < W / 2; y += 2.4) {
-    components.push({
-      name: `Sheet_Pile_East_${components.length}`,
-      ifc_class: "IfcWall",
-      geometry_type: "corrugated_panel",
-      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
-      position: [L / 2, y, 0],
-      rotation_z: 90,
-      material: "Structural Steel AZ-36",
-      rgb: [0.32, 0.34, 0.36]
-    });
-    components.push({
-      name: `Sheet_Pile_West_${components.length}`,
-      ifc_class: "IfcWall",
-      geometry_type: "corrugated_panel",
-      dimensions: { width: 2.4, height: H_pile, depth: 0.45, pitch: 0.6, thickness: 0.04 },
-      position: [-L / 2, y + 2.4, 0],
-      rotation_z: 270,
-      material: "Structural Steel AZ-36",
-      rgb: [0.32, 0.34, 0.36]
-    });
-  }
-  [2, 5, 8].forEach((z, tier) => {
-    components.push({
-      name: `Waler_Tier${tier + 1}_South`,
-      ifc_class: "IfcBeam",
-      geometry_type: "i_beam",
-      dimensions: { depth: 0.6, flange_width: 0.3, length: L },
-      position: [-L / 2, -W / 2 + 0.3, z],
-      rotation_z: 0,
-      material: "Heavy Waler Steel W24",
-      rgb: [0.88, 0.72, 0.15]
-    });
-    components.push({
-      name: `Waler_Tier${tier + 1}_North`,
-      ifc_class: "IfcBeam",
-      geometry_type: "i_beam",
-      dimensions: { depth: 0.6, flange_width: 0.3, length: L },
-      position: [-L / 2, W / 2 - 0.3, z],
-      rotation_z: 0,
-      material: "Heavy Waler Steel W24",
-      rgb: [0.88, 0.72, 0.15]
-    });
-    components.push({
-      name: `Waler_Tier${tier + 1}_East`,
-      ifc_class: "IfcBeam",
-      geometry_type: "i_beam",
-      dimensions: { depth: 0.6, flange_width: 0.3, length: W },
-      position: [L / 2 - 0.3, -W / 2, z],
-      rotation_z: 90,
-      material: "Heavy Waler Steel W24",
-      rgb: [0.88, 0.72, 0.15]
-    });
-    components.push({
-      name: `Waler_Tier${tier + 1}_West`,
-      ifc_class: "IfcBeam",
-      geometry_type: "i_beam",
-      dimensions: { depth: 0.6, flange_width: 0.3, length: W },
-      position: [-L / 2 + 0.3, -W / 2, z],
-      rotation_z: 90,
-      material: "Heavy Waler Steel W24",
-      rgb: [0.88, 0.72, 0.15]
-    });
-    [-6, 0, 6].forEach((x, si) => {
-      components.push({
-        name: `Strut_Tier${tier + 1}_S${si + 1}`,
-        ifc_class: "IfcMember",
-        geometry_type: "pipe",
-        dimensions: { outer_radius: 0.35, inner_radius: 0.3, length: W - 0.6, axis: [0, 1, 0] },
-        position: [x, 0, z + 0.3],
-        material: "Tubular Steel Strut",
-        rgb: [0.88, 0.72, 0.15]
-      });
-    });
-  });
-  components.push({
-    name: "Hydrodynamic_Cutwater_Pier",
-    ifc_class: "IfcColumn",
-    geometry_type: "cutwater_pier",
-    dimensions: { length: 14, width: 4.5, height: 11, nose_radius: 2.25 },
-    position: [0, 0, 0.8],
-    material: "High-Strength Marine Concrete C40",
-    rgb: [0.65, 0.65, 0.63]
-  });
-  components.push({
-    name: "Pier_Deep_Footing",
-    ifc_class: "IfcFooting",
-    geometry_type: "box",
-    dimensions: { length: 16, width: 6.5, height: 1.2 },
-    position: [0, 0, 0.6],
-    material: "Reinforced Concrete Footing",
-    rgb: [0.55, 0.55, 0.53]
-  });
-  components.push({
-    name: "Tremie_Concrete_Seal_Plug",
-    ifc_class: "IfcSlab",
-    geometry_type: "box",
-    dimensions: { length: L - 0.2, width: W - 0.2, height: 1.5 },
-    position: [0, 0, 0.75],
-    material: "Tremie Mass Concrete Plug",
-    rgb: [0.45, 0.46, 0.48]
-  });
-  components.push({
-    name: "River_Water_Surface",
-    ifc_class: "IfcBuildingElementProxy",
-    geometry_type: "box",
-    dimensions: { length: L + 16, width: W + 16, height: 0.1 },
-    position: [0, 0, Z_water],
-    material: "River Water Surface",
-    rgb: [0.2, 0.55, 0.7],
-    transparency: 0.55
-  });
-  return components;
-}
-function ensureInfrastructurePlan(plan, brief) {
-  const text = requestedText(brief);
-  const isCofferdam = /cofferdam|coffer/i.test(text);
-  const isBridge = /bridge/i.test(text);
-  const isRail = /rail|railway|track/i.test(text);
-  const minimum = isCofferdam ? 20 : isBridge ? 8 : isRail ? 30 : 4;
-  const layoutValidation = { status: "PASS", repairs: [], constraint_audits: [] };
-  if (typeof plan?.python_code === "string" && plan.python_code.trim().length > 20) {
-    return {
-      ...plan,
-      structure_category: "infrastructure",
-      is_edit: false,
-      structure_name: plan.structure_name || brief?.project_type || "Infrastructure Structure",
-      python_code: plan.python_code,
-      components: Array.isArray(plan?.components) ? plan.components : [],
-      quality_requirements: { minimum_components: minimum },
-      layout_validation: layoutValidation
-    };
-  }
-  if (Array.isArray(plan?.components) && plan.components.length >= minimum) {
-    return {
-      ...plan,
-      structure_category: "infrastructure",
-      is_edit: false,
-      structure_name: plan.structure_name || brief?.project_type || "Infrastructure Structure",
-      components: plan.components,
-      quality_requirements: { minimum_components: minimum },
-      layout_validation: layoutValidation
-    };
-  }
-  if (isCofferdam) {
-    return {
-      ...plan,
-      structure_category: "infrastructure",
-      is_edit: false,
-      structure_name: brief?.project_type || "Bridge Pier Cofferdam",
-      components: cofferdamProgram(brief?.project_type || "Bridge Pier Cofferdam"),
-      quality_requirements: { minimum_components: 20, required_element_types: ["IfcWall", "IfcBeam", "IfcMember", "IfcColumn", "IfcFooting", "IfcSlab"] },
-      layout_validation: layoutValidation
-    };
-  }
-  if (isBridge) {
-    return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Bridge", components: bridgeProgram(brief?.project_type || "Bridge"), quality_requirements: { minimum_components: 8, required_element_types: ["IfcSlab", "IfcColumn", "IfcBeam", "IfcFooting"] }, layout_validation: layoutValidation };
-  }
-  if (isRail) {
-    return { ...plan, structure_category: "infrastructure", is_edit: false, structure_name: brief?.project_type || "Railway", components: railwayProgram(), quality_requirements: { minimum_components: 30, required_element_types: ["IfcSlab", "IfcMember"] }, layout_validation: layoutValidation };
-  }
-  const components = plan?.components || [];
-  return { ...plan, structure_category: brief?.structure_category || "infrastructure", is_edit: false, structure_name: brief?.project_type || "InfraStudio Infrastructure", components, quality_requirements: { minimum_components: minimum }, layout_validation: layoutValidation };
-}
-function wallLength(room2, wall) {
-  return wall === "south" || wall === "north" ? Number(room2.width || 4) : Number(room2.length || 4);
-}
-function originToOffset(opening, room2) {
-  if (opening.offset !== void 0 && opening.offset !== null) return Number(opening.offset);
-  if (Array.isArray(opening.origin)) {
-    const [ox, oy] = opening.origin;
-    const [rx, ry] = room2.origin || [0, 0, 0];
-    const wall = String(opening.wall || "south");
-    if (wall === "south" || wall === "north") return Math.abs(ox - rx);
-    if (wall === "east" || wall === "west") return Math.abs(oy - ry);
-  }
-  return 0.9;
-}
-function clampOpening(opening, room2, defaultWidth) {
-  const wall = WALLS.includes(String(opening.wall)) ? String(opening.wall) : "south";
-  const width = Math.max(0.6, Math.min(Number(opening.width || defaultWidth), wallLength(room2, wall) - 0.9));
-  const maxOffset = Math.max(0.45, wallLength(room2, wall) - width - 0.45);
-  const rawOffset = originToOffset(opening, room2);
-  const offset = Math.max(0.45, Math.min(rawOffset, maxOffset));
-  return { ...opening, wall, width, offset };
-}
-function rangesOverlap(a0, a1, b0, b1) {
-  return Math.max(a0, b0) < Math.min(a1, b1) - 0.05;
-}
-function isInternalWall(room2, wall, rooms) {
-  const [x, y] = room2.origin || [0, 0, 0];
-  const w = Number(room2.width || 4);
-  const l3 = Number(room2.length || 4);
-  return rooms.some((other) => {
-    if (other === room2) return false;
-    const [ox, oy] = other.origin || [0, 0, 0];
-    const ow = Number(other.width || 4);
-    const ol = Number(other.length || 4);
-    if (wall === "south" && Math.abs(y - (oy + ol)) < 0.05) return rangesOverlap(x, x + w, ox, ox + ow);
-    if (wall === "north" && Math.abs(y + l3 - oy) < 0.05) return rangesOverlap(x, x + w, ox, ox + ow);
-    if (wall === "west" && Math.abs(x - (ox + ow)) < 0.05) return rangesOverlap(y, y + l3, oy, oy + ol);
-    if (wall === "east" && Math.abs(x + w - ox) < 0.05) return rangesOverlap(y, y + l3, oy, oy + ol);
-    return false;
-  });
-}
-function pickDoorWall(room2, rooms) {
-  return WALLS.find((wall) => isInternalWall(room2, wall, rooms)) || WALLS.find((wall) => !isInternalWall(room2, wall, rooms)) || "south";
-}
-function openingsOverlap(a5, b5) {
-  if (a5.wall !== b5.wall) return false;
-  const a0 = Number(a5.offset || 0);
-  const a1 = a0 + Number(a5.width || 0.9);
-  const b0 = Number(b5.offset || 0);
-  const b1 = b0 + Number(b5.width || 1.2);
-  return rangesOverlap(a0, a1, b0, b1);
-}
-function alignFloorplanGrid(rooms) {
-  if (!rooms || rooms.length <= 1) return;
-  const xCoords = [];
-  const yCoords = [];
-  for (const r5 of rooms) {
-    const [x, y] = r5.origin || [0, 0, 0];
-    const w = Number(r5.width || 4);
-    const l3 = Number(r5.length || 4);
-    xCoords.push(x, x + w);
-    yCoords.push(y, y + l3);
-  }
-  xCoords.sort((a5, b5) => a5 - b5);
-  yCoords.sort((a5, b5) => a5 - b5);
-  const clusterMap = (coords, tolerance = 0.05) => {
-    const map3 = /* @__PURE__ */ new Map();
-    for (const c5 of coords) {
-      let matchedTarget = null;
-      for (const target of map3.values()) {
-        if (Math.abs(c5 - target) <= tolerance) {
-          matchedTarget = target;
-          break;
-        }
-      }
-      if (matchedTarget !== null) {
-        map3.set(c5, matchedTarget);
-      } else {
-        map3.set(c5, c5);
-      }
-    }
-    return map3;
-  };
-  const xMap = clusterMap(xCoords, 0.05);
-  const yMap = clusterMap(yCoords, 0.05);
-  for (const r5 of rooms) {
-    const [x, y, z] = r5.origin || [0, 0, 0];
-    const w = Number(r5.width || 4);
-    const l3 = Number(r5.length || 4);
-    const snappedX = xMap.get(x) ?? x;
-    const snappedRightX = xMap.get(x + w) ?? x + w;
-    const snappedY = yMap.get(y) ?? y;
-    const snappedTopY = yMap.get(y + l3) ?? y + l3;
-    r5.origin = [Number(snappedX.toFixed(2)), Number(snappedY.toFixed(2)), z];
-    r5.width = Math.max(2.2, Number((snappedRightX - snappedX).toFixed(2)));
-    r5.length = Math.max(2.2, Number((snappedTopY - snappedY).toFixed(2)));
-  }
-}
-function roomBounds(room2) {
-  const [x, y] = room2.origin || [0, 0, 0];
-  return { x0: Number(x), y0: Number(y), x1: Number(x) + Number(room2.width || 4), y1: Number(y) + Number(room2.length || 4) };
-}
-function roomsOverlap(a5, b5) {
-  const A = roomBounds(a5), B = roomBounds(b5);
-  return Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0) > 0.05 && Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0) > 0.05;
-}
-function roomsTouch(a5, b5) {
-  const A = roomBounds(a5), B = roomBounds(b5);
-  const xOverlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
-  const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
-  return (Math.abs(A.x1 - B.x0) < 0.06 || Math.abs(B.x1 - A.x0) < 0.06) && yOverlap > 0.4 || (Math.abs(A.y1 - B.y0) < 0.06 || Math.abs(B.y1 - A.y0) < 0.06) && xOverlap > 0.4;
-}
-function roomId(room2, index) {
-  return `${index + 1}:${String(room2.name || `Room ${index + 1}`)}`;
-}
-function sharedBoundary(a5, b5) {
-  const A = roomBounds(a5), B = roomBounds(b5);
-  const xOverlap = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
-  const yOverlap = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
-  if (Math.abs(A.x1 - B.x0) < 0.06 && yOverlap > 0.4) return { aWall: "east", bWall: "west", sharedLength: Number(yOverlap.toFixed(2)) };
-  if (Math.abs(B.x1 - A.x0) < 0.06 && yOverlap > 0.4) return { aWall: "west", bWall: "east", sharedLength: Number(yOverlap.toFixed(2)) };
-  if (Math.abs(A.y1 - B.y0) < 0.06 && xOverlap > 0.4) return { aWall: "north", bWall: "south", sharedLength: Number(xOverlap.toFixed(2)) };
-  if (Math.abs(B.y1 - A.y0) < 0.06 && xOverlap > 0.4) return { aWall: "south", bWall: "north", sharedLength: Number(xOverlap.toFixed(2)) };
-  return null;
-}
-function buildAdjacencyGraph(rooms) {
-  const nodes5 = rooms.map(roomId);
-  const edges = [];
-  const internalWalls = /* @__PURE__ */ new Map();
-  rooms.forEach((room2) => internalWalls.set(room2, /* @__PURE__ */ new Set()));
-  rooms.forEach((room2, index) => {
-    rooms.slice(index + 1).forEach((other, offset) => {
-      const boundary = sharedBoundary(room2, other);
-      if (!boundary) return;
-      const otherIndex = index + 1 + offset;
-      internalWalls.get(room2).add(boundary.aWall);
-      internalWalls.get(other).add(boundary.bWall);
-      edges.push({
-        from: roomId(room2, index),
-        to: roomId(other, otherIndex),
-        from_wall: boundary.aWall,
-        to_wall: boundary.bWall,
-        shared_length: boundary.sharedLength
-      });
-    });
-  });
-  const exteriorWalls = /* @__PURE__ */ new Map();
-  for (const room2 of rooms) {
-    const internal = internalWalls.get(room2) || /* @__PURE__ */ new Set();
-    exteriorWalls.set(room2, WALLS.filter((wall) => !internal.has(wall)));
-  }
-  return { nodes: nodes5, edges, exteriorWalls };
-}
-function roomPriority(room2) {
-  const name = String(room2.name || "").toLowerCase();
-  if (/corridor|hall|lobby|entry|entrance|stair|core|living|parlour|reception/.test(name)) return 0;
-  if (/kitchen|dining/.test(name)) return 1;
-  if (/bed/.test(name) && !/bath|toilet|ensuite|en-suite/.test(name)) return 2;
-  if (/bath|toilet|wc|ensuite|en-suite/.test(name)) return 3;
-  return 4;
-}
-function chooseAnchor(room2, placed) {
-  const name = String(room2.name || "").toLowerCase();
-  if (/ensuite|en-suite/.test(name)) {
-    const bedroomToken = name.match(/bedroom\s*\d+/)?.[0];
-    const match = placed.find((candidate) => bedroomToken && String(candidate.name || "").toLowerCase().includes(bedroomToken));
-    if (match) return match;
-  }
-  if (/kitchen|dining/.test(name)) {
-    return placed.find((candidate) => /living|parlour|reception|dining/.test(String(candidate.name || "").toLowerCase())) || placed[0];
-  }
-  if (/bath|toilet|wc/.test(name)) {
-    return placed.find((candidate) => /bed|corridor|hall|core/.test(String(candidate.name || "").toLowerCase())) || placed[0];
-  }
-  if (/bed/.test(name)) {
-    return placed.find((candidate) => /corridor|hall|living|parlour|core/.test(String(candidate.name || "").toLowerCase())) || placed[0];
-  }
-  return placed[0];
-}
-function preferredDirections(room2) {
-  const name = String(room2.name || "").toLowerCase();
-  if (/ensuite|en-suite|bath|toilet|wc/.test(name)) return ["east", "west", "north", "south"];
-  if (/kitchen|dining/.test(name)) return ["east", "north", "south", "west"];
-  if (/bed/.test(name)) return ["north", "west", "east", "south"];
-  return ["east", "north", "west", "south"];
-}
-function candidateOrigin(anchor, room2, direction) {
-  const A = roomBounds(anchor);
-  const w = Number(room2.width || 4);
-  const l3 = Number(room2.length || 4);
-  const z = Number(anchor.origin?.[2] || room2.origin?.[2] || 0);
-  if (direction === "east") return [A.x1, A.y0, z];
-  if (direction === "west") return [A.x0 - w, A.y0, z];
-  if (direction === "north") return [A.x0, A.y1, z];
-  return [A.x0, A.y0 - l3, z];
-}
-function roomWouldOverlap(room2, rooms) {
-  return rooms.some((other) => roomsOverlap(room2, other));
-}
-function semanticPackRooms(rooms) {
-  if (rooms.length <= 1) return;
-  const ordered = [...rooms].sort((a5, b5) => roomPriority(a5) - roomPriority(b5));
-  const baseZ = Number(ordered[0].origin?.[2] || 0);
-  ordered[0].origin = [0, 0, baseZ];
-  const placed = [ordered[0]];
-  for (const room2 of ordered.slice(1)) {
-    const anchor = chooseAnchor(room2, placed);
-    let placedRoom = false;
-    const anchors = [anchor, ...placed.filter((candidate) => candidate !== anchor)];
-    for (const candidate of anchors) {
-      for (const direction of preferredDirections(room2)) {
-        room2.origin = candidateOrigin(candidate, room2, direction);
-        if (!roomWouldOverlap(room2, placed)) {
-          placedRoom = true;
-          break;
-        }
-      }
-      if (placedRoom) break;
-    }
-    if (!placedRoom) {
-      const bounds = placed.reduce((acc, item) => {
-        const b5 = roomBounds(item);
-        return { minX: Math.min(acc.minX, b5.x0), minY: Math.min(acc.minY, b5.y0), maxX: Math.max(acc.maxX, b5.x1), maxY: Math.max(acc.maxY, b5.y1) };
-      }, { minX: 0, minY: 0, maxX: 0, maxY: 0 });
-      room2.origin = [bounds.maxX, bounds.minY, baseZ];
-    }
-    placed.push(room2);
-  }
-}
-function layoutIsConnected(rooms) {
-  if (rooms.length < 2) return true;
-  const seen = /* @__PURE__ */ new Set([0]);
-  const queue = [0];
-  while (queue.length) {
-    const current = queue.shift();
-    rooms.forEach((room2, index) => {
-      if (!seen.has(index) && roomsTouch(rooms[current], room2)) {
-        seen.add(index);
-        queue.push(index);
-      }
-    });
-  }
-  return seen.size === rooms.length;
-}
-function reflowConnectedLayout(rooms) {
-  semanticPackRooms(rooms);
-}
-function validateAndRepairLayout(rooms) {
-  const repairs = [];
-  const overlaps = rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other)));
-  if (overlaps || !layoutIsConnected(rooms)) {
-    reflowConnectedLayout(rooms);
-    repairs.push(overlaps ? "Reflowed overlapping room footprints into a connected plan." : "Reflowed disconnected room footprints into a connected plan.");
-  }
-  if (rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other))) || !layoutIsConnected(rooms)) {
-    let curX = 0;
-    const baseZ = Number(rooms[0]?.origin?.[2] || 0);
-    for (const room2 of rooms) {
-      room2.origin = [curX, 0, baseZ];
-      curX += Number(room2.width || 4);
-    }
-    repairs.push("Linear grid alignment applied to guarantee zero overlap and full connectivity.");
-  }
-  return { status: "PASS", repairs };
-}
-function doorTouchesBoundary(room2, wall, rooms) {
-  return rooms.some((other) => other !== room2 && sharedBoundary(room2, other)?.aWall === wall);
-}
-function ensureNonOverlappingOpenings(openings, room2, defaultWidth) {
-  const result = [];
-  for (const opening of openings) {
-    const clean = clampOpening(opening, room2, defaultWidth);
-    if (!Number.isFinite(Number(clean.offset)) || !Number.isFinite(Number(clean.width))) continue;
-    if (result.some((existing) => openingsOverlap(existing, clean))) {
-      const wall = String(clean.wall || "south");
-      const width = Number(clean.width || defaultWidth);
-      const maxOffset = Math.max(0.45, wallLength(room2, wall) - width - 0.45);
-      let foundOffset = null;
-      for (let offset = 0.45; offset <= maxOffset; offset += 0.25) {
-        const candidate = { ...clean, offset: Number(offset.toFixed(2)) };
-        if (!result.some((existing) => openingsOverlap(existing, candidate))) {
-          foundOffset = candidate.offset;
-          break;
-        }
-      }
-      if (foundOffset === null) continue;
-      clean.offset = foundOffset;
-    }
-    result.push(clean);
-  }
-  return result;
-}
-function buildDoorConnectivity(rooms) {
-  const graph = buildAdjacencyGraph(rooms);
-  const connected = /* @__PURE__ */ new Set();
-  const start = rooms.findIndex((room2) => /living|parlour|corridor|hall|entry|entrance|lobby|core/i.test(String(room2.name || "")));
-  connected.add(start >= 0 ? start : 0);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const edge of graph.edges) {
-      const fromIndex = graph.nodes.indexOf(edge.from);
-      const toIndex = graph.nodes.indexOf(edge.to);
-      const fromHasDoor = rooms[fromIndex]?.doors?.some((door) => door.wall === edge.from_wall);
-      const toHasDoor = rooms[toIndex]?.doors?.some((door) => door.wall === edge.to_wall);
-      if (!fromHasDoor && !toHasDoor) continue;
-      if (connected.has(fromIndex) && !connected.has(toIndex)) {
-        connected.add(toIndex);
-        changed = true;
-      }
-      if (connected.has(toIndex) && !connected.has(fromIndex)) {
-        connected.add(fromIndex);
-        changed = true;
-      }
-    }
-  }
-  return connected;
-}
-function enforceSpatialConstraints(rooms, allowNoDoors = false, allowNoWindows = false) {
-  const repairs = [];
-  alignFloorplanGrid(rooms);
-  if (rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other))) || !layoutIsConnected(rooms)) {
-    semanticPackRooms(rooms);
-    alignFloorplanGrid(rooms);
-    repairs.push("Solved room placement with adjacency-aware no-overlap packing.");
-  }
-  if (rooms.some((room2, index) => rooms.slice(index + 1).some((other) => roomsOverlap(room2, other))) || !layoutIsConnected(rooms)) {
-    let curX = 0;
-    const baseZ = Number(rooms[0]?.origin?.[2] || 0);
-    for (const room2 of rooms) {
-      room2.origin = [curX, 0, baseZ];
-      curX += Number(room2.width || 4);
-    }
-    repairs.push("Linear grid alignment applied to guarantee zero overlap and full connectivity.");
-  }
-  let graph = buildAdjacencyGraph(rooms);
-  if (!allowNoDoors && rooms.length > 0) {
-    const hasExteriorDoor = rooms.some(
-      (room2) => room2.doors?.some((door) => graph.exteriorWalls.get(room2)?.includes(String(door.wall)))
-    );
-    if (!hasExteriorDoor) {
-      const target = rooms.find((room2) => /living|parlour|entry|entrance|lobby|corridor|hall|core/i.test(String(room2.name || ""))) || rooms[0];
-      const exteriorWall = graph.exteriorWalls.get(target)?.[0];
-      if (exteriorWall) {
-        target.doors = target.doors || [];
-        target.doors.push(clampOpening({ wall: exteriorWall, offset: wallLength(target, exteriorWall) / 2 - 0.5, width: 1, height: 2.1 }, target, 1));
-        repairs.push(`Added exterior entrance door to ${target.name || "room"} on ${exteriorWall} wall.`);
-      }
-    }
-  }
-  for (const room2 of rooms) {
-    room2.doors = ensureNonOverlappingOpenings(Array.isArray(room2.doors) ? room2.doors : [], room2, 0.9);
-    room2.windows = ensureNonOverlappingOpenings(Array.isArray(room2.windows) ? room2.windows : [], room2, 1.2).filter((window2) => graph.exteriorWalls.get(room2)?.includes(String(window2.wall)));
-    if (!allowNoDoors) {
-      const internalWall = WALLS.find((wall) => doorTouchesBoundary(room2, wall, rooms));
-      const hasInternalDoor = internalWall && room2.doors.some((door) => door.wall === internalWall);
-      if (internalWall && !hasInternalDoor) {
-        room2.doors.push(clampOpening({ wall: internalWall, offset: wallLength(room2, internalWall) / 2 - 0.45, width: 0.9, height: 2.1 }, room2, 0.9));
-        repairs.push(`Added circulation door to ${room2.name || "room"} on ${internalWall} wall.`);
-      }
-    }
-    if (!allowNoWindows && room2.windows.length === 0) {
-      const exteriorWall = graph.exteriorWalls.get(room2)?.[0];
-      if (exteriorWall) {
-        room2.windows.push(clampOpening({ wall: exteriorWall, offset: wallLength(room2, exteriorWall) / 2 - 0.6, width: 1.2, height: 1.3, sill_height: 0.9 }, room2, 1.2));
-        repairs.push(`Added exterior window to ${room2.name || "room"} on ${exteriorWall} wall.`);
-      }
-    }
-    room2.doors = ensureNonOverlappingOpenings(room2.doors, room2, 0.9);
-    room2.windows = ensureNonOverlappingOpenings(room2.windows.filter((window2) => !room2.doors.some((door) => openingsOverlap(window2, door))), room2, 1.2);
-  }
-  if (!allowNoDoors && rooms.length > 1) {
-    let connected = buildDoorConnectivity(rooms);
-    for (let guard = 0; connected.size < rooms.length && guard < rooms.length * 2; guard++) {
-      const targetIndex = rooms.findIndex((_, index) => !connected.has(index));
-      if (targetIndex < 0) break;
-      const edge = graph.edges.find((candidate) => {
-        const fromIndex2 = graph.nodes.indexOf(candidate.from);
-        const toIndex = graph.nodes.indexOf(candidate.to);
-        return fromIndex2 === targetIndex && connected.has(toIndex) || toIndex === targetIndex && connected.has(fromIndex2);
-      });
-      if (!edge) break;
-      const fromIndex = graph.nodes.indexOf(edge.from);
-      const targetWall = fromIndex === targetIndex ? edge.from_wall : edge.to_wall;
-      const room2 = rooms[targetIndex];
-      room2.doors = room2.doors || [];
-      room2.doors.push(clampOpening({ wall: targetWall, offset: wallLength(room2, targetWall) / 2 - 0.45, width: 0.9, height: 2.1 }, room2, 0.9));
-      room2.doors = ensureNonOverlappingOpenings(room2.doors, room2, 0.9);
-      repairs.push(`Connected ${room2.name || "room"} into the door circulation graph.`);
-      connected = buildDoorConnectivity(rooms);
-    }
-    if (connected.size < rooms.length) {
-      repairs.push("Door circulation graph partially connected.");
-    }
-  }
-  graph = buildAdjacencyGraph(rooms);
-  for (const room2 of rooms) {
-    if (Array.isArray(room2.windows)) {
-      room2.windows = room2.windows.filter((window2) => {
-        const isExterior = graph.exteriorWalls.get(room2)?.includes(String(window2.wall));
-        if (!isExterior) {
-          repairs.push(`Removed window on internal wall for ${room2.name || "room"}.`);
-          return false;
-        }
-        return true;
-      });
-      room2.windows = room2.windows.map((window2) => clampOpening(window2, room2, 1.2));
-    }
-    if (Array.isArray(room2.doors)) {
-      room2.doors = room2.doors.map((door) => clampOpening(door, room2, 0.9));
-    }
-  }
-  const exterior_walls = {};
-  rooms.forEach((room2, index) => {
-    exterior_walls[roomId(room2, index)] = graph.exteriorWalls.get(room2) || [];
-  });
-  return {
-    status: "PASS",
-    repairs: [...new Set(repairs)],
-    issues: [],
-    adjacency_graph: { nodes: graph.nodes, edges: graph.edges },
-    exterior_walls
-  };
-}
-function processRooms(rooms, allowNoDoors = false) {
-  alignFloorplanGrid(rooms);
-  for (const room2 of rooms) {
-    if (room2.dimensions && Array.isArray(room2.dimensions)) {
-      room2.width = Number(room2.dimensions[0]);
-      room2.length = Number(room2.dimensions[1]);
-    }
-    room2.width = Math.max(2.2, Number(room2.width || 4));
-    room2.length = Math.max(2.2, Number(room2.length || 4));
-    room2.origin = Array.isArray(room2.origin) ? room2.origin : [0, 0, 0];
-    if (!room2.origin.every((coordinate) => Number.isFinite(Number(coordinate)))) {
-      throw new Error(`Spatial layout validation failed: ${room2.name || "room"} has a non-finite coordinate.`);
-    }
-    const hasExplicitDoors = room2.doors !== void 0 && room2.doors !== null;
-    room2.doors = (Array.isArray(room2.doors) ? room2.doors : []).map((door) => clampOpening(door, room2, 0.9));
-    const hasExplicitWindows = room2.windows !== void 0 && room2.windows !== null;
-    room2.windows = (Array.isArray(room2.windows) ? room2.windows : []).map((window2) => clampOpening(window2, room2, 1.2)).filter((window2) => !isInternalWall(room2, String(window2.wall), rooms));
-    if (!hasExplicitDoors && room2.doors.length === 0 && !allowNoDoors) {
-      const wall = pickDoorWall(room2, rooms);
-      room2.doors.push(clampOpening({ wall, offset: wallLength(room2, wall) / 2 - 0.45, width: 0.9, height: 2.1 }, room2, 0.9));
-    }
-    room2.windows = room2.windows.filter((window2) => !room2.doors.some((door) => openingsOverlap(window2, door)));
-    if (!hasExplicitWindows && room2.windows.length === 0 && !Boolean(room2.allow_no_windows)) {
-      const exteriorWall = WALLS.find((wall) => !isInternalWall(room2, wall, rooms));
-      if (exteriorWall) {
-        room2.windows.push(clampOpening({ wall: exteriorWall, offset: wallLength(room2, exteriorWall) / 2 - 0.6, width: 1.2, height: 1.3, sill_height: 0.9 }, room2, 1.2));
-      }
-    }
-  }
 }
 function synthesizeBuildingPythonCode(plan, brief) {
   const storeys = Array.isArray(plan.storey_plans) && plan.storey_plans.length > 0 ? plan.storey_plans : [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: [] }];
@@ -53806,186 +52969,12 @@ function synthesizeBuildingPythonCode(plan, brief) {
   lines.push("print('InfraStudio Python harness generation complete and saved.')");
   return lines.join("\n");
 }
-function repairPlan(plan, brief) {
-  if (!plan || typeof plan !== "object") plan = {};
-  for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
-    if (plan[key] && typeof plan[key] === "object") {
-      plan = { ...plan[key], ...plan };
-    }
-  }
-  const allowNoDoors = Boolean(plan.allow_no_doors);
-  const allowNoWindows = Boolean(plan.allow_no_windows);
-  const layoutRepairs = [];
-  const constraintAudits = [];
-  if (brief?.autonomous_design && !plan.is_edit) {
-    const generated = creativeHouseProgram(Number(brief?.design_seed || Date.now()));
-    plan.storey_plans = generated.storeys;
-    plan.roof_footprint = generated.footprint;
-    plan.roof_type = generated.roof;
-    plan.design_seed = brief?.design_seed || Date.now();
-  }
-  if (plan.is_edit) {
-    if (Array.isArray(plan.new_rooms)) {
-      processRooms(plan.new_rooms, allowNoDoors);
-      layoutRepairs.push(...validateAndRepairLayout(plan.new_rooms).repairs);
-      const audit = enforceSpatialConstraints(plan.new_rooms, allowNoDoors, allowNoWindows);
-      layoutRepairs.push(...audit.repairs);
-      constraintAudits.push({ scope: "new_rooms", ...audit });
-    }
-    plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
-    return plan;
-  }
-  if (!Array.isArray(plan.storey_plans) || plan.storey_plans.length === 0) {
-    plan.storey_plans = Array.isArray(plan.rooms) && plan.rooms.length ? [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms: plan.rooms }] : minimumBuildingPlan(brief);
-  }
-  const text = requestedText(brief);
-  const isMultiStorey = /2.?stor|two.?stor|second floor|upper floor|first floor|multi.?stor/i.test(text);
-  if (isMultiStorey && plan.storey_plans.length === 1) {
-    const allRooms = plan.storey_plans[0].rooms || [];
-    if (allRooms.length >= 2) {
-      const groundRooms = allRooms.filter((r5) => /living|kitchen|dining|entrance|entry|hall|lounge|family/i.test(String(r5.name)));
-      const upperRooms = allRooms.filter((r5) => !groundRooms.includes(r5));
-      if (groundRooms.length === 0) {
-        const mid = Math.ceil(allRooms.length / 2);
-        groundRooms.push(...allRooms.slice(0, mid));
-        upperRooms.push(...allRooms.slice(mid));
-      } else if (upperRooms.length === 0) {
-        upperRooms.push(groundRooms.pop());
-      }
-      upperRooms.forEach((r5) => {
-        if (Array.isArray(r5.origin)) r5.origin[2] = 3.2;
-      });
-      plan.storey_plans = [
-        { name: "Ground Floor", elevation: 0, height: 3.2, rooms: groundRooms },
-        { name: "First Floor", elevation: 3.2, height: 3.2, rooms: upperRooms }
-      ];
-    }
-  }
-  if (isMultiStorey || plan.storey_plans.length > 1) {
-    plan.has_stairs = true;
-  }
-  if (/gable|pitch/i.test(text)) {
-    plan.roof_type = "gable";
-  } else if (/hip/i.test(text)) {
-    plan.roof_type = "hip";
-  } else if (/shed/i.test(text)) {
-    plan.roof_type = "shed";
-  } else if (/flat|parapet/i.test(text)) {
-    plan.roof_type = "flat";
-  } else if (!plan.roof_type) {
-    plan.roof_type = "gable";
-  }
-  const expectedRooms = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
-  const proposedRooms = plan.storey_plans.reduce((total, storey) => total + (Array.isArray(storey.rooms) ? storey.rooms.length : 0), 0);
-  const isMultiUnit = /residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text);
-  const isApartmentUnit = /apartment/.test(text) && !isMultiUnit;
-  if (isMultiUnit && proposedRooms < 10 || isApartmentUnit && proposedRooms < Math.max(3, expectedRooms || 0) || expectedRooms > 0 && proposedRooms < expectedRooms) {
-    plan.storey_plans = minimumBuildingPlan(brief);
-  }
-  for (const storey of plan.storey_plans) {
-    if (!storey.name && storey.storey_name) storey.name = storey.storey_name;
-    storey.height = Number(storey.height || 3);
-    let rooms = [];
-    if (Array.isArray(storey.rooms)) {
-      rooms = storey.rooms;
-    } else if (Array.isArray(plan.rooms)) {
-      rooms = plan.rooms;
-    } else if (Array.isArray(plan.new_rooms)) {
-      rooms = plan.new_rooms;
-    }
-    if (rooms.length === 0 && Array.isArray(brief?.room_requirements) && brief.room_requirements.length > 0) {
-      let curX = 0;
-      for (const req of brief.room_requirements) {
-        const area = Number(req.suggested_area || 16);
-        const side = Math.max(3.5, Math.round(Math.sqrt(area)));
-        rooms.push({
-          name: req.name || "Room",
-          width: side,
-          length: side,
-          origin: [curX, 0, 0],
-          floor_slab: true,
-          ceiling_slab: true,
-          doors: [{ wall: "south", offset: side / 2 - 0.45, width: 0.9, height: 2.1 }],
-          windows: [{ wall: "north", offset: side / 2 - 0.6, width: 1.2, height: 1.4, sill_height: 0.9 }]
-        });
-        curX += side;
-      }
-    }
-    if (!allowNoDoors) {
-      const hasExteriorDoor = rooms.some((room2) => room2.doors?.some((door) => !isInternalWall(room2, String(door.wall), rooms)));
-      if (!hasExteriorDoor && rooms.length > 0) {
-        const target = rooms.find((room2) => /living|entry|corridor|kitchen/i.test(String(room2.name))) || rooms[0];
-        const wall = WALLS.find((candidate) => !isInternalWall(target, candidate, rooms)) || "south";
-        target.doors = target.doors || [];
-        target.doors.push(clampOpening({ wall, offset: wallLength(target, wall) / 2 - 0.5, width: 1, height: 2.1 }, target, 1));
-      }
-    }
-    processRooms(rooms, allowNoDoors);
-    layoutRepairs.push(...validateAndRepairLayout(rooms).repairs);
-    const audit = enforceSpatialConstraints(rooms, allowNoDoors, allowNoWindows);
-    layoutRepairs.push(...audit.repairs);
-    constraintAudits.push({ scope: storey.name || "storey", ...audit });
-    storey.rooms = rooms;
-  }
-  plan.material_palette = plan.material_palette || {
-    wall: "painted plaster over blockwork",
-    floor: "polished concrete or porcelain tile",
-    door: "warm wood veneer",
-    window_glass: "clear low-e glass",
-    roof_or_ceiling: "white gypsum ceiling"
-  };
-  const roomCount = plan.storey_plans.reduce((total, storey) => total + (storey.rooms?.length || 0), 0);
-  plan.quality_requirements = {
-    minimum_rooms: roomCount,
-    minimum_storeys: plan.storey_plans.length,
-    required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"]
-  };
-  plan.layout_validation = { status: "PASS", repairs: [...new Set(layoutRepairs)], constraint_audits: constraintAudits };
-  if (!plan.python_code || typeof plan.python_code !== "string" || plan.python_code.trim().length < 50) {
-    plan.python_code = synthesizeBuildingPythonCode(plan, brief);
-  }
-  return plan;
-}
 async function handleArchitect(rawBrief) {
   const brief = rawBrief && rawBrief.brief ? { ...rawBrief.brief, client_requirements: rawBrief.client_requirements || rawBrief.brief?.client_requirements } : rawBrief || {};
   const textCheck = requestedText(brief);
   const category = brief.structure_category || (/cofferdam|coffer|bridge|rail|road|pier|jetty|pier/i.test(textCheck) ? "infrastructure" : "building");
   const isBuilding = category === "building";
   const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
-  const fallbackPlan = (reason) => {
-    const modelFailure = String(reason instanceof Error ? reason.message : reason).slice(0, 280);
-    try {
-      if (isBuilding) {
-        return repairPlan({
-          is_edit: false,
-          generation_source: "constraint_program_fallback",
-          model_status: "qwen_unavailable",
-          model_failure: modelFailure,
-          roof_type: "flat",
-          has_stairs: false,
-          structural_notes: ["Generated from the validated spatial programme after the AI planner was unavailable."],
-          storey_plans: minimumBuildingPlan(brief)
-        }, brief);
-      }
-      return ensureInfrastructurePlan({
-        structure_category: category,
-        is_edit: false,
-        generation_source: "constraint_program_fallback",
-        model_status: "qwen_unavailable",
-        model_failure: modelFailure
-      }, brief);
-    } catch (fbErr) {
-      console.error("[fallbackPlan] Error in fallback generator:", fbErr);
-      const minStoreys = minimumBuildingPlan(brief);
-      return {
-        is_edit: false,
-        structure_category: category,
-        storey_plans: minStoreys,
-        layout_validation: { status: "PASS", repairs: ["Generated minimal safe building plan."], constraint_audits: [] },
-        python_code: synthesizeBuildingPythonCode({ storey_plans: minStoreys }, brief)
-      };
-    }
-  };
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `
@@ -54006,7 +52995,7 @@ PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}
         if (parsedJson?.structure_name) parsedName = parsedJson.structure_name;
       } catch {
       }
-      console.log(`[handleArchitect] Autonomous Kimi K3 code generated (${directCode.length} chars). No templates applied.`);
+      console.log(`[handleArchitect] Autonomous ${selectedModel} code generated (${directCode.length} chars). No templates applied.`);
       return {
         structure_name: parsedName,
         structure_category: category,
@@ -54019,9 +53008,9 @@ PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}
     try {
       parsed = cleanJsonResponse(res);
     } catch (firstErr) {
-      console.warn("[handleArchitect] First parse failed, retrying with clean prompt:", String(firstErr).slice(0, 120));
-      const retryPrompt = `You are an architect AI. Output JSON with { "structure_name": "...", "python_code": "..." }`;
-      res = await callQwen(retryPrompt, JSON.stringify(brief.room_requirements || brief), true, selectedModel);
+      console.warn("[handleArchitect] First parse failed, retrying with direct code prompt:", String(firstErr).slice(0, 120));
+      const retryPrompt = `You are Antigravity BIM Architect. Write Python code using IfcOpenShell and Trimesh to create the requested structure: ${brief.client_requirements || brief.project_type}. Return JSON with { "structure_name": "...", "python_code": "..." }`;
+      res = await callQwen(retryPrompt, JSON.stringify(brief), true, selectedModel);
       parsed = cleanJsonResponse(res);
     }
     if (parsed && typeof parsed.python_code === "string" && parsed.python_code.length > 50) {
@@ -54033,14 +53022,32 @@ PREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}
         layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
       };
     }
-    if (isBuilding) {
-      return repairPlan(parsed, brief);
-    } else {
-      return ensureInfrastructurePlan({ ...parsed, structure_category: category, is_edit: false }, brief);
-    }
+    throw new Error("Model response did not contain executable Python code.");
   } catch (error2) {
-    console.warn("[handleArchitect] Qwen planning failed; using constrained fallback:", String(error2));
-    return fallbackPlan(error2);
+    console.warn(`[handleArchitect] ${selectedModel} failed (${error2 instanceof Error ? error2.message : String(error2)}). Attempting emergency Astra synthesis...`);
+    try {
+      const astraRes = await callAstra(prompt, promptStr, true, "gpt-6-astra");
+      const astraCode = extractPythonCode(astraRes);
+      if (astraCode && astraCode.length > 50) {
+        let astraName = brief.structure_name || brief.project_type || "Astra Architectural Model";
+        try {
+          const parsedAstra = cleanJsonResponse(astraRes);
+          if (parsedAstra?.structure_name) astraName = parsedAstra.structure_name;
+        } catch {
+        }
+        console.log(`[handleArchitect] Emergency Astra code generated (${astraCode.length} chars).`);
+        return {
+          structure_name: astraName,
+          structure_category: category,
+          is_edit: false,
+          python_code: astraCode,
+          layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
+        };
+      }
+    } catch (aErr) {
+      console.error("[handleArchitect] Emergency Astra synthesis also failed:", aErr);
+    }
+    throw new Error(`Architectural AI synthesis failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
@@ -55008,12 +54015,12 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "k
       const res = await fetch(endpoint, {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy") ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" } : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(14e4),
-        // stay below the Supabase proxy wall-clock limit
+        signal: AbortSignal.timeout(45e4),
+        // generous timeout for long-horizon reasoning models
         body: JSON.stringify({
           model: targetModel,
           messages: msgs,
-          temperature: 0.6,
+          temperature: 0.5,
           max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : void 0
         })
@@ -55033,6 +54040,14 @@ async function callQwen(systemPrompt4, userMessage, jsonMode = false, model = "k
     } catch (err) {
       lastError = err;
       console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
+    }
+  }
+  if (getExplabsApiKey()) {
+    console.warn(`[callQwen] Primary endpoints failed for ${targetModel}. Falling back to fast Astra gpt-6-astra engine...`);
+    try {
+      return await callAstra(systemPrompt4, userMessage, jsonMode, "gpt-6-astra");
+    } catch (astraErr) {
+      console.error("[callQwen] Astra fallback also failed:", astraErr);
     }
   }
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
@@ -55315,6 +54330,8 @@ Task: Parse the LATEST user message in context of conversation history. If the u
   if (!result.is_edit && !result.design_seed) {
     result.design_seed = designSeedFrom(String(latestText), String(payload2.sessionId || ""));
   }
+  result.client_requirements = result.client_requirements || latestText;
+  result.prompt = result.prompt || latestText;
   return result;
 }
 if (typeof Deno !== "undefined" && Deno.serve) {
@@ -55702,27 +54719,27 @@ if buildings:
     return { status: "success", mcpSessionId };
   }
   if (payload2.action === "build_room") {
-    const room2 = payload2.room || {};
+    const room = payload2.room || {};
     let origin = [0, 0, 0];
-    if (Array.isArray(room2.origin)) {
-      origin = room2.origin.map(Number);
-    } else if (typeof room2.origin === "string") {
-      const parts = room2.origin.trim().split(/[\s,]+/).map(Number);
+    if (Array.isArray(room.origin)) {
+      origin = room.origin.map(Number);
+    } else if (typeof room.origin === "string") {
+      const parts = room.origin.trim().split(/[\s,]+/).map(Number);
       if (parts.length >= 3 && !parts.some(isNaN)) {
         origin = parts.slice(0, 3);
       }
     }
-    const doors = Array.isArray(room2.doors) ? room2.doors : [];
-    const windows = Array.isArray(room2.windows) ? room2.windows : [];
+    const doors = Array.isArray(room.doors) ? room.doors : [];
+    const windows = Array.isArray(room.windows) ? room.windows : [];
     const buildRes = await mcpCallTool("build_room", {
-      room_name: room2.name,
-      width: room2.width || 4,
-      length: room2.length || 4,
-      height: payload2.storeyHeight || room2.height || 3,
-      wall_thickness: room2.wall_thickness || 0.2,
+      room_name: room.name,
+      width: room.width || 4,
+      length: room.length || 4,
+      height: payload2.storeyHeight || room.height || 3,
+      wall_thickness: room.wall_thickness || 0.2,
       origin,
-      floor_slab: room2.floor_slab !== void 0 ? Boolean(room2.floor_slab) : true,
-      ceiling_slab: room2.ceiling_slab !== void 0 ? Boolean(room2.ceiling_slab) : true,
+      floor_slab: room.floor_slab !== void 0 ? Boolean(room.floor_slab) : true,
+      ceiling_slab: room.ceiling_slab !== void 0 ? Boolean(room.ceiling_slab) : true,
       doors,
       windows
     }, mcpSessionId);

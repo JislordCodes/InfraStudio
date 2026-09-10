@@ -153,6 +153,9 @@ export async function handleInterpreter(payload: any): Promise<any> {
     result.design_seed = designSeedFrom(String(latestText), String(payload.sessionId || ""));
   }
 
+  result.client_requirements = result.client_requirements || latestText;
+  result.prompt = result.prompt || latestText;
+
   return result;
 }
 

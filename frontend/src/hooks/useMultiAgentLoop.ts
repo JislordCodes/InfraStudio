@@ -63,7 +63,7 @@ export async function runMultiAgentLoop(
     
     // 2. Architect
     pushStep("Architectural Agent: Planning layout...");
-    const plan = await callEdge('agent-architect', brief);
+    const plan = await callEdge('agent-architect', { ...brief, client_requirements: userMessage, prompt: userMessage });
 
     // Force plan.is_edit if interpreter determined it is an edit
     if (isEdit) plan.is_edit = true;
