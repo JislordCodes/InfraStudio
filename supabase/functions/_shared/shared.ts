@@ -926,9 +926,6 @@ function getTargetModel(model: string): string {
   if (m === "qwen3.7-plus" || m === "qwen-plus") {
     return "qwen-plus";
   }
-  if (getExplabsApiKey()) {
-    return "gpt-6-astra";
-  }
   return "kimi-k3";
 }
 
@@ -946,7 +943,7 @@ function getQwenEndpoints(): string[] {
   ];
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "gpt-6-astra"): Promise<string> {
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "kimi-k3"): Promise<string> {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -972,10 +969,11 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   let lastError: any = null;
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
 
   for (const endpoint of endpoints) {
     try {
-      console.log(`[callQwen] Invoking ${targetModel} via ${endpoint}...`);
+      console.log(`[callQwen] Invoking ${alibabaModel} via ${endpoint}...`);
       const res = await fetch(endpoint, {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
@@ -983,7 +981,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
         signal: AbortSignal.timeout(450000), // generous timeout for long-horizon reasoning models
         body: JSON.stringify({
-          model: targetModel,
+          model: alibabaModel,
           messages: msgs,
           temperature: 0.6,
           max_tokens: 8192,
@@ -1023,7 +1021,7 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "gpt-6-astra"): Promise<any> {
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "kimi-k3"): Promise<any> {
   const targetModel = getTargetModel(model);
   if (targetModel === "gpt-6-astra") {
     const explabsKey = getExplabsApiKey();
@@ -1069,6 +1067,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+  const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
 
   let lastErrText = "";
   for (const endpoint of endpoints) {
@@ -1079,7 +1078,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: targetModel,
+          model: alibabaModel,
           messages: msgs,
           tools: (tools && tools.length > 0) ? tools : undefined,
           temperature: 0.6,
@@ -1102,7 +1101,7 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
   throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
 }
 
-export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "gpt-6-astra"): Promise<ReadableStream<Uint8Array>> {
+export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "kimi-k3"): Promise<ReadableStream<Uint8Array>> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1111,6 +1110,7 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
     { role: "user", content: userMessage }
   ];
   const targetModel = getTargetModel(model);
+  const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
   const streamEndpoint = getQwenEndpoints()[0];
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
   const res = await fetch(streamEndpoint, {
@@ -1119,7 +1119,7 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
       ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
       : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: targetModel,
+      model: alibabaModel,
       messages: msgs,
       temperature: 0.1,
       max_tokens: 16384,
