@@ -73,7 +73,7 @@ export async function handleInterpreter(payload: any): Promise<any> {
   const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
 
   try {
-    const res = await callQwen(systemPrompt, formattedPrompt, true, payload?.model || "qwen-max");
+    const res = await callQwen(systemPrompt, formattedPrompt, true, "kimi-k3");
     result = cleanJsonResponse(res);
   } catch (err) {
     console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);

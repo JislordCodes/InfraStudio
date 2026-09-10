@@ -16,7 +16,7 @@ export async function runMultiAgentLoop(
   onStep: (step: string) => void,
   onAssistantMessage?: (msg: any) => void,
   _onToolResult?: (msg: any) => void,
-  selectedModel: string = 'qwen-max'
+  selectedModel: string = 'kimi-k3'
 ): Promise<MultiAgentResult> {
   
   const steps: string[] = [];

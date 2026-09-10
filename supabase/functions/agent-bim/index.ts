@@ -775,7 +775,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, payload.model || "qwen-max");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "kimi-k3");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

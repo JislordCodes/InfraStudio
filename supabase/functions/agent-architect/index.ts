@@ -1496,7 +1496,7 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  const selectedModel = brief.model || rawBrief?.model || "qwen-max";
+  const selectedModel = "kimi-k3";
   try {
     let res = await callQwen(prompt, promptStr, true, selectedModel);
     if (!res || res.trim().length < 5) {

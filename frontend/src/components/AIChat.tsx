@@ -28,16 +28,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [currentSteps, setCurrentSteps] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 640 : false);
-  const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return (typeof localStorage !== 'undefined' && localStorage.getItem('infrastudio_preferred_model')) || 'qwen-max';
-  });
-
-  const handleModelChange = (model: string) => {
-    setSelectedModel(model);
-    try {
-      localStorage.setItem('infrastudio_preferred_model', model);
-    } catch {}
-  };
+  const selectedModel = 'kimi-k3';
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -341,16 +332,14 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                     <span className="xs:hidden">IFC</span>
                   </a>
                 )}
-                <select
-                  value={selectedModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className="bg-white/10 hover:bg-white/15 text-neutral-200 text-[10px] sm:text-xs font-medium px-2 py-1 rounded-lg border border-white/10 outline-none cursor-pointer transition-colors shrink-0"
-                  title="Select AI Engine"
+                <div
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-[10px] sm:text-xs font-medium border border-emerald-500/20 shrink-0"
+                  title="AI Engine: Kimi K3 (Medium Reasoning)"
                 >
-                  <option value="qwen-max" className="bg-neutral-900 text-white">⚡ Qwen Max (Fast)</option>
-                  <option value="kimi-k3" className="bg-neutral-900 text-white">🧠 Kimi K3 (Reasoning)</option>
-                  <option value="gpt-6-astra" className="bg-neutral-900 text-white">✨ GPT-6 Astra</option>
-                </select>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>🧠 Kimi K3</span>
+                  <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-200 uppercase font-semibold">Medium</span>
+                </div>
               </div>
               <button onClick={() => setExpanded(false)} className="p-1 text-neutral-400 hover:text-white transition-colors shrink-0">
                 <ChevronDown className="w-4 h-4" />

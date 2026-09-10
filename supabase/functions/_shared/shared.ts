@@ -989,23 +989,7 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
   return callQwen(systemPrompt, userMessage, jsonMode, "qwen3.7-plus");
 }
 
-function getTargetModel(model: string): string {
-  const m = (model || "").toLowerCase();
-  if (m.includes("kimi") || m === "kimi-k3") {
-    return "kimi-k3";
-  }
-  if (m.includes("astra") || m === "gpt-6-astra") {
-    return "gpt-6-astra";
-  }
-  if (m === "qwen3.8-max" || m === "qwen3.8-max-preview") {
-    return "qwen3.8-max";
-  }
-  if (m === "qwen-max") {
-    return "qwen-max";
-  }
-  if (m === "qwen3.7-plus" || m === "qwen-plus") {
-    return "qwen-plus";
-  }
+function getTargetModel(_model?: string): string {
   return "kimi-k3";
 }
 
@@ -1026,19 +1010,7 @@ function getQwenEndpoints(): string[] {
   return list;
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, model: string = "qwen-max"): Promise<string> {
-  const targetModel = getTargetModel(model);
-  if (targetModel === "gpt-6-astra") {
-    const explabsKey = getExplabsApiKey();
-    if (explabsKey) {
-      try {
-        return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
-      } catch (err) {
-        console.warn("[callQwen] Fallback from Astra error:", err);
-      }
-    }
-  }
-
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, _model: string = "kimi-k3"): Promise<string> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1052,23 +1024,22 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
   let lastError: any = null;
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
-  const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
-  const tokenLimit = alibabaModel === "kimi-k3" ? 4096 : 8192;
 
   for (const endpoint of endpoints) {
     try {
-      console.log(`[callQwen] Invoking ${alibabaModel} via ${endpoint}...`);
+      console.log(`[callQwen] Invoking kimi-k3 (reasoning_effort: medium) via ${endpoint}...`);
       const res = await fetch(endpoint, {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(480000), // 8 minutes on AWS Lambda (Lambda max is 600s)
+        signal: AbortSignal.timeout(300000), // 5 minutes on AWS Lambda
         body: JSON.stringify({
-          model: alibabaModel,
+          model: "kimi-k3",
           messages: msgs,
+          reasoning_effort: "medium",
           temperature: 0.6,
-          max_tokens: tokenLimit,
+          max_tokens: 8192,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
       });
@@ -1083,93 +1054,19 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
       const data = await res.json();
       const choice = data.choices?.[0];
       if (choice?.finish_reason === "length") {
-        console.warn(`[callQwen] WARNING: ${targetModel} output was truncated (finish_reason=length).`);
+        console.warn(`[callQwen] WARNING: kimi-k3 output was truncated (finish_reason=length).`);
       }
-      return choice?.message?.content || "";
+      return choice?.message?.content || choice?.message?.reasoning_content || "";
     } catch (err: any) {
       lastError = err;
-      console.warn(`[callQwen] Endpoint ${endpoint} for ${targetModel} failed:`, err.message || err);
+      console.warn(`[callQwen] Endpoint ${endpoint} for kimi-k3 failed:`, err.message || err);
     }
   }
 
-  // Failover 1: High-speed qwen-max engine on Alibaba (if kimi-k3 failed or timed out)
-  if (alibabaModel === "kimi-k3") {
-    console.warn(`[callQwen] Primary kimi-k3 failed or timed out. Falling back to high-speed qwen-max engine...`);
-    try {
-      for (const endpoint of endpoints) {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: endpoints[0].includes("functions/v1/qwen-proxy")
-            ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
-            : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(90000),
-          body: JSON.stringify({
-            model: "qwen-max",
-            messages: msgs,
-            temperature: 0.6,
-            max_tokens: 8192,
-            response_format: jsonMode ? { type: "json_object" } : undefined
-          })
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const choice = data.choices?.[0];
-          return choice?.message?.content || "";
-        }
-      }
-    } catch (qErr: any) {
-      console.error("[callQwen] qwen-max fallback also failed:", qErr.message || qErr);
-    }
-  }
-
-  // Failover 2: Astra (if explabs key is available and has credits)
-  if (getExplabsApiKey()) {
-    try {
-      return await callAstra(systemPrompt, userMessage, jsonMode, "gpt-6-astra");
-    } catch (astraErr) {
-      // ignore
-    }
-  }
-
-  throw new Error(`callQwen failed for ${targetModel}: ${lastError?.message || String(lastError)}`);
+  throw new Error(`callQwen failed for kimi-k3: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], model: string = "qwen-max"): Promise<any> {
-  const targetModel = getTargetModel(model);
-  if (targetModel === "gpt-6-astra") {
-    const explabsKey = getExplabsApiKey();
-    if (explabsKey) {
-      try {
-        const msgs = [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage }
-        ];
-        const payload: any = {
-          model: "gpt-6-astra",
-          messages: msgs
-        };
-        if (tools && tools.length > 0) {
-          payload.tools = tools;
-        }
-        const res = await fetch("https://api.experientiallabs.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${explabsKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        });
-        if (res.ok) {
-          const data = await res.json();
-          return data.choices?.[0]?.message;
-        }
-        console.warn(`[callGLM Astra] ${res.status}: ${await res.text()}`);
-      } catch (err) {
-        console.warn("[callGLM Astra] Fallback on error:", err);
-      }
-    }
-  }
-
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], _model: string = "kimi-k3"): Promise<any> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1180,7 +1077,6 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
 
   const endpoints = getQwenEndpoints();
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
-  const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
 
   let lastErrText = "";
   for (const endpoint of endpoints) {
@@ -1191,8 +1087,9 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: alibabaModel,
+          model: "kimi-k3",
           messages: msgs,
+          reasoning_effort: "medium",
           tools: (tools && tools.length > 0) ? tools : undefined,
           temperature: 0.6,
           max_tokens: 4096
@@ -1211,10 +1108,10 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
     }
   }
 
-  throw new Error(`BIM Model Error (${targetModel}): ${lastErrText}`);
+  throw new Error(`BIM Model Error (kimi-k3): ${lastErrText}`);
 }
 
-export async function callGLMStream(systemPrompt: string, userMessage: string, model: string = "kimi-k3"): Promise<ReadableStream<Uint8Array>> {
+export async function callGLMStream(systemPrompt: string, userMessage: string, _model: string = "kimi-k3"): Promise<ReadableStream<Uint8Array>> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1222,8 +1119,6 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage }
   ];
-  const targetModel = getTargetModel(model);
-  const alibabaModel = (targetModel === "gpt-6-astra") ? "kimi-k3" : targetModel;
   const streamEndpoint = getQwenEndpoints()[0];
   const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
   const res = await fetch(streamEndpoint, {
@@ -1232,17 +1127,15 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, m
       ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
       : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: alibabaModel,
+      model: "kimi-k3",
       messages: msgs,
+      reasoning_effort: "medium",
       temperature: 0.1,
       max_tokens: 16384,
       stream: true
     })
   });
   if (!res.ok) {
-    if (targetModel === "qwen-max") {
-      return await callGLMStream(systemPrompt, userMessage, "qwen-flash");
-    }
     throw new Error(`GLM Stream Error: ${await res.text()}`);
   }
   if (!res.body) throw new Error("No response body from GLM Stream");

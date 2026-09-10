@@ -116,7 +116,7 @@ export async function runAntigravityKimiAgent(
 
     try {
       let promptMessage = "";
-      const stepModel = iterations === 1 ? model : "qwen-max";
+      const stepModel = "kimi-k3";
       if (iterations === 1) {
         promptMessage = `User Design Brief: ${promptText}\n\nDesign a complete, high-quality, watertight architectural BIM model using InfraStudioHarness. Return JSON with structure_name and python_code.`;
       } else {
