@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws ssm send-command *)",
+      "Bash(aws ssm get-command-invocation *)",
+      "Bash(aws ssm describe-instance-information *)",
+      "Bash(aws ssm start-session *)"
+    ]
+  }
+}
