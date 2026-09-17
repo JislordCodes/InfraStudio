@@ -1,0 +1,8 @@
+{
+  "name": "mcp4ifc-monorepo",
+  "private": true,
+  "description": "Root package.json exists only so npm-module resolution (esbuild's ancestor-directory walk) can find shared dependencies imported from supabase/functions/_shared - the actual apps live in aws-lambda/ and frontend/, each with their own package.json.",
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.1132.0"
+  }
+}

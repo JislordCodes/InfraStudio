@@ -9,6 +9,92 @@ export interface MultiAgentResult {
   mcp_session_id?: string;
 }
 
+/**
+ * Direct build path for the Antigravity engine (USE_ANTIGRAVITY_ENGINE=true
+ * on the Lambda): sends the user's raw message straight to agent-bim's
+ * build_code action, skipping the interpreter/architect/reviewer chain
+ * entirely. Those existed to compensate for direct-model pipelines that
+ * couldn't reliably interpret a brief, design a correct structure, AND
+ * self-check their own output in one pass - Antigravity (a real agentic
+ * coding CLI) already does all three itself within a single headless run,
+ * confirmed this session on both a cellular and a braced cofferdam build
+ * (correct structure-type reasoning, thousands of elements, full materials,
+ * self-verified against get_scene_info before export). Routing through three
+ * extra LLM calls first would just add latency for output agy already
+ * produces on its own.
+ */
+export async function runAntigravityBuild(
+  userMessage: string,
+  clientSessionId: string,
+  onStep: (step: string) => void,
+  onAssistantMessage?: (msg: any) => void,
+): Promise<MultiAgentResult> {
+  const steps: string[] = [];
+  const pushStep = (msg: string) => {
+    onStep(msg);
+    steps.push(msg);
+  };
+
+  const callEdge = async (funcName: string, body: any) => {
+    const url = `${EDGE_PROXY_BASE}/${funcName}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`Error from ${funcName}: ${await res.text()}`);
+    return res.json();
+  };
+
+  pushStep("🤖 Antigravity build starting...");
+
+  try {
+    let bimRes = await callEdge('agent-bim', {
+      action: 'build_code',
+      plan: { client_requirements: userMessage },
+      mcpSessionId: clientSessionId,
+    });
+    let sessionId = bimRes.mcpSessionId || clientSessionId;
+
+    // Each poll paces itself server-side (~8s) and returns fast, so this can
+    // afford a much larger pass budget than the old OpenHands loop (which
+    // blocked internally for most of a Lambda invocation per pass) - 200
+    // passes at ~8-10s each covers roughly agy's own 30-minute print-timeout.
+    let continuePasses = 0;
+    const maxContinuePasses = 200;
+    while (bimRes.status === 'continue' && continuePasses < maxContinuePasses) {
+      continuePasses++;
+      if (bimRes.progress) pushStep(bimRes.progress);
+      bimRes = await callEdge('agent-bim', {
+        action: 'build_code',
+        plan: { client_requirements: userMessage, continuation: bimRes.continuation },
+        mcpSessionId: sessionId,
+      });
+      sessionId = bimRes.mcpSessionId || sessionId;
+    }
+
+    if (bimRes.status === 'continue') {
+      pushStep(`⚠️ Build still running after ${maxContinuePasses} checks - it may finish later; re-open this chat to check back.`);
+      return { reply: "Build is still running in the background.", steps, mcp_session_id: sessionId };
+    }
+    if (bimRes.status === 'error') {
+      throw new Error(bimRes.error || 'Antigravity build failed.');
+    }
+
+    pushStep("✅ Antigravity build complete.");
+    const reply = "Antigravity build complete. The model is ready.";
+    if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: reply });
+    return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId };
+  } catch (err: any) {
+    pushStep(`💥 Antigravity build error: ${err.message}`);
+    throw err;
+  }
+}
+
 export async function runMultiAgentLoop(
   userMessage: string,
   previousMessages: any[],
@@ -83,16 +169,42 @@ export async function runMultiAgentLoop(
     }
 
     if (isNew) {
-      // ═══ SINGLE-PASS MONOLITHIC CODE EXECUTION ═══
+      // ═══ MONOLITHIC CODE EXECUTION (checkpointed across calls) ═══
       pushStep(`BIM Agent: Generating complete ${structureCategory} model via execute_ifc_code_tool...`);
-      const bimRes = await callEdge('agent-bim', {
+      let bimRes = await callEdge('agent-bim', {
         action: 'build_code',
         plan: plan,
         mcpSessionId: sessionId,
         model: selectedModel
       });
-      ifc_url = bimRes.ifc_url;
       sessionId = bimRes.mcpSessionId;
+
+      // A structure with enough components (a real bridge, a large building)
+      // can need more real design time than fits in a single Lambda
+      // invocation. The backend checkpoints cleanly and returns
+      // status:"continue" with everything needed to resume - previously
+      // this was never checked, so any build that didn't finish in one call
+      // silently reported "ready" with no ifc_url and nothing on the scene.
+      // Keep calling with the returned continuation until it actually finishes.
+      let continuePasses = 0;
+      const maxContinuePasses = 25;
+      while (bimRes.status === 'continue' && continuePasses < maxContinuePasses) {
+        continuePasses++;
+        pushStep(`BIM Agent: ${bimRes.progress || 'Continuing generation...'} (pass ${continuePasses})`);
+        bimRes = await callEdge('agent-bim', {
+          action: 'build_code',
+          plan: { ...plan, continuation: bimRes.continuation },
+          mcpSessionId: sessionId,
+          model: selectedModel
+        });
+        sessionId = bimRes.mcpSessionId;
+      }
+      if (bimRes.status === 'continue') {
+        pushStep(`⚠️ Generation paused after ${maxContinuePasses} continuation passes without finishing - the structure may be unusually large.`);
+      } else if (bimRes.status === 'error') {
+        throw new Error(bimRes.error || 'BIM Agent failed to generate the model.');
+      }
+      ifc_url = bimRes.ifc_url;
     } else {
       // ═══ EDIT MODE (BUILD UPON ACTIVE MODEL - DO NOT INITIALIZE / ERASE) ═══
       pushStep(`BIM Agent: Modifying active model in session (Session: ${sessionId || 'new'})...`);

@@ -1,5 +1,8 @@
-import { CORS, mcpInit, mcpCallTool, fetchMcpTools, callQwen, callGLM, runAntigravityKimiAgent } from "../_shared/shared.ts";
-import { synthesizeBuildingPythonCode } from "../agent-architect/index.ts";
+import { CORS, mcpInit, mcpCallTool, fetchMcpTools, callQwen, callGLM, runAntigravityKimiAgent, enrichRoomsWithFurniture, embellishStoreysArchitecturally, generateStoreyFreeform, generateRoofFreeform, estimateRoomBounds, generateInfrastructureFreeform, runAgenticComponentBuild, AGENTIC_GRAND_STRUCTURE_SYSTEM_PROMPT } from "../_shared/shared.ts";
+import type { SceneElement } from "../_shared/shared.ts";
+import { handleReviewer } from "../agent-reviewer/index.ts";
+import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_agent.ts";
+import { startAntigravityBuild, pollAntigravityBuild } from "../_shared/antigravity_agent.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -257,8 +260,117 @@ async function exportWithMaterials(mcpSessionId: string): Promise<{ ifc_url: str
 }
 
 export async function handleBim(payload: any): Promise<any> {
+  // Temporary diagnostic: verify a candidate DashScope model id is valid and has
+  // quota, without touching MCP/IFC state at all. Not part of the generation
+  // pipeline itself - safe to remove once model selection is settled.
+  if (payload.action === "test_model") {
+    const model = String(payload.model || "glm-5.3");
+    const t0 = Date.now();
+    try {
+      const raw = await callQwen(
+        "You are a helpful assistant. Reply with exactly one short sentence.",
+        "Say hello and name yourself.",
+        false,
+        model,
+        60000,
+        "medium",
+        200
+      );
+      return { status: "success", model, ms: Date.now() - t0, raw };
+    } catch (err: any) {
+      return { status: "error", model, ms: Date.now() - t0, error: err?.message || String(err) };
+    }
+  }
+
+  // Temporary diagnostic: verify real tool-calling (function calling) actually
+  // works against DashScope for this model before building an agentic loop on
+  // top of it. Not part of the generation pipeline - safe to remove.
+  if (payload.action === "test_tool_call") {
+    const model = String(payload.model || "glm-5.3");
+    const t0 = Date.now();
+    try {
+      const tools = [{
+        type: "function",
+        function: {
+          name: "get_scene_info",
+          description: "Get a list of every element currently built in the scene, with names and bounding boxes.",
+          parameters: { type: "object", properties: { limit: { type: "integer", description: "max elements to return" } }, required: [] }
+        }
+      }];
+      const msg = await callGLM(
+        "You are a structural engineer with access to a get_scene_info tool. Use it whenever you need to know what already exists before placing something new.",
+        "Before we start, check what's already in the scene.",
+        tools,
+        model
+      );
+      return { status: "success", model, ms: Date.now() - t0, message: msg };
+    } catch (err: any) {
+      return { status: "error", model, ms: Date.now() - t0, error: err?.message || String(err) };
+    }
+  }
+
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
+
+  // Whole-structure agentic build: no component-list plan, no per-component
+  // sessions - the model gets the raw brief and one continuous tool-calling
+  // conversation to design AND build the entire structure itself (its own
+  // alignment functions, its own batched loops), the same way a human
+  // engineer would script a large repetitive structure. Chained across
+  // invocations via the same continuation/deadline pattern as build_code.
+  if (payload.action === "grand_build") {
+    const brief = String(payload.brief || "");
+    const continuation = payload.continuation;
+    if (continuation?.mcpSessionId) {
+      mcpSessionId = continuation.mcpSessionId;
+    } else {
+      const initRes = await mcpCallTool("initialize_project", { project_name: payload.projectName || "Grand Agentic Structure" }, mcpSessionId);
+      mcpSessionId = initRes.session;
+    }
+    const deadline: number = Number(payload._deadline) || 0;
+    const elements: SceneElement[] = continuation?.elements || [];
+    // Model is selectable per-call (defaults to the usual one) and carried
+    // through continuation so a resumed build keeps using the same model it
+    // started with, even if the caller's own default changes later - this is
+    // what lets a run be switched to a different model when one hits its
+    // DashScope quota mid-project without losing progress.
+    const model = String(continuation?.model || payload.model || "glm-5.3");
+
+    const agentic = await runAgenticComponentBuild(
+      AGENTIC_GRAND_STRUCTURE_SYSTEM_PROMPT,
+      brief,
+      mcpSessionId,
+      elements,
+      () => {},
+      { model, maxIterations: 20, deadline, maxTokens: 10000, callTimeoutMs: 300000, initialMessages: continuation?.messages }
+    );
+
+    const totalElements = elements.length + agentic.newElements.length;
+    if (agentic.stoppedEarly) {
+      return {
+        status: "continue",
+        continuation: { mcpSessionId: agentic.mcpSessionId, elements: [...elements, ...agentic.newElements], messages: agentic.messages, model },
+        totalElements,
+        progress: `${totalElements} elements built so far - call again with plan.continuation to resume.`,
+        transcript: agentic.transcript
+      };
+    }
+
+    let ifcUrl = "";
+    try {
+      const exportRes = await mcpCallTool("export_ifc", {}, agentic.mcpSessionId);
+      ifcUrl = JSON.parse(exportRes.resultText)?.file_url || "";
+    } catch { /* export failure reported via empty ifc_url, not fatal to the report */ }
+
+    return {
+      status: totalElements > 0 ? "success" : "error",
+      mcpSessionId: agentic.mcpSessionId,
+      ifc_url: ifcUrl,
+      totalElements,
+      transcript: agentic.transcript,
+      lastError: agentic.lastError
+    };
+  }
 
   if (payload.action === "initialize") {
     const res = await mcpCallTool("initialize_project", { project_name: payload.projectName || "InfraStudio AI Building" }, mcpSessionId);
@@ -536,16 +648,140 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
   }
 
   if (payload.action === "build_code" || payload.action === "build_freeform") {
-    // Initialize fresh project
-    const initRes = await mcpCallTool("initialize_project", { project_name: payload.plan?.structure_name || "InfraStudio Model" }, mcpSessionId);
-    mcpSessionId = initRes.session;
+    const continuation = payload.plan?.continuation;
+    const executedTools: string[] = [];
+
+    // OpenHands routing (new builds only, toggled by USE_OPENHANDS_ENGINE):
+    // hands the raw brief to OpenHands - a real agentic coding CLI - headless
+    // on the EC2 MCP box via SSM - instead of this pipeline's own
+    // direct-model orchestration. See _shared/openhands_agent.ts for the
+    // current model/provider. Bypasses this pipeline's
+    // mcpSessionId/initialize_project bookkeeping entirely; OpenHands owns
+    // its own MCP connection/session and calls initialize_project itself as
+    // part of its task, so `jobId` here is just an opaque tracking id, not a
+    // real MCP session. See infrastudio-kimi-pipeline-no-fallback memory for
+    // why (verified: genuinely correct complex geometry where the direct
+    // pipeline had repeated real quality problems) - never a silent
+    // fallback, this is an explicit on/off switch the user controls.
+    const getEnv = (name: string): string | undefined => (typeof Deno !== "undefined" ? Deno.env.get(name) : process.env[name]);
+    const useAntigravity = getEnv("USE_ANTIGRAVITY_ENGINE") === "true";
+    const useOpenHands = getEnv("USE_OPENHANDS_ENGINE") === "true";
+
+    // Antigravity routing (new builds only, toggled by USE_ANTIGRAVITY_ENGINE):
+    // hands the raw brief to the Antigravity CLI ("agy") - a real agentic
+    // coding CLI driving Gemini 3.8 Flash High via the user's own Antigravity
+    // Pro subscription - headless on the EC2 MCP box via SSM, the same
+    // deployment shape as the OpenHands path below but on infrastructure that
+    // is actually confirmed working end-to-end this session (real materials
+    // on every element, correct structure-type geometry, multi-thousand
+    // element builds, verified independently against the live MCP scene).
+    // Takes priority over USE_OPENHANDS_ENGINE when both happen to be set.
+    if (useAntigravity && !payload.plan?.is_edit) {
+      const continuation = payload.plan?.continuation;
+      if (continuation?.kind === "antigravity") {
+        const result = await pollAntigravityBuild(continuation.ssmCommandId);
+        if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, mcpSessionId: continuation.jobId };
+        return result.error
+          ? { status: "error", error: result.error, mcpSessionId: continuation.jobId }
+          : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId };
+      }
+      const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
+      // Same standing instructions as the OpenHands brief below (native tool
+      // calls only, mandatory materials, real engineering form before
+      // geometry) - both engines are stateless headless agents with the same
+      // failure modes without these reminders.
+      const brief = `IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
+
+IMPORTANT quality bar: every element you build must have a real, appropriate material/surface style applied (via create_surface_style/apply_style_to_object or equivalent) before you export - realistic colors/finishes matching what each element actually is (concrete, steel, timber, glass, etc.), not bare unstyled geometry. This applies even if the user's request doesn't explicitly mention materials. No element should be left unstyled.
+
+IMPORTANT design-accuracy rule: you have no memory of this project and no prior context beyond this message - do not default to a generic or approximate shape just because a request is short. Before building, identify the REAL engineering/architectural form of whatever is being asked for, and commit to specific, correct structural details before writing any geometry code. If a brief names a specific structure type, treat getting that type's real form right as more important than speed - do not substitute a different (even superficially similar) real-world structure type than the one named.
+
+IMPORTANT execution constraint: if you use execute_ifc_code_tool, each call has a hard 60-second server-side execution timeout - split large builds into multiple calls (e.g. one per structural section/chunk of a few hundred elements) rather than one giant call. When assigning elements to the building storey, do NOT call spatial.assign_container once per element (this is O(n^2) and will time out as element count grows) - collect all new elements created within a single call into a list and call spatial.assign_container ONCE with the full list at the end of that call.
+
+First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
+
+${userBrief}
+
+When finished, call get_scene_info to confirm the total element count, then call export_ifc.`;
+      const jobId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `job-${Date.now()}`;
+      const commandId = await startAntigravityBuild(brief, jobId);
+      const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
+      return { status: "continue", continuation: newContinuation, progress: "Antigravity build started...", mcpSessionId: jobId };
+    }
+
+    if (useOpenHands && !payload.plan?.is_edit) {
+      const deadline: number = Number(payload._deadline) || 0;
+      if (continuation?.kind === "openhands") {
+        const result = await pollOpenHandsBuild(continuation.ssmCommandId, deadline);
+        if (!result.done) return { status: "continue", continuation, progress: "OpenHands build in progress...", mcpSessionId: continuation.jobId };
+        return result.error
+          ? { status: "error", error: result.error, mcpSessionId: continuation.jobId }
+          : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId };
+      }
+      const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
+      // Standing instructions every OpenHands build needs, regardless of what
+      // the user asked for. Each one exists because it was skipped without
+      // it, observed directly this session: (1) it has direct MCP
+      // tool-calling access and must use it natively - without this
+      // reminder the agent sometimes falls back to shelling out via
+      // curl/bash instead, which doesn't work; (2) real materials/surface
+      // styles are part of this pipeline's baseline quality bar (see
+      // bim-generation-standards memory), not optional - without this
+      // reminder even a request that explicitly asked for materials still
+      // got built with zero styling; (3) design accuracy - OpenHands runs
+      // as a single stateless conversation with NO memory of this project's
+      // domain standards or prior builds (unlike an interactive assistant
+      // that accumulates real context over a session), so a vague brief
+      // like "create a cofferdam" gets built from whatever generic
+      // association the model defaults to under time pressure - verified
+      // this session that this produced a smooth rounded vessel with no
+      // resemblance to a real cofferdam. Telling it to actually research and
+      // reason about the real form before building is the fix, not assuming
+      // the brief alone is enough context.
+      const brief = `IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
+
+IMPORTANT quality bar: every element you build must have a real, appropriate material/surface style applied (via create_surface_style/apply_style_to_object or equivalent) before you export - realistic colors/finishes matching what each element actually is (concrete, steel, timber, glass, etc.), not bare unstyled geometry. This applies even if the user's request doesn't explicitly mention materials.
+
+IMPORTANT design-accuracy rule: you have no memory of this project and no prior context beyond this message - do not default to a generic or approximate shape just because a request is short. Before building, identify the REAL engineering/architectural form of whatever is being asked for (use search_ifc_knowledge and your own domain knowledge), and commit to specific, correct structural details before writing any geometry code. For example: a cofferdam is NOT a bucket, tub, or smooth rounded vessel - it is a temporary watertight enclosure built from sheet-pile walls (or a braced double-wall cellular structure) forming a barrier around a work area, with corner bracing and a base/footing. If a brief names a specific structure type, treat getting that type's real form right as more important than speed.
+
+First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
+
+${userBrief}
+
+When finished, call export_ifc.`;
+      const jobId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `job-${Date.now()}`;
+      const commandId = await startOpenHandsBuild(brief, jobId);
+      const result = await pollOpenHandsBuild(commandId, deadline);
+      const newContinuation = { kind: "openhands", ssmCommandId: commandId, jobId };
+      if (!result.done) return { status: "continue", continuation: newContinuation, progress: "OpenHands build started...", mcpSessionId: jobId };
+      return result.error
+        ? { status: "error", error: result.error, mcpSessionId: jobId }
+        : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: jobId };
+    }
+
+    // A continuation resumes an in-progress build (see the "NO FALLBACK ...
+    // continue" section below) - the project already exists server-side, so
+    // re-initializing it here would wipe the very progress being resumed.
+    if (continuation?.mcpSessionId) {
+      mcpSessionId = continuation.mcpSessionId;
+    } else {
+      const initRes = await mcpCallTool("initialize_project", { project_name: payload.plan?.structure_name || "InfraStudio Model" }, mcpSessionId);
+      mcpSessionId = initRes.session;
+      executedTools.push("initialize_project");
+    }
+    const deadline: number = Number(payload._deadline) || 0;
 
     let executedMutation = false;
-    const executedTools: string[] = ["initialize_project"];
+    let generationError = "";
     const toolAudit: ToolAuditEntry[] = [];
+    // Real, live scene elements built by generateStoreyFreeform (model-authored
+    // geometry, no deterministic layout) - carried forward so the furniture
+    // pass can ground itself in each room's ACTUAL built extent rather than a
+    // pre-assigned coordinate that no longer exists.
+    let builtElements: SceneElement[] = [];
 
-    // 1. Direct Python code execution from plan
-    if (payload.plan?.python_code && typeof payload.plan.python_code === "string" && payload.plan.python_code.trim().length > 20) {
+    // 1. Direct Python code execution from plan (qwen3.8-max's own design)
+    if (!continuation && payload.plan?.python_code && typeof payload.plan.python_code === "string" && payload.plan.python_code.trim().length > 20) {
       let codeToExecute = payload.plan.python_code;
       // Pre-execution code sanitization:
       codeToExecute = codeToExecute.replace(/import\s+InfraStudioHarness\s+as\s+h;?/g, "h = InfraStudioHarness()");
@@ -560,125 +796,260 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         executedTools.push("execute_ifc_code_tool");
         executedMutation = true;
       } catch (pErr: any) {
-        console.warn(`[build_code] Direct python_code execution failed, starting Antigravity self-healing pass:`, pErr);
+        console.warn(`[build_code] Direct python_code execution failed, starting Antigravity self-healing pass (glm-5.3 repairing its own code, no fallback model/template):`, pErr);
+        generationError = String(pErr?.message || pErr);
         try {
+          // No fallback: this is qwen3.8-max retrying with the real execution error fed
+          // back. If it still can't produce working code, selfHealed.success is
+          // false and we report that honestly below - never a substitute design.
           const selfHealed = await runAntigravityKimiAgent(
-            { brief: payload.plan, failed_code: payload.plan.python_code, error: String(pErr?.message || pErr) },
+            {
+              brief: payload.plan,
+              structure_name: payload.plan?.structure_name,
+              project_type: payload.plan?.structure_name,
+              client_requirements: payload.plan?.structure_name,
+              room_requirements: payload.plan?.room_requirements || payload.brief?.room_requirements,
+              failed_code: payload.plan.python_code,
+              error: generationError
+            },
             mcpSessionId,
-            { model: "qwen-max", maxRetries: 2 }
+            { model: "glm-5.3", maxRetries: 3 }
           );
           if (selfHealed.success) {
             mcpSessionId = selfHealed.mcpSessionId;
             executedTools.push("execute_ifc_code_tool");
             executedMutation = true;
-            console.log(`[build_code] Antigravity self-healing succeeded!`);
+            console.log(`[build_code] Antigravity self-healing succeeded - qwen3.8-max repaired its own code.`);
+          } else {
+            generationError = selfHealed.error || generationError;
           }
-        } catch (healErr) {
-          console.warn(`[build_code] Antigravity self-healing error, falling back to deterministic synthesizer:`, healErr);
+        } catch (healErr: any) {
+          console.warn(`[build_code] Antigravity self-healing itself errored:`, healErr);
+          generationError = healErr?.message || String(healErr);
         }
       }
     }
 
-    // 2. If not executed and storey_plans present (building), synthesize monolithic Python script
-    if (!executedMutation && Array.isArray(payload.plan?.storey_plans) && payload.plan.storey_plans.length > 0) {
-      console.log(`[build_code] Synthesizing building Python code from ${payload.plan.storey_plans.length} storeys...`);
-      const synthesized = synthesizeBuildingPythonCode(payload.plan);
-      try {
-        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: synthesized }, mcpSessionId);
-        mcpSessionId = toolRes.session;
-        executedTools.push("execute_ifc_code_tool");
+    // 1b. If no python_code but a room programme (storey_plans) is present -
+    // the split-planning path: qwen3.8-max planned WHAT rooms to build, and
+    // now builds each one itself, room by room, in strict sequence, against
+    // the REAL live scene state (no deterministic layout/geometry code
+    // anywhere - see generateStoreyFreeform). Each room is its own
+    // execute_ifc_code_tool call, immediately re-verified against the real
+    // scene for genuine bounding-box clashes (not just "did it crash"), with
+    // one targeted retry and an honest skip - never a fallback design.
+    //
+    // Large room counts can genuinely need more wall-clock time than one
+    // Lambda invocation allows (each room is a real, non-parallelizable
+    // model round-trip). Rather than let that end in a mid-request timeout,
+    // generateStoreyFreeform stops cleanly at `deadline` and reports exactly
+    // where it stopped; this returns status:"continue" with everything the
+    // next call needs to pick up seamlessly - never a deterministic
+    // shortcut to avoid the wait.
+    let structuralShellErrors: string[] = [];
+    let freeformSteps: string[] = [];
+    let embellishResult: { enrichedStoreys: number; skippedStoreys: number; steps: string[] } | null = null;
+    const isBuildingContinuation = continuation && continuation.kind === "building";
+    if (!executedMutation && Array.isArray(payload.plan?.storey_plans) && payload.plan.storey_plans.length > 0 && payload.plan?.structure_category !== "infrastructure" && (!continuation || isBuildingContinuation)) {
+      const storeys = payload.plan.storey_plans;
+      const startStoreyIdx = isBuildingContinuation ? continuation.storeyIndex : 0;
+      const startRoomIdx = isBuildingContinuation ? continuation.roomIndex : 0;
+      console.log(`[build_code] Building ${storeys.length} storey(s) room-by-room, model-authored geometry, sequential (each room sees the real scene state)${isBuildingContinuation ? ` - resuming at storey ${startStoreyIdx + 1}, room ${startRoomIdx + 1}` : ""}...`);
+      let elements: SceneElement[] = isBuildingContinuation ? continuation.elements : [];
+      let anyRoomBuilt = false;
+
+      for (let sIdx = startStoreyIdx; sIdx < storeys.length; sIdx++) {
+        try {
+          const isResumeStorey = sIdx === startStoreyIdx && isBuildingContinuation;
+          const { result, elements: updatedElements } = await generateStoreyFreeform(
+            storeys[sIdx], sIdx, elements, mcpSessionId, (msg) => freeformSteps.push(msg),
+            isResumeStorey ? startRoomIdx : 0,
+            isResumeStorey,
+            deadline
+          );
+          mcpSessionId = result.mcpSessionId;
+          elements = updatedElements;
+          if (result.builtRooms > 0) anyRoomBuilt = true;
+          executedTools.push(`execute_ifc_code_tool(storey:${storeys[sIdx].name || sIdx}, rooms:${result.builtRooms}/${result.builtRooms + result.skippedRooms})`);
+          if (result.skippedRooms > 0) structuralShellErrors.push(...result.steps.filter((s) => s.startsWith("⚠️")));
+
+          if (result.stoppedAtRoomIndex !== undefined) {
+            return {
+              status: "continue",
+              executedTools,
+              freeformSteps,
+              continuation: { kind: "building", mcpSessionId, elements, storeyIndex: sIdx, roomIndex: result.stoppedAtRoomIndex },
+              progress: `Paused at storey ${sIdx + 1}/${storeys.length}, room ${result.stoppedAtRoomIndex + 1}/${storeys[sIdx].rooms?.length || 0} - call again with plan.continuation to resume.`
+            };
+          }
+        } catch (stErr: any) {
+          const msg = `Storey "${storeys[sIdx].name || sIdx}": ${stErr?.message || stErr}`;
+          console.error(`[build_code] ${msg}`);
+          structuralShellErrors.push(msg);
+        }
+      }
+      builtElements = elements;
+
+      if (anyRoomBuilt) {
         executedMutation = true;
-      } catch (sErr: any) {
-        console.error(`[build_code] Synthesized building code execution error:`, sErr);
+
+        // Roof - the model's own creative design, given the real finished footprint.
+        try {
+          const roof = await generateRoofFreeform(payload.plan.roof_type, elements, mcpSessionId, (msg) => freeformSteps.push(msg));
+          mcpSessionId = roof.mcpSessionId;
+          executedTools.push(`execute_ifc_code_tool(roof:${roof.success ? "ok" : "skipped"})`);
+        } catch (roofErr: any) {
+          console.warn("[build_code] Roof generation errored (non-fatal, shell already stands):", roofErr);
+        }
+
+        // qwen3.8-max architectural embellishment pass - bounded, verified,
+        // targeted-retry, skip-on-failure. No fallback if it fails; it just
+        // doesn't add anything beyond the rooms already built.
+        try {
+          const roofBounds = elements.filter((e) => e.bbox).reduce((acc, e) => ({
+            minX: Math.min(acc.minX, e.bbox!.min[0]), minY: Math.min(acc.minY, e.bbox!.min[1]),
+            maxX: Math.max(acc.maxX, e.bbox!.max[0]), maxY: Math.max(acc.maxY, e.bbox!.max[1]),
+            topZ: Math.max(acc.topZ, e.bbox!.max[2]),
+          }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity, topZ: 0 });
+          const embellish = await embellishStoreysArchitecturally(storeys, roofBounds, mcpSessionId);
+          mcpSessionId = embellish.mcpSessionId;
+          embellishResult = { enrichedStoreys: embellish.enrichedStoreys, skippedStoreys: embellish.skippedStoreys, steps: embellish.steps };
+          executedTools.push(`execute_ifc_code_tool(embellish x${embellish.enrichedStoreys})`);
+        } catch (embErr: any) {
+          console.warn("[build_code] Architectural embellishment pass errored (non-fatal):", embErr);
+        }
+      } else {
+        generationError = structuralShellErrors.join(" | ") || "Room-by-room generation failed for every room.";
       }
     }
 
-    // 3. If not executed and components present (infrastructure), synthesize monolithic Python script
-    const rawComponents = payload.plan?.components || [];
-    if (!executedMutation && Array.isArray(rawComponents) && rawComponents.length > 0) {
-      console.log(`[build_code] Synthesizing infrastructure Python code for ${rawComponents.length} components...`);
-      const scriptLines: string[] = [
-        "ifc = get_ifc_file()",
-        "storeys = ifc.by_type('IfcBuildingStorey')",
-        "storey = storeys[0] if storeys else None",
-        "h = InfraStudioHarness(ifc, storey)"
-      ];
+    // 2. If not executed and a component_specs programme is present
+    // (infrastructure split-planning path: qwen3.8-max planned WHAT
+    // components to build, in order), build each one itself, in strict
+    // sequence, against the real live scene state - same discipline as
+    // buildings: no deterministic geometry-type-to-harness-call templating,
+    // real verification, targeted retry, honest skip, no fallback. Same
+    // deadline/continuation support as buildings - a structure with many
+    // components (a real bridge can easily need 15-20+) gets built
+    // completely across as many calls as it genuinely needs.
+    const isInfraContinuation = continuation && continuation.kind === "infrastructure";
+    const componentSpecs = payload.plan?.component_specs || (isInfraContinuation ? continuation.componentSpecs : []) || [];
+    if (!executedMutation && Array.isArray(componentSpecs) && componentSpecs.length > 0 && (!continuation || isInfraContinuation)) {
+      const startIdx = isInfraContinuation ? continuation.componentIndex : 0;
+      console.log(`[build_code] Building ${componentSpecs.length} infrastructure component(s) in sequence, model-authored geometry${isInfraContinuation ? ` - resuming at component ${startIdx + 1}` : ""}...`);
+      try {
+        const { result, elements: infraElements } = await generateInfrastructureFreeform(
+          componentSpecs, mcpSessionId, (msg) => freeformSteps.push(msg),
+          isInfraContinuation ? continuation.elements : [],
+          startIdx,
+          deadline
+        );
+        mcpSessionId = result.mcpSessionId;
+        executedTools.push(`execute_ifc_code_tool(components:${result.builtComponents}/${result.builtComponents + result.skippedComponents})`);
 
-      for (let i = 0; i < rawComponents.length; i++) {
-        const comp = rawComponents[i];
-        const name = String(comp.name || `Component_${i}`).replace(/['"\\]/g, "");
-        const ifcClass = String(comp.ifc_class || "IfcBuildingElementProxy").replace(/['"\\]/g, "");
-        const geomType = String(comp.geometry_type || "box").toLowerCase();
-        const mat = String(comp.material || comp.material_name || "Structural Finish").replace(/['"\\]/g, "");
-        const rgb = Array.isArray(comp.rgb) && comp.rgb.length === 3 ? comp.rgb : [0.5, 0.5, 0.5];
-        const transp = Number(comp.transparency || 0.0);
-        const pos = Array.isArray(comp.position) ? comp.position : [0, 0, 0];
-        const rotZ = Number(comp.rotation_z || comp.rot_z_deg || 0.0);
-        const dims = typeof comp.dimensions === "object" && comp.dimensions !== null ? comp.dimensions : {};
+        if (result.stoppedAtIndex !== undefined) {
+          return {
+            status: "continue",
+            executedTools,
+            freeformSteps,
+            continuation: { kind: "infrastructure", mcpSessionId, elements: infraElements, componentIndex: result.stoppedAtIndex, componentSpecs },
+            progress: `Paused at component ${result.stoppedAtIndex + 1}/${componentSpecs.length} - call again with plan.continuation to resume.`
+          };
+        }
 
-        if (comp.trimesh_code && typeof comp.trimesh_code === "string" && comp.trimesh_code.trim().length > 10) {
-          scriptLines.push(`
-def _create_custom_${i}():
-${comp.trimesh_code.split("\n").map((l: string) => "    " + l).join("\n")}
-    return result
-_m_${i} = _create_custom_${i}()
-h.add_mesh_element(_m_${i}, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})
-`);
-        } else if (geomType.includes("corrugat") || geomType.includes("sheet_pile")) {
-          const width = Number(dims.width || dims.length || 2.4);
-          const height = Number(dims.height || 12.0);
-          const depth = Number(dims.depth || 0.45);
-          const pitch = Number(dims.pitch || 0.6);
-          const thick = Number(dims.thickness || 0.04);
-          scriptLines.push(`_m = h.create_corrugated_panel(width=${width}, height=${height}, depth=${depth}, pitch=${pitch}, thickness=${thick}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
-          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
-        } else if (geomType.includes("cutwater") || geomType.includes("pier")) {
-          const length = Number(dims.length || 12.0);
-          const width = Number(dims.width || 4.0);
-          const height = Number(dims.height || 8.0);
-          const noseR = Number(dims.nose_radius || dims.radius || width / 2.0);
-          scriptLines.push(`_m = h.create_cutwater_pier(length=${length}, width=${width}, height=${height}, nose_r=${noseR}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
-          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
-        } else if (geomType.includes("pipe") || geomType.includes("hollow_cylinder") || geomType.includes("strut")) {
-          const outerR = Number(dims.outer_radius || dims.radius || 0.4);
-          const innerR = Number(dims.inner_radius || (outerR * 0.88));
-          const height = Number(dims.height || dims.length || 6.0);
-          const axis = Array.isArray(dims.axis) ? dims.axis : (Array.isArray(comp.axis) ? comp.axis : [0, 0, 1]);
-          scriptLines.push(`_m = h.create_pipe(outer_r=${outerR}, inner_r=${innerR}, height=${height}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`);
-          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
-        } else if (geomType.includes("i_beam") || geomType.includes("waler") || geomType.includes("girder")) {
-          const depth = Number(dims.depth || dims.height || 0.6);
-          const flangeW = Number(dims.flange_width || dims.width || 0.3);
-          const length = Number(dims.length || 10.0);
-          scriptLines.push(`_m = h.create_i_beam(depth=${depth}, flange_w=${flangeW}, length=${length}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
-          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
-        } else if (geomType.includes("cylinder") || ifcClass === "IfcReinforcingBar" || /column|pile/i.test(comp.name)) {
-          const radius = Number(dims.radius || (dims.width ? Number(dims.width) / 2 : 0.25));
-          const height = Number(dims.height || dims.length || 3.0);
-          const axis = Array.isArray(dims.axis) ? dims.axis : (Array.isArray(comp.axis) ? comp.axis : [0, 0, 1]);
-          scriptLines.push(`_m = h.create_cylinder(radius=${radius}, height=${height}, pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], axis=[${axis[0]}, ${axis[1]}, ${axis[2]}])`);
-          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+        if (result.builtComponents > 0) {
+          executedMutation = true;
         } else {
-          const length = Number(dims.length || dims.x || 1.0);
-          const width = Number(dims.width || dims.y || 1.0);
-          const height = Number(dims.height || dims.z || 1.0);
-          scriptLines.push(`_m = h.create_box(extents=[${length}, ${width}, ${height}], pos=[${pos[0]}, ${pos[1]}, ${pos[2]}], rot_z_deg=${rotZ})`);
-          scriptLines.push(`h.add_mesh_element(_m, "${name}", ifc_class="${ifcClass}", mat_name="${mat}", rgb=(${rgb[0]}, ${rgb[1]}, ${rgb[2]}), transparency=${transp})`);
+          generationError = result.steps.filter((s) => s.startsWith("⚠️")).join(" | ") || "Infrastructure component generation failed for every component.";
+        }
+      } catch (infraErr: any) {
+        console.warn("[build_code] Infrastructure generation errored:", infraErr);
+        generationError = infraErr?.message || String(infraErr);
+      }
+    }
+
+    // ═══ NO FALLBACK: fail honestly if nothing was actually generated ═══
+    // Previously this fell through to a deterministic template/box synthesis
+    // and reported "success" anyway. That is exactly the "stupid structure"
+    // behavior that was banned - if qwen3.8-max (direct + self-heal) and the
+    // component synthesis both produced nothing, tell the caller the truth.
+    if (!executedMutation) {
+      return {
+        status: "error",
+        error: generationError || "glm-5.3 did not produce a usable design and no fallback is configured.",
+        executedTools,
+        toolAudit,
+      };
+    }
+
+    // ═══ INCREMENTAL PER-ROOM FURNITURE PASS ═══
+    // Adds interior detail room-by-room, each a small bounded generation
+    // verified by real execution, with a targeted (not whole-building) retry
+    // on failure. Runs on top of whatever structural shell succeeded above -
+    // never risks the walls/slabs/doors already built.
+    let furnitureResult: { enrichedRooms: number; skippedRooms: number; steps: string[] } | null = null;
+    const category = payload.plan?.structure_category || "building";
+    const storeyPlansForFurniture = Array.isArray(payload.plan?.storey_plans) ? payload.plan.storey_plans : [];
+    // Rooms no longer carry a pre-assigned origin (the model decided
+    // placement itself) - recover each room's ACTUAL built extent from the
+    // real scene before furnishing, so furniture lands where the room really
+    // is, not at a stale/default coordinate.
+    if (builtElements.length > 0) {
+      for (const storey of storeyPlansForFurniture) {
+        for (const room of (Array.isArray(storey.rooms) ? storey.rooms : [])) {
+          const real = estimateRoomBounds(String(room.name || ""), builtElements);
+          if (real) {
+            room.origin = real.origin;
+            room.width = real.width;
+            room.length = real.length;
+          }
         }
       }
-
-      scriptLines.push("count = h.commit()");
-      scriptLines.push("save_and_load_ifc()");
-      scriptLines.push("print(f'InfraStudioHarness successfully created and committed {count} elements.')");
-
+    }
+    const hasRoomsToFurnish = storeyPlansForFurniture.some((s: any) => Array.isArray(s.rooms) && s.rooms.some((r: any) => Array.isArray(r.origin)));
+    if (executedMutation && category !== "infrastructure" && hasRoomsToFurnish) {
       try {
-        const fullPython = scriptLines.join("\n");
-        const toolRes = await mcpCallTool("execute_ifc_code_tool", { code: fullPython }, mcpSessionId);
-        mcpSessionId = toolRes.session;
-        executedTools.push("execute_ifc_code_tool");
-        executedMutation = true;
-      } catch (hErr: any) {
-        console.warn("[build_code] Harness batch execution error:", hErr);
+        const furn = await enrichRoomsWithFurniture(storeyPlansForFurniture, mcpSessionId);
+        mcpSessionId = furn.mcpSessionId;
+        furnitureResult = { enrichedRooms: furn.enrichedRooms, skippedRooms: furn.skippedRooms, steps: furn.steps };
+        executedTools.push("execute_ifc_code_tool(furniture x" + furn.enrichedRooms + ")");
+      } catch (furnErr: any) {
+        console.warn("[build_code] Furniture enrichment pass errored (non-fatal):", furnErr);
+      }
+    }
+
+    // ═══ REAL QA GATE ═══
+    // Runs the reviewer's actual deterministic checks (required element types
+    // + genuine pairwise bounding-box clash detection) - not a vague "does
+    // this look ok" LLM opinion. On a real FAIL, route through the existing,
+    // tested dynamic_edit remediation loop with the SPECIFIC flagged issues,
+    // then re-review once to report the true final state honestly.
+    let qaReview: any = null;
+    if (executedMutation) {
+      try {
+        qaReview = await handleReviewer({ mcpSessionId, structureCategory: category, plan: payload.plan });
+        mcpSessionId = qaReview.mcpSessionId || mcpSessionId;
+        if (qaReview.status === "FAIL" && qaReview.retry_required && Array.isArray(qaReview.issues) && qaReview.issues.length > 0) {
+          console.log(`[build_code] QA gate found ${qaReview.issues.length} real issue(s); attempting targeted remediation...`);
+          try {
+            const remediation = await handleBim({
+              action: "dynamic_edit",
+              mcpSessionId,
+              plan: { ...payload.plan, review_required: true, review_issues: qaReview.issues, fix_recommendations: qaReview.fix_recommendations }
+            });
+            mcpSessionId = remediation.mcpSessionId || mcpSessionId;
+            executedTools.push(...(remediation.executedTools || []).map((t: string) => `remediation:${t}`));
+          } catch (remErr: any) {
+            console.warn("[build_code] QA remediation pass failed (non-fatal):", remErr);
+          }
+          // Re-review once to report the TRUE final state, not the pre-remediation one.
+          try {
+            qaReview = await handleReviewer({ mcpSessionId, structureCategory: category, plan: payload.plan });
+            mcpSessionId = qaReview.mcpSessionId || mcpSessionId;
+          } catch { /* keep pre-remediation review if the re-check itself fails */ }
+        }
+      } catch (qaErr: any) {
+        console.warn("[build_code] QA review pass errored (non-fatal):", qaErr);
       }
     }
 
@@ -690,6 +1061,10 @@ h.add_mesh_element(_m_${i}, "${name}", ifc_class="${ifcClass}", mat_name="${mat}
       mcpSessionId: exported.mcpSessionId,
       executedTools,
       toolAudit,
+      freeformSteps,
+      furnitureResult,
+      embellishResult,
+      qaReview,
       materialResult: exported.materialResult,
     };
   }
@@ -775,7 +1150,7 @@ ${overviewRes?.resultText || "Unavailable"}`;
         executionError = "";
       }
 
-      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "kimi-k3");
+      const glmMsg = await callGLM(glmPrompt, currentPlanData, routedTools, "glm-5.3");
       const toolCalls = glmMsg.tool_calls || [];
       if (toolCalls.length === 0) {
         executionError = "No tool calls were produced.";

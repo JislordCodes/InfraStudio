@@ -72,11 +72,21 @@ export async function handleInterpreter(payload: any): Promise<any> {
   let result: any = null;
   const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
 
+  // When OpenHands owns the actual build (a real coding agent doing its own
+  // interpretation, planning, and construction), this model-based
+  // classification pass is redundant work that only adds latency and burns
+  // quota - skip straight to the same deterministic heuristic parser this
+  // file already falls back to on a real LLM failure. is_edit/category still
+  // need to be roughly right here (they gate which pipeline path runs
+  // downstream), but the actual design work no longer happens in this file.
+  const useOpenHands = (typeof Deno !== "undefined" ? Deno.env.get("USE_OPENHANDS_ENGINE") : process.env.USE_OPENHANDS_ENGINE) === "true";
+
   try {
-    const res = await callQwen(systemPrompt, formattedPrompt, true, "kimi-k3");
+    if (useOpenHands) throw new Error("skip-llm-openhands-mode");
+    const res = await callQwen(systemPrompt, formattedPrompt, true, "glm-5.3");
     result = cleanJsonResponse(res);
   } catch (err) {
-    console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
+    if (!useOpenHands) console.warn("[handleInterpreter] LLM unavailable, using deterministic brief parser:", err);
     const textLower = String(latestText).toLowerCase();
     const isInfra = /cofferdam|coffer|bridge|rail|road|pier|jetty|dam|tunnel/i.test(textLower);
     const projType = isInfra

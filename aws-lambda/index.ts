@@ -8,8 +8,8 @@ import { mcpInit, mcpCallTool, fetchMcpTools } from "../supabase/functions/_shar
 
 // Set global dispatcher with 10-minute timeouts for reasoning models (qwen3.7-max)
 const globalAgent = new Agent({
-  headersTimeout: 600000, // 10 minutes
-  bodyTimeout: 600000,    // 10 minutes
+  headersTimeout: 850000, // ~14 minutes - matches the 900s Lambda ceiling with margin
+  bodyTimeout: 850000,    // ~14 minutes - matches the 900s Lambda ceiling with margin
   connectTimeout: 60000,  // 1 minute
 });
 setGlobalDispatcher(globalAgent);
@@ -55,7 +55,7 @@ async function loadExplabsSecret(): Promise<void> {
   }
 }
 
-export const handler = async (event: any) => {
+export const handler = async (event: any, context: any) => {
   const path = event.rawPath || "/";
   const method = event.requestContext?.http?.method || "POST";
 
@@ -104,6 +104,21 @@ export const handler = async (event: any) => {
     } else if (cleanPath.endsWith("/agent-reviewer")) {
       result = await handleReviewer(payload);
     } else if (cleanPath.endsWith("/agent-bim")) {
+      // Large structures (many rooms/components) can legitimately take
+      // longer to generate than the Lambda's own hard ceiling allows in one
+      // invocation, since real per-piece verification against a growing
+      // live scene can't be parallelized. Rather than let that end in a
+      // mid-request timeout, hand handleBim a real deadline (with a safety
+      // margin for QA/materials/export after generation) so it can stop
+      // cleanly and return exactly where it left off - see the
+      // "continuation" field in its response and payload.continuation here.
+      const remainingMs = typeof context?.getRemainingTimeInMillis === "function" ? context.getRemainingTimeInMillis() : 850000;
+      // Buffer must comfortably exceed the worst case for ONE in-flight room/component/
+      // agentic iteration (a single model call can take up to 300s for the heavier
+      // whole-structure design calls, plus MCP execute+verify round trips) so the
+      // generation loop always gets a chance to see the deadline and return a clean
+      // {status:"continue"} response before AWS hard-kills the invocation at `Timeout`.
+      payload._deadline = Date.now() + Math.max(30000, remainingMs - 350000);
       result = await handleBim(payload);
     } else if (cleanPath.endsWith("/gemini-chat")) {
       // Direct handling for legacy / chat calls

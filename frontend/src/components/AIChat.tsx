@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download } from 'lucide-react';
-import { runMultiAgentLoop } from '../hooks/useMultiAgentLoop';
+import { runAntigravityBuild } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 
 interface AIChatProps {
@@ -28,7 +28,6 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [currentSteps, setCurrentSteps] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 640 : false);
-  const selectedModel = 'kimi-k3';
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -131,24 +130,8 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       const sessionObj = sessions.find(s => s.id === sid);
       const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
 
-      const history: any[] = [];
-      for (const m of messages) {
-        if (m.role === 'user') {
-          history.push({ role: 'user', content: m.content });
-        } else if (m.role === 'assistant') {
-          if (m.tool_calls) {
-            history.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls });
-          } else if (m.content && m.content.trim()) {
-            history.push({ role: 'assistant', content: m.content });
-          }
-        } else if (m.role === 'tool' && m.tool_call_id) {
-          history.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
-        }
-      }
-
-      const result = await runMultiAgentLoop(
+      const result = await runAntigravityBuild(
         userContent,
-        history,
         clientMcpId,
         (step) => setCurrentSteps(prev => [...prev.slice(-12), step]),
         async (assistantObj: any) => {
@@ -158,14 +141,6 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
             tool_calls: assistantObj.tool_calls,
           });
         },
-        async (toolMsg: any) => {
-          await saveMessage(sid!, {
-            role: 'tool',
-            content: toolMsg.content || '',
-            tool_call_id: toolMsg.tool_call_id,
-          });
-        },
-        selectedModel
       );
 
       if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
@@ -334,11 +309,11 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                 )}
                 <div
                   className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-[10px] sm:text-xs font-medium border border-emerald-500/20 shrink-0"
-                  title="AI Engine: Kimi K3 (Medium Reasoning)"
+                  title="AI Engine: Antigravity (Gemini 3.8 Flash, High Reasoning)"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>🧠 Kimi K3</span>
-                  <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-200 uppercase font-semibold">Medium</span>
+                  <span>🧠 Antigravity</span>
+                  <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-200 uppercase font-semibold">High</span>
                 </div>
               </div>
               <button onClick={() => setExpanded(false)} className="p-1 text-neutral-400 hover:text-white transition-colors shrink-0">

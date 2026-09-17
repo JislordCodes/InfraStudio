@@ -61,7 +61,7 @@ if ($exists -match "ResourceNotFoundException" -or $exists.GetType().Name -eq "E
         --handler index.handler `
         --zip-file fileb://dist.zip `
         --environment file://env.json `
-        --timeout 600 `
+        --timeout 900 `
         --memory-size 1024 `
         --region $region
         
@@ -98,7 +98,7 @@ if ($exists -match "ResourceNotFoundException" -or $exists.GetType().Name -eq "E
     aws lambda update-function-configuration `
         --function-name $functionName `
         --environment file://env.json `
-        --timeout 600 `
+        --timeout 900 `
         --memory-size 1024 `
         --region $region
 }

@@ -81,6 +81,8 @@ export function sanitizePythonCode(code: string): string {
 import math
 import numpy as np
 import trimesh
+import ifcopenshell
+import ifcopenshell.api as api
 
 NaN = float('nan')
 nan = float('nan')
@@ -990,27 +992,24 @@ export async function callGemini(systemPrompt: string, userMessage: string | any
 }
 
 function getTargetModel(_model?: string): string {
-  return "kimi-k3";
+  return "glm-5.3";
 }
 
 function getQwenEndpoints(): string[] {
   const proxy = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (proxy?.trim()) return [proxy.trim().replace(/\/+$/, "")];
-  const configured = typeof Deno !== "undefined"
+  const configured = (typeof Deno !== "undefined"
     ? Deno.env.get("QWEN_BASE_URL")
-    : process.env.QWEN_BASE_URL;
-  const base = configured?.trim().replace(/\/+$/, "");
-  const list = [
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "https://ws-sq2piu8admaum4we.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
-  ];
-  if (base && !list.includes(`${base}/chat/completions`) && !base.includes("dashscope.aliyuncs.com")) {
-    list.push(`${base}/chat/completions`);
-  }
-  return list;
+    : process.env.QWEN_BASE_URL)?.trim().replace(/\/+$/, "");
+  // glm-5.3 lives on the standard shared dashscope-intl endpoint
+  // (same one qwen/deepseek always used) - unlike GLM, which needed a
+  // workspace-scoped Model Studio MaaS endpoint instead. QWEN_BASE_URL
+  // already points at dashscope-intl, so just trust it normally again.
+  const base = configured || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+  return [`${base}/chat/completions`];
 }
 
-export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, _model: string = "kimi-k3"): Promise<string> {
+export async function callQwen(systemPrompt: string, userMessage: string | any[], jsonMode: boolean = false, _model: string = "glm-5.3", timeoutMs: number = 420000, reasoningEffort: string = "high", maxTokens: number = 18000): Promise<string> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1027,46 +1026,103 @@ export async function callQwen(systemPrompt: string, userMessage: string | any[]
 
   for (const endpoint of endpoints) {
     try {
-      console.log(`[callQwen] Invoking kimi-k3 (reasoning_effort: medium) via ${endpoint}...`);
+      console.log(`[callQwen] Invoking ${_model} (reasoning_effort: ${reasoningEffort}, max_tokens: ${maxTokens}, timeout ${timeoutMs}ms) via ${endpoint}...`);
       const res = await fetch(endpoint, {
         method: "POST",
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(300000), // 5 minutes on AWS Lambda
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
-          model: "kimi-k3",
+          model: _model,
           messages: msgs,
-          reasoning_effort: "medium",
+          reasoning_effort: reasoningEffort,
           temperature: 0.6,
-          max_tokens: 8192,
+          max_tokens: maxTokens,
           response_format: jsonMode ? { type: "json_object" } : undefined
         })
       });
-      
+
       if (!res.ok) {
         const errText = await res.text();
         console.warn(`[callQwen] Endpoint ${endpoint} returned ${res.status}: ${errText.slice(0, 150)}`);
         lastError = new Error(`Model Error (${res.status}): ${errText}`);
         continue;
       }
-      
+
       const data = await res.json();
       const choice = data.choices?.[0];
       if (choice?.finish_reason === "length") {
-        console.warn(`[callQwen] WARNING: kimi-k3 output was truncated (finish_reason=length).`);
+        console.warn(`[callQwen] WARNING: ${_model} output was truncated (finish_reason=length).`);
       }
       return choice?.message?.content || choice?.message?.reasoning_content || "";
     } catch (err: any) {
       lastError = err;
-      console.warn(`[callQwen] Endpoint ${endpoint} for kimi-k3 failed:`, err.message || err);
+      console.warn(`[callQwen] Endpoint ${endpoint} for ${_model} failed:`, err.message || err);
     }
   }
 
-  throw new Error(`callQwen failed for kimi-k3: ${lastError?.message || String(lastError)}`);
+  throw new Error(`callQwen failed for ${_model}: ${lastError?.message || String(lastError)}`);
 }
 
-export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], _model: string = "kimi-k3"): Promise<any> {
+/**
+ * Same DashScope call as callGLM, but takes the full message history directly
+ * instead of a single system+user pair - what a real multi-turn tool-calling
+ * loop needs (the assistant's tool_calls message and each tool result message
+ * all have to go back in on the next turn so the model can see what its own
+ * previous tool calls actually returned).
+ */
+export async function callGLMWithMessages(messages: any[], tools?: any[], _model: string = "glm-5.3", maxTokens: number = 12000, timeoutMs: number = 150000): Promise<any> {
+  const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
+  const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
+  if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
+
+  const endpoints = getQwenEndpoints();
+  const proxyToken = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_TOKEN") : process.env.SUPABASE_QWEN_PROXY_TOKEN;
+
+  // Log which model is actually being called, on every attempt - not just on
+  // failure - so a CloudWatch search can independently confirm which model
+  // produced a given build without having to infer it from behavior alone.
+  console.log(`[callGLMWithMessages] Invoking ${_model} (tools: ${tools?.length || 0}, max_tokens: ${maxTokens}, timeout ${timeoutMs}ms, ${messages.length} messages in history)...`);
+
+  let lastErrText = "";
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: endpoints[0].includes("functions/v1/qwen-proxy")
+          ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
+          : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          model: _model,
+          messages,
+          // This workspace-scoped GLM endpoint only accepts 'low'/'high'/'max'
+          // for reasoning_effort - 'medium' (the old DashScope-shared-endpoint
+          // default) is rejected outright with invalid_parameter_error.
+          reasoning_effort: "high",
+          tools: (tools && tools.length > 0) ? tools : undefined,
+          temperature: 0.6,
+          max_tokens: maxTokens
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices[0].message;
+      }
+
+      lastErrText = await res.text();
+      console.warn(`[callGLMWithMessages] ${endpoint} returned (${res.status}): ${lastErrText}`);
+    } catch (e: any) {
+      lastErrText = e.message || String(e);
+    }
+  }
+
+  throw new Error(`BIM Model Error (${_model}): ${lastErrText}`);
+}
+
+export async function callGLM(systemPrompt: string, userMessage: string, tools?: any[], _model: string = "glm-5.3"): Promise<any> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1086,13 +1142,14 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
         headers: endpoints[0].includes("functions/v1/qwen-proxy")
           ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
           : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(420000), // 7 minutes - two sequential endpoint attempts fit within the 900s Lambda ceiling
         body: JSON.stringify({
-          model: "kimi-k3",
+          model: _model,
           messages: msgs,
-          reasoning_effort: "medium",
+          reasoning_effort: "high",
           tools: (tools && tools.length > 0) ? tools : undefined,
           temperature: 0.6,
-          max_tokens: 4096
+          max_tokens: 14000
         })
       });
 
@@ -1108,10 +1165,10 @@ export async function callGLM(systemPrompt: string, userMessage: string, tools?:
     }
   }
 
-  throw new Error(`BIM Model Error (kimi-k3): ${lastErrText}`);
+  throw new Error(`BIM Model Error (${_model}): ${lastErrText}`);
 }
 
-export async function callGLMStream(systemPrompt: string, userMessage: string, _model: string = "kimi-k3"): Promise<ReadableStream<Uint8Array>> {
+export async function callGLMStream(systemPrompt: string, userMessage: string, _model: string = "glm-5.3"): Promise<ReadableStream<Uint8Array>> {
   const qwenKey = typeof Deno !== "undefined" ? Deno.env.get("QWEN_API_KEY") : process.env.QWEN_API_KEY;
   const proxyUrl = typeof Deno !== "undefined" ? Deno.env.get("SUPABASE_QWEN_PROXY_URL") : process.env.SUPABASE_QWEN_PROXY_URL;
   if (!qwenKey && !proxyUrl) throw new Error("QWEN_API_KEY or SUPABASE_QWEN_PROXY_URL missing");
@@ -1127,9 +1184,9 @@ export async function callGLMStream(systemPrompt: string, userMessage: string, _
       ? { "x-internal-token": proxyToken || "", "Content-Type": "application/json" }
       : { "Authorization": `Bearer ${qwenKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "kimi-k3",
+      model: _model,
       messages: msgs,
-      reasoning_effort: "medium",
+      reasoning_effort: "high",
       temperature: 0.1,
       max_tokens: 16384,
       stream: true
@@ -1239,4 +1296,5 @@ export function cleanJsonResponse(rawStr: string): any {
   }
 }
 
-export { runAntigravityKimiAgent } from "./antigravity_kimi_agent.ts";
+export { runAntigravityKimiAgent, enrichRoomsWithFurniture, embellishStoreysArchitecturally, generateStoreyFreeform, generateRoofFreeform, estimateRoomBounds, generateInfrastructureFreeform, runAgenticComponentBuild, AGENTIC_GRAND_STRUCTURE_SYSTEM_PROMPT } from "./antigravity_kimi_agent.ts";
+export type { SceneElement } from "./antigravity_kimi_agent.ts";

@@ -1,4 +1,4 @@
-import { CORS, callQwen, callGemini, callAstra, cleanJsonResponse } from "../_shared/shared.ts";
+import { CORS, callQwen, cleanJsonResponse } from "../_shared/shared.ts";
 import { extractPythonCode } from "../_shared/antigravity_kimi_agent.ts";
 
 const systemPrompt = `You are Antigravity's Autonomous Computational BIM Architect & Structural Engineer.
@@ -9,6 +9,7 @@ EXECUTION ENVIRONMENT (AWS Bonsai MCP Server):
 - Python 3.11 with ifcopenshell, ifcopenshell.api as api, trimesh, numpy as np, and math pre-imported.
 - ifc = get_ifc_file()
 - save_and_load_ifc()
+- THE PROJECT ALREADY EXISTS. Before your code runs, initialize_project has already created IfcProject, IfcSite, IfcBuilding, IfcBuildingStorey, and the geometric representation contexts. Do NOT call api.run("root.create_entity", ifc, ifc_class="IfcProject"/"IfcSite"/"IfcBuilding"/"IfcGeometricRepresentationContext"/"IfcGeometricRepresentationSubContext") - these already exist and re-creating them causes execution failures (IfcGeometricRepresentationContext is not an IfcRoot subtype and has no GlobalId). Just use: storeys = ifc.by_type("IfcBuildingStorey") to get the existing floors, and h = InfraStudioHarness(ifc, storeys[i]) to start building.
 - SANDBOX RULES:
   * Do NOT import 'os', 'sys', 'subprocess', or any filesystem/OS modules (blocked by EC2 security sandbox).
   * Do NOT define custom Python classes; write clean procedural/functional code.
@@ -96,7 +97,116 @@ Expected JSON Schema:
     "accent": "string"
   },
   "structural_notes": ["string"]
-}`;
+}
+
+EXAMPLE (a short 2-pier river bridge) - study the level of geometric/material specificity, not the exact numbers:
+{
+  "structure_category": "infrastructure",
+  "is_edit": false,
+  "structure_name": "Cedar Creek Girder Bridge",
+  "components": [
+    { "name": "Bridge_Deck_Slab", "ifc_class": "IfcSlab", "geometry_type": "box", "dimensions": { "length": 40, "width": 10, "height": 0.7 }, "position": [20, 0, 8], "rotation_z": 0, "material": "Post-Tensioned Reinforced Concrete", "rgb": [0.62, 0.62, 0.60] },
+    { "name": "West_Abutment", "ifc_class": "IfcFooting", "geometry_type": "box", "dimensions": { "length": 2.5, "width": 12, "height": 6 }, "position": [0, 0, 3], "rotation_z": 0, "material": "Cast-in-Place Concrete", "rgb": [0.58, 0.58, 0.56] },
+    { "name": "East_Abutment", "ifc_class": "IfcFooting", "geometry_type": "box", "dimensions": { "length": 2.5, "width": 12, "height": 6 }, "position": [40, 0, 3], "rotation_z": 0, "material": "Cast-in-Place Concrete", "rgb": [0.58, 0.58, 0.56] },
+    { "name": "Pier_1", "ifc_class": "IfcColumn", "geometry_type": "cylinder", "dimensions": { "radius": 1.1, "height": 6 }, "position": [13, 0, 3], "material": "High-Strength Marine Concrete", "rgb": [0.60, 0.60, 0.58] },
+    { "name": "Pier_2", "ifc_class": "IfcColumn", "geometry_type": "cylinder", "dimensions": { "radius": 1.1, "height": 6 }, "position": [27, 0, 3], "material": "High-Strength Marine Concrete", "rgb": [0.60, 0.60, 0.58] },
+    { "name": "Main_Girder_North", "ifc_class": "IfcBeam", "geometry_type": "i_beam", "dimensions": { "depth": 1.2, "flange_width": 0.5, "length": 40 }, "position": [0, 4, 7.2], "rotation_z": 0, "material": "Structural Steel", "rgb": [0.35, 0.36, 0.38] },
+    { "name": "Main_Girder_South", "ifc_class": "IfcBeam", "geometry_type": "i_beam", "dimensions": { "depth": 1.2, "flange_width": 0.5, "length": 40 }, "position": [0, -4, 7.2], "rotation_z": 0, "material": "Structural Steel", "rgb": [0.35, 0.36, 0.38] },
+    { "name": "Parapet_North", "ifc_class": "IfcMember", "geometry_type": "box", "dimensions": { "length": 40, "width": 0.15, "height": 1.1 }, "position": [20, 5, 8.9], "material": "Galvanized Steel Railing", "rgb": [0.75, 0.75, 0.75] },
+    { "name": "Parapet_South", "ifc_class": "IfcMember", "geometry_type": "box", "dimensions": { "length": 40, "width": 0.15, "height": 1.1 }, "position": [20, -5, 8.9], "material": "Galvanized Steel Railing", "rgb": [0.75, 0.75, 0.75] }
+  ],
+  "material_palette": { "primary": "Reinforced Concrete", "secondary": "Structural Steel", "accent": "Galvanized Steel Railing" },
+  "structural_notes": ["Two-span continuous girder bridge over piers at the third-points of the deck.", "Deck cambered implicitly via flat slab at constant elevation for simplicity."]
+}
+Now produce a genuinely appropriate, complete component list for the actual brief - do not copy the example's components, only its level of specificity, real engineering member counts, and material detail.`;
+
+const PLANNER_SYSTEM_PROMPT = `You are the Spatial Planning Agent for InfraStudio, a BIM design platform.
+Given a design brief, decide the FULL room programme and architectural character for the building. You are NOT writing code and NOT choosing coordinates - a deterministic layout engine places every room afterward with guaranteed non-overlapping, fully-connected geometry from the width/length/name you give it. Spend your effort entirely on WHAT the building should contain and WHAT it should feel like architecturally - that is where your judgment actually matters, since the geometry math is handled for you.
+
+For each room give: name (be specific - "Primary Bedroom En-suite Bathroom" not just "Bathroom 2", since naming drives adjacency placement) and width/length in meters (realistic for the room's function - vary proportions, do not make every room the same square shape).
+Group rooms into storeys, each with a name and height in meters.
+Choose a roof_type: "gable" | "hip" | "shed" | "flat" - pick whichever suits the brief's style, not always the same default.
+Choose a material_palette with descriptive, evocative, specific material names (never generic single words like "wood" or "concrete") for wall, floor, door, window_glass, roof_or_ceiling, accent - these drive real PBR styling on the finished model.
+
+Design with genuine architectural intent: give the brief's stated style (modern/traditional/luxury/minimalist/industrial/etc.) a room programme that actually expresses it - extra circulation and threshold spaces, a double-height or oversized signature room, a distinct entry sequence, service/utility spaces sized appropriately, whatever the brief calls for. A generic grid of same-sized boxes is a failure regardless of how technically valid it is.
+
+OUTPUT FORMAT - return ONLY this JSON, no markdown fences, no commentary:
+{
+  "structure_name": "string",
+  "roof_type": "gable" | "hip" | "shed" | "flat",
+  "material_palette": { "wall": "string", "floor": "string", "door": "string", "window_glass": "string", "roof_or_ceiling": "string", "accent": "string" },
+  "storeys": [
+    { "name": "string", "height": number, "rooms": [ { "name": "string", "width": number, "length": number } ] }
+  ]
+}
+
+EXAMPLE (brief: "modern 2-storey family house, 4 bedrooms") - study the room programme's specificity, variety and proportions, not the exact numbers:
+{
+  "structure_name": "The Meridian House",
+  "roof_type": "hip",
+  "material_palette": { "wall": "smooth white lime-washed render", "floor": "wide-plank European white oak", "door": "matte black steel-framed glass", "window_glass": "low-iron ultra-clear glazing", "roof_or_ceiling": "standing-seam zinc", "accent": "brushed brass" },
+  "storeys": [
+    { "name": "Ground Floor", "height": 3.4, "rooms": [
+      { "name": "Entry Foyer", "width": 3.5, "length": 4.0 },
+      { "name": "Great Room Living Dining", "width": 9.0, "length": 6.5 },
+      { "name": "Kitchen", "width": 4.5, "length": 5.0 },
+      { "name": "Pantry", "width": 2.0, "length": 2.5 },
+      { "name": "Home Office Study", "width": 3.5, "length": 3.5 },
+      { "name": "Powder Room", "width": 1.8, "length": 2.2 },
+      { "name": "Mudroom", "width": 2.5, "length": 3.0 }
+    ] },
+    { "name": "Upper Floor", "height": 3.0, "rooms": [
+      { "name": "Primary Bedroom", "width": 5.5, "length": 5.0 },
+      { "name": "Primary Bedroom En-suite Bathroom", "width": 3.0, "length": 3.5 },
+      { "name": "Primary Bedroom Walk-in Closet", "width": 2.5, "length": 3.0 },
+      { "name": "Bedroom 2", "width": 4.0, "length": 4.0 },
+      { "name": "Bedroom 3", "width": 4.0, "length": 4.0 },
+      { "name": "Bedroom 4", "width": 3.5, "length": 4.0 },
+      { "name": "Shared Bathroom", "width": 2.8, "length": 3.2 },
+      { "name": "Upper Landing Lounge", "width": 3.5, "length": 3.5 }
+    ] }
+  ]
+}
+Now produce a genuinely appropriate room programme for the actual brief - do not copy the example's rooms, only its level of specificity, variety and realism.`;
+
+const INFRA_PLANNER_SYSTEM_PROMPT = `You are the Lead Structural Engineering Agent for InfraStudio.
+Given a design brief for a non-building structure (bridge, cofferdam, tower, column frame, foundation, railway, pier, MEP system), decide the FULL ordered list of real structural components this design needs and the engineering/architectural CONCEPT behind it. You are NOT writing code and NOT choosing exact geometry/dimensions - each component is built afterward by a separate step that writes real custom engineering code for it, seeing everything built before it. Spend your effort on WHAT the structure is made of, in what order it should be built, and what makes this design distinctive - that is where your judgment matters.
+
+IMPORTANT design-accuracy rule: never default to a generic or approximate shape just because a request is short. Before listing components, first identify the REAL engineering/architectural form of whatever is being asked for - use your own domain knowledge of how that structure type is actually built - and commit to specific, correct structural components before writing the component list. For example: a cofferdam is NOT a bucket, tub, or smooth rounded vessel - it is a temporary watertight enclosure built from sheet-pile walls (or a braced double-wall cellular structure) forming a barrier around a work area, with corner bracing and a base/footing, so its component list should include distinct sheet-pile wall segments, corner/waler bracing, and a base seal, not a single hollow shell. If a brief names a specific structure type, getting that type's real form right matters more than speed.
+
+For a genuinely complex structure (e.g. a bridge with a curving, rising, or descending deck) do NOT collapse it into 3-4 generic boxes - decompose it into as many real components as the design needs: separate footings, separate piers, MULTIPLE deck segments in build order (each segment describing its own vertical/horizontal path so the whole deck reads as one continuous curve when built in sequence), separate girders/parapets/bracing, etc. List components in the order they should be physically built (foundations first, then supports, then spanning/connecting elements, then details like railings).
+
+For each component give: name, a role/description sentence (what it is and how it connects to what comes before it - e.g. "rests on Pier 2's cap and rises 1.2m over its 8m length toward the next segment"), and rough target dimensions if relevant.
+Choose a material_palette with real, specific engineering material names (never generic single words).
+
+OUTPUT FORMAT - return ONLY this JSON, no markdown fences, no commentary:
+{
+  "structure_name": "string",
+  "structural_concept": "one to three sentences describing the overall engineering/architectural idea",
+  "material_palette": { "primary": "string", "secondary": "string", "accent": "string" },
+  "components": [ { "name": "string", "role": "string", "notes": "string (rough size/shape hints, optional)" } ]
+}
+
+EXAMPLE (brief: "a modern pedestrian bridge that rises from floor level, curves, and descends back to floor level") - study the component granularity and connectivity language, not the exact numbers:
+{
+  "structure_name": "The Meridian Arc Footbridge",
+  "structural_concept": "A single continuous steel-and-glass deck that launches from grade, arcs upward and sideways over a 40m span on two slender piers, then eases back down to grade - the curve expressed as a sequence of connected deck segments rather than a straight girder.",
+  "material_palette": { "primary": "brushed structural steel", "secondary": "laminated safety glass balustrade", "accent": "powder-coated aluminum trim" },
+  "components": [
+    { "name": "West Ground Footing", "role": "Reinforced concrete pad at the western landing, anchors the deck's rising end at grade.", "notes": "~3m x 3m x 0.8m" },
+    { "name": "Pier 1 Footing", "role": "Footing for the first support pier, roughly a third of the way along the span.", "notes": "~4m x 4m x 1m" },
+    { "name": "Pier 1", "role": "Slender tapered steel/concrete pier rising from Pier 1 Footing to meet the deck at its highest point.", "notes": "~7m tall" },
+    { "name": "Pier 2 Footing", "role": "Footing for the second support pier, roughly two-thirds along the span.", "notes": "~4m x 4m x 1m" },
+    { "name": "Pier 2", "role": "Matches Pier 1's form, supports the deck as it begins descending.", "notes": "~7m tall" },
+    { "name": "East Ground Footing", "role": "Reinforced concrete pad at the eastern landing, anchors the deck's descending end at grade.", "notes": "~3m x 3m x 0.8m" },
+    { "name": "Deck Segment 1 (rising, west)", "role": "Starts at grade at West Ground Footing, curves upward and slightly sideways over its length to meet Pier 1's cap.", "notes": "~10m long" },
+    { "name": "Deck Segment 2 (crown, over Pier 1 to Pier 2)", "role": "Continues directly from Deck Segment 1's end point, arcs sideways at the bridge's highest point, connecting Pier 1's cap to Pier 2's cap.", "notes": "~14m long" },
+    { "name": "Deck Segment 3 (descending, east)", "role": "Continues directly from Deck Segment 2's end point, curves back down to grade at East Ground Footing.", "notes": "~10m long" },
+    { "name": "Parapet North", "role": "Continuous glass-and-steel guardrail following the full curved deck edge on the north side.", "notes": "~1.1m tall" },
+    { "name": "Parapet South", "role": "Mirrors Parapet North on the south side.", "notes": "~1.1m tall" }
+  ]
+}
+Now produce a genuinely appropriate, real component list for the actual brief - do not copy the example's components, only its level of decomposition, ordering, and connectivity detail.`;
 
 type Opening = { wall?: string; offset?: number; width?: number; height?: number; sill_height?: number; operation_type?: string };
 type Room = { name?: string; width?: number; length?: number; height?: number; origin?: number[]; floor_slab?: boolean; ceiling_slab?: boolean; doors?: Opening[]; windows?: Opening[] };
@@ -259,7 +369,7 @@ function creativeHouseProgram(seed: number): { storeys: any[]; footprint: number
   };
 }
 
-function minimumBuildingPlan(brief: any): any[] {
+export function minimumBuildingPlan(brief: any): any[] {
   const text = requestedText(brief);
   if (brief?.autonomous_design) return creativeHouseProgram(Number(brief?.design_seed || Date.now())).storeys;
   if (/residential block|multi.?family|apartment block|flats?|multi.?storey/.test(text)) return apartmentProgram(brief);
@@ -276,7 +386,16 @@ function minimumBuildingPlan(brief: any): any[] {
     const area = Math.max(7, Number(requirement.suggested_area || 16));
     const width = Math.max(2.8, Math.round(Math.sqrt(area) * 10) / 10);
     const length = Math.max(2.8, Math.round((area / width) * 10) / 10);
-    rooms.push(room(requirement.name || `Room ${index + 1}`, width, length, x, y, 0));
+    const r = room(requirement.name || `Room ${index + 1}`, width, length, x, y, 0);
+    // The generic tiling layout above never attached openings, so every
+    // fallback-generated building came out with zero doors/windows (a real,
+    // QA-gate-confirmed defect) - give every room a default door + window,
+    // same pattern already used successfully in apartmentUnitProgram.
+    const doorWidth = Math.min(0.9, Math.max(0.7, width - 0.4));
+    r.doors = [{ wall: "south", offset: Math.max(0.2, (width - doorWidth) / 2), width: doorWidth, height: 2.1 }];
+    const winWidth = Math.min(1.2, Math.max(0.6, length - 0.6));
+    r.windows = [{ wall: "west", offset: Math.max(0.2, (length - winWidth) / 2), width: winWidth, height: 1.2, sill_height: 0.9 }];
+    rooms.push(r);
     if (index % 2 === 0) x += width; else { y += length; x = 0; }
   });
   return [{ name: "Ground Floor", elevation: 0, height: 3.2, rooms }];
@@ -1030,6 +1149,195 @@ function processRooms(rooms: Room[], allowNoDoors = false): void {
   }
 }
 
+/**
+ * Deterministic scorer for best-of-N planning candidates. No LLM judgment
+ * involved - just measurable signal (room count vs. what was actually
+ * requested, naming variety, storey count vs. an explicit multi-storey ask,
+ * palette completeness) so picking a winner never itself becomes a fallback.
+ */
+function scorePlanCandidate(parsed: any, brief: any): number {
+  if (!parsed || !Array.isArray(parsed.storeys) || parsed.storeys.length === 0) return -Infinity;
+  const allRooms = parsed.storeys.flatMap((s: any) => (Array.isArray(s?.rooms) ? s.rooms : []));
+  if (allRooms.length === 0) return -Infinity;
+
+  let score = Math.min(allRooms.length, 30);
+
+  const expected = Array.isArray(brief?.room_requirements) ? brief.room_requirements.length : 0;
+  if (expected > 0) score -= Math.abs(allRooms.length - expected) * 2;
+
+  const uniqueNames = new Set(allRooms.map((r: any) => String(r?.name || "").toLowerCase().trim()).filter(Boolean));
+  score += uniqueNames.size * 0.5;
+  score -= (allRooms.length - uniqueNames.size) * 3; // penalize duplicate/generic room names
+
+  const text = requestedText(brief);
+  if (/2.?stor|two.?stor|second floor|upper floor|multi.?stor/i.test(text) && parsed.storeys.length < 2) score -= 10;
+
+  if (parsed.material_palette && typeof parsed.material_palette === "object" && Object.keys(parsed.material_palette).length >= 4) score += 3;
+  if (parsed.roof_type && typeof parsed.roof_type === "string") score += 1;
+
+  return score;
+}
+
+/**
+ * Creative planning stage (room programme, target sizes, roof concept,
+ * material palette). Positions/geometry are NOT decided here by design - by
+ * explicit instruction, no deterministic layout code runs anywhere in this
+ * pipeline any more. Each room's actual placement and shape are decided by
+ * the model itself, incrementally, room-by-room, against the real live
+ * scene state - see generateStoreyFreeform in antigravity_kimi_agent.ts.
+ * This stage only produces the room LIST and target sizes as a design
+ * intention (same as a human architect jotting "living room ~6x5m" before
+ * touching geometry) - not a placement.
+ *
+ * Best-of-N: two independent qwen3.8-max planning calls run in parallel (cheap -
+ * JSON only, no MCP execution), scored deterministically, best one wins. No
+ * fallback: if neither produces a usable plan, this throws and the caller
+ * must surface that honestly.
+ */
+export async function planStructuralLayout(brief: any): Promise<any> {
+  const promptStr = JSON.stringify(brief) + (brief?.reviewHistory ? `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}` : "");
+
+  const attempts = await Promise.allSettled([
+    callQwen(PLANNER_SYSTEM_PROMPT, promptStr, true, "glm-5.3"),
+    callQwen(PLANNER_SYSTEM_PROMPT, promptStr, true, "glm-5.3"),
+  ]);
+
+  let best: any = null;
+  let bestScore = -Infinity;
+  const failureReasons: string[] = [];
+  for (const attempt of attempts) {
+    if (attempt.status !== "fulfilled") {
+      failureReasons.push(attempt.reason?.message || String(attempt.reason));
+      continue;
+    }
+    let parsed: any;
+    try {
+      parsed = cleanJsonResponse(attempt.value);
+    } catch (e: any) {
+      failureReasons.push(`unparseable response: ${e?.message || e}`);
+      continue;
+    }
+    const score = scorePlanCandidate(parsed, brief);
+    if (score > bestScore) {
+      bestScore = score;
+      best = parsed;
+    }
+  }
+
+  if (!best) {
+    // Surface the REAL reason (e.g. a DashScope quota/auth error) instead of
+    // a generic message that gives no signal for debugging.
+    throw new Error(`glm-5.3 did not return a usable spatial plan (both planning attempts failed, were empty, or contained no rooms). Reasons: ${failureReasons.join(" | ") || "unknown"}`);
+  }
+
+  // NOTE: rooms carry a target width/length (a design intention, same as a
+  // human architect's rough sizing note) but deliberately NO origin/doors/
+  // windows - those are creative+placement decisions the model makes itself,
+  // room by room, against the real scene state during generation.
+  const storeyPlans = best.storeys.map((s: any, idx: number) => {
+    const elevation = Number(s?.elevation ?? idx * 3.2);
+    const rooms: Room[] = (Array.isArray(s?.rooms) ? s.rooms : []).map((r: any) => ({
+      name: String(r?.name || "Room").slice(0, 80),
+      width: Math.max(2.2, Number(r?.width) || 4),
+      length: Math.max(2.2, Number(r?.length) || 4),
+    }));
+    return { name: String(s?.name || `Level ${idx + 1}`), elevation, height: Math.max(2.4, Number(s?.height) || 3.2), rooms };
+  }).filter((s: any) => s.rooms.length > 0);
+
+  if (storeyPlans.length === 0) {
+    throw new Error("glm-5.3's spatial plan contained no rooms after validation.");
+  }
+
+  const roomCount = storeyPlans.reduce((total: number, storey: any) => total + storey.rooms.length, 0);
+  return {
+    structure_name: best.structure_name || brief?.project_type || "Autonomous Architectural Model",
+    structure_category: "building",
+    is_edit: false,
+    storey_plans: storeyPlans,
+    roof_type: String(best.roof_type || "gable").toLowerCase(),
+    has_stairs: storeyPlans.length > 1,
+    material_palette: (best.material_palette && typeof best.material_palette === "object") ? best.material_palette : undefined,
+    quality_requirements: { minimum_rooms: roomCount, minimum_storeys: storeyPlans.length, required_element_types: ["IfcWall", "IfcSlab", "IfcDoor", "IfcWindow"] },
+    layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
+  };
+}
+
+/** Deterministic scorer for best-of-N infrastructure planning candidates - measurable signal only (component count/variety), never a design judgment. */
+function scoreInfraPlanCandidate(parsed: any): number {
+  if (!parsed || !Array.isArray(parsed.components) || parsed.components.length === 0) return -Infinity;
+  const names = parsed.components.map((c: any) => String(c?.name || "").toLowerCase().trim()).filter(Boolean);
+  const uniqueNames = new Set(names);
+  let score = Math.min(parsed.components.length, 40);
+  score -= (parsed.components.length - uniqueNames.size) * 3;
+  if (parsed.structural_concept && String(parsed.structural_concept).length > 20) score += 3;
+  if (parsed.material_palette && typeof parsed.material_palette === "object" && Object.keys(parsed.material_palette).length >= 2) score += 2;
+  return score;
+}
+
+/**
+ * Infrastructure equivalent of planStructuralLayout: qwen3.8-max decides the
+ * ordered component list/engineering concept only. Every component's real
+ * geometry, dimensions, and position are then written as custom code by
+ * generateInfrastructureFreeform, one component at a time, against the real
+ * built scene - no deterministic geometry templating anywhere. Best-of-N,
+ * no fallback: if neither candidate is usable, this throws.
+ */
+export async function planInfrastructureLayout(brief: any): Promise<any> {
+  const promptStr = JSON.stringify(brief) + (brief?.reviewHistory ? `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}` : "");
+
+  const attempts = await Promise.allSettled([
+    callQwen(INFRA_PLANNER_SYSTEM_PROMPT, promptStr, true, "glm-5.3"),
+    callQwen(INFRA_PLANNER_SYSTEM_PROMPT, promptStr, true, "glm-5.3"),
+  ]);
+
+  let best: any = null;
+  let bestScore = -Infinity;
+  const failureReasons: string[] = [];
+  for (const attempt of attempts) {
+    if (attempt.status !== "fulfilled") {
+      failureReasons.push(attempt.reason?.message || String(attempt.reason));
+      continue;
+    }
+    let parsed: any;
+    try {
+      parsed = cleanJsonResponse(attempt.value);
+    } catch (e: any) {
+      failureReasons.push(`unparseable response: ${e?.message || e}`);
+      continue;
+    }
+    const score = scoreInfraPlanCandidate(parsed);
+    if (score > bestScore) {
+      bestScore = score;
+      best = parsed;
+    }
+  }
+
+  if (!best) {
+    // Surface the REAL reason (e.g. a DashScope quota/auth error) instead of
+    // a generic message that gives no signal for debugging.
+    throw new Error(`glm-5.3 did not return a usable infrastructure component plan (both planning attempts failed, were empty, or contained no components). Reasons: ${failureReasons.join(" | ") || "unknown"}`);
+  }
+
+  const componentSpecs = (Array.isArray(best.components) ? best.components : [])
+    .map((c: any) => ({ name: String(c?.name || "Component").slice(0, 80), role: String(c?.role || ""), notes: String(c?.notes || "") }))
+    .filter((c: any) => c.name);
+
+  if (componentSpecs.length === 0) {
+    throw new Error("glm-5.3's infrastructure plan contained no components after validation.");
+  }
+
+  return {
+    structure_name: best.structure_name || brief?.project_type || "Autonomous Infrastructure Model",
+    structure_category: "infrastructure",
+    is_edit: false,
+    structural_concept: best.structural_concept || "",
+    component_specs: componentSpecs,
+    material_palette: (best.material_palette && typeof best.material_palette === "object") ? best.material_palette : undefined,
+    quality_requirements: { minimum_components: componentSpecs.length },
+    layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
+  };
+}
+
 export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
   const storeys = Array.isArray(plan.storey_plans) && plan.storey_plans.length > 0
     ? plan.storey_plans
@@ -1320,6 +1628,231 @@ export function synthesizeBuildingPythonCode(plan: any, brief?: any): string {
   return lines.join("\n");
 }
 
+export interface StoreyBounds { minX: number; minY: number; maxX: number; maxY: number; topZ: number }
+
+/**
+ * Self-contained Python for ONE storey's slab + column grid + walls (with
+ * real opening voids) + inter-storey stairs. Each call creates its own
+ * IfcBuildingStorey and does not depend on any variable from a previous
+ * execute_ifc_code_tool call - this is what lets build_code execute and
+ * verify a building storey-by-storey instead of betting the whole structure
+ * on one giant script. The geometry itself is deterministic (reliable,
+ * already-tested logic shared with synthesizeBuildingPythonCode) - only the
+ * room programme and styling upstream of this came from Kimi.
+ */
+export function synthesizeStoreyPythonCode(storey: any, sIdx: number, includeStairs: boolean): { code: string; bounds: StoreyBounds } {
+  const sName = String(storey.name || `Level_${sIdx}`).replace(/['"\\]/g, "");
+  const elev = Number(storey.elevation !== undefined ? storey.elevation : sIdx * 3.2);
+  const height = Number(storey.height || 3.2);
+  const rooms = Array.isArray(storey.rooms) && storey.rooms.length > 0 ? storey.rooms : [{ name: "Great Room", width: 8, length: 6, origin: [0, 0, elev] }];
+
+  const lines: string[] = [
+    "ifc = get_ifc_file()",
+    "buildings = ifc.by_type('IfcBuilding')",
+    `building = buildings[0] if buildings else api.run('root.create_entity', ifc, ifc_class='IfcBuilding', name="Structure")`,
+    `_st = api.run('root.create_entity', ifc, ifc_class='IfcBuildingStorey', name="${sName}")`,
+    `api.run('geometry.edit_object_placement', ifc, product=_st, matrix=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,${elev},1]])`,
+    `api.run('aggregate.assign_object', ifc, relating_object=building, products=[_st])`,
+    `h = InfraStudioHarness(ifc, _st)`,
+    ""
+  ];
+
+  interface RBound { name: string; x: number; y: number; w: number; l: number; windows: any[]; doors: any[]; }
+  const rBounds: RBound[] = rooms.map((r: any) => ({
+    name: r.name || "Room",
+    x: Number(r.origin?.[0] || 0),
+    y: Number(r.origin?.[1] || 0),
+    w: Number(r.width || 5),
+    l: Number(r.length || 4),
+    windows: r.windows || [],
+    doors: r.doors || []
+  }));
+
+  const pad = 0.3;
+  const isGround = sIdx === 0;
+  const balcDepth = isGround ? 0.0 : 1.2;
+
+  const sMinX = Math.min(...rBounds.map((r) => r.x));
+  const sMinY = Math.min(...rBounds.map((r) => r.y));
+  const sMaxX = Math.max(...rBounds.map((r) => r.x + r.w));
+  const sMaxY = Math.max(...rBounds.map((r) => r.y + r.l));
+
+  if (isGround) {
+    lines.push(`# Ground Floor Continuous Podium Slab`);
+    const fp = `[[${(sMinX - pad).toFixed(2)}, ${(sMinY - pad).toFixed(2)}], [${(sMaxX + pad).toFixed(2)}, ${(sMinY - pad).toFixed(2)}], [${(sMaxX + pad).toFixed(2)}, ${(sMaxY + pad).toFixed(2)}], [${(sMinX - pad).toFixed(2)}, ${(sMaxY + pad).toFixed(2)}]]`;
+    lines.push(`_slab = h.create_slab(${fp}, thickness=0.30, z_elevation=${(elev - 0.30).toFixed(2)})`);
+    lines.push(`h.add_mesh_element(_slab, "${sName}_Ground_Podium_Slab", ifc_class="IfcSlab", mat_name="Cast-in-Place Structural Concrete", rgb=(0.76, 0.76, 0.74))`);
+  } else {
+    lines.push(`# Upper Level Continuous Floor Plate with Cantilever Balcony`);
+    const fp = `[[${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMaxY.toFixed(2)}], [${sMinX.toFixed(2)}, ${sMaxY.toFixed(2)}]]`;
+    lines.push(`_slab = h.create_slab(${fp}, thickness=0.25, z_elevation=${(elev - 0.25).toFixed(2)})`);
+    lines.push(`h.add_mesh_element(_slab, "${sName}_Cantilever_Floor_Plate", ifc_class="IfcSlab", mat_name="Post-Tensioned Architectural Concrete", rgb=(0.80, 0.80, 0.78))`);
+    lines.push(`h.add_railing([${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_Front_Railing", rgb=(0.20, 0.20, 0.22))`);
+    lines.push(`h.add_railing([${sMinX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMinX.toFixed(2)}, ${sMinY.toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_West_Railing", rgb=(0.20, 0.20, 0.22))`);
+    lines.push(`h.add_railing([${sMaxX.toFixed(2)}, ${(sMinY - balcDepth).toFixed(2)}], [${sMaxX.toFixed(2)}, ${sMinY.toFixed(2)}], height=1.05, z_bottom=${elev.toFixed(2)}, name="${sName}_Balcony_East_Railing", rgb=(0.20, 0.20, 0.22))`);
+  }
+  lines.push("");
+
+  lines.push(`# Structural Framing: Columns`);
+  const rawCorners: [number, number][] = [];
+  for (const rb of rBounds) {
+    rawCorners.push([rb.x, rb.y]);
+    rawCorners.push([rb.x + rb.w, rb.y]);
+    rawCorners.push([rb.x + rb.w, rb.y + rb.l]);
+    rawCorners.push([rb.x, rb.y + rb.l]);
+  }
+  const uniqueCols: [number, number][] = [];
+  for (const pt of rawCorners) {
+    if (!uniqueCols.some((c) => Math.hypot(c[0] - pt[0], c[1] - pt[1]) < 1.4)) uniqueCols.push(pt);
+  }
+  for (let cIdx = 0; cIdx < uniqueCols.length; cIdx++) {
+    const [colX, colY] = uniqueCols[cIdx];
+    lines.push(`h.add_column([${colX.toFixed(2)}, ${colY.toFixed(2)}], height=${height.toFixed(2)}, radius=0.18, z_bottom=${elev.toFixed(2)}, shape="round", name="${sName}_Column_${cIdx + 1}", rgb=(0.84, 0.84, 0.82))`);
+  }
+  lines.push("");
+
+  interface RawSeg { p1: [number, number]; p2: [number, number]; roomName: string; windows: any[]; doors: any[]; }
+  const rawSegments: RawSeg[] = [];
+  for (const rb of rBounds) {
+    rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x + rb.w, rb.y], roomName: rb.name, windows: rb.windows.filter((w: any) => String(w.wall || "south").toLowerCase() === "south"), doors: rb.doors.filter((d: any) => String(d.wall || "south").toLowerCase() === "south") });
+    rawSegments.push({ p1: [rb.x, rb.y + rb.l], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name, windows: rb.windows.filter((w: any) => String(w.wall).toLowerCase() === "north"), doors: rb.doors.filter((d: any) => String(d.wall).toLowerCase() === "north") });
+    rawSegments.push({ p1: [rb.x + rb.w, rb.y], p2: [rb.x + rb.w, rb.y + rb.l], roomName: rb.name, windows: rb.windows.filter((w: any) => String(w.wall).toLowerCase() === "east"), doors: rb.doors.filter((d: any) => String(d.wall).toLowerCase() === "east") });
+    rawSegments.push({ p1: [rb.x, rb.y], p2: [rb.x, rb.y + rb.l], roomName: rb.name, windows: rb.windows.filter((w: any) => String(w.wall).toLowerCase() === "west"), doors: rb.doors.filter((d: any) => String(d.wall).toLowerCase() === "west") });
+  }
+
+  interface UWall { p1: [number, number]; p2: [number, number]; isShared: boolean; name: string; windows: any[]; doors: any[]; }
+  const uniqueWalls: UWall[] = [];
+  for (const seg of rawSegments) {
+    const [ax1, ay1] = seg.p1;
+    const [ax2, ay2] = seg.p2;
+    const keyA = ax1 < ax2 || (ax1 === ax2 && ay1 < ay2);
+    const sp1: [number, number] = keyA ? [ax1, ay1] : [ax2, ay2];
+    const sp2: [number, number] = keyA ? [ax2, ay2] : [ax1, ay1];
+
+    let found = false;
+    for (const uw of uniqueWalls) {
+      if (Math.hypot(uw.p1[0] - sp1[0], uw.p1[1] - sp1[1]) < 0.15 && Math.hypot(uw.p2[0] - sp2[0], uw.p2[1] - sp2[1]) < 0.15) {
+        uw.isShared = true;
+        uw.windows.push(...seg.windows);
+        uw.doors.push(...seg.doors);
+        found = true;
+        break;
+      }
+    }
+    if (!found) uniqueWalls.push({ p1: sp1, p2: sp2, isShared: false, name: seg.roomName, windows: [...seg.windows], doors: [...seg.doors] });
+  }
+
+  lines.push(`# Walls with Framed Opening Voids for ${sName}`);
+  for (let wIdx = 0; wIdx < uniqueWalls.length; wIdx++) {
+    const uw = uniqueWalls[wIdx];
+    const wLen = Math.hypot(uw.p2[0] - uw.p1[0], uw.p2[1] - uw.p1[1]);
+    const thick = uw.isShared ? 0.15 : 0.25;
+    const mat = uw.isShared ? "Interior Partition Drywall" : "Smooth Architectural Stucco";
+    const rgb = uw.isShared ? "(0.90, 0.90, 0.88)" : "(0.95, 0.95, 0.92)";
+    const wName = `${sName}_${uw.isShared ? "Interior" : "Perimeter"}_Wall_${wIdx + 1}`;
+
+    const openings: { offset: number; width: number; height: number; sill_height: number }[] = [];
+    const cleanWindows: any[] = [];
+    for (const w of uw.windows) {
+      const wW = Number(w.width || 1.4);
+      const wH = Number(w.height || 1.5);
+      const sH = Number(w.sill_height || 0.9);
+      const off = Math.max(0.3, Math.min(Number(w.offset || 1.0), wLen - wW - 0.3));
+      const cleanOp = { offset: Number(off.toFixed(2)), width: wW, height: wH, sill_height: sH };
+      openings.push(cleanOp);
+      cleanWindows.push(cleanOp);
+    }
+    const cleanDoors: any[] = [];
+    for (const d of uw.doors) {
+      const dW = Number(d.width || 0.9);
+      const dH = Number(d.height || 2.1);
+      const off = Math.max(0.2, Math.min(Number(d.offset || 1.0), wLen - dW - 0.2));
+      const cleanOp = { offset: Number(off.toFixed(2)), width: dW, height: dH, sill_height: 0.0 };
+      openings.push(cleanOp);
+      cleanDoors.push(cleanOp);
+    }
+
+    const opJson = openings.length ? JSON.stringify(openings) : "None";
+    lines.push(`_w_${wIdx} = h.create_wall([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], height=${height.toFixed(2)}, thickness=${thick}, z_bottom=${elev.toFixed(2)}, openings=${opJson})`);
+    lines.push(`h.add_mesh_element(_w_${wIdx}, "${wName}", ifc_class="IfcWall", mat_name="${mat}", rgb=${rgb})`);
+
+    for (let winI = 0; winI < cleanWindows.length; winI++) {
+      const w = cleanWindows[winI];
+      lines.push(`h.add_window([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], offset=${w.offset}, width=${w.width}, height=${w.height}, sill_height=${w.sill_height}, z_bottom=${elev.toFixed(2)}, name="${wName}_Window_${winI + 1}")`);
+    }
+    for (let doorI = 0; doorI < cleanDoors.length; doorI++) {
+      const d = cleanDoors[doorI];
+      lines.push(`h.add_door([${uw.p1[0].toFixed(2)}, ${uw.p1[1].toFixed(2)}], [${uw.p2[0].toFixed(2)}, ${uw.p2[1].toFixed(2)}], offset=${d.offset}, width=${d.width}, height=${d.height}, z_bottom=${elev.toFixed(2)}, name="${wName}_Door_${doorI + 1}")`);
+    }
+  }
+  lines.push("");
+
+  if (includeStairs) {
+    const stairX = Number((rBounds[0].x + 0.8).toFixed(2));
+    const stairY = Number((rBounds[0].y + 0.8).toFixed(2));
+    lines.push(`# Monolithic Staircase connecting ${sName} to the level above`);
+    lines.push(`_stairs = h.create_stairs(start_pt=[${stairX}, ${stairY}, ${elev.toFixed(2)}], length=3.6, width=1.2, height=${height.toFixed(2)}, num_steps=18)`);
+    lines.push(`h.add_mesh_element(_stairs, "${sName}_Monolithic_Stairs", ifc_class="IfcStair", mat_name="Architectural Hardwood Tread", rgb=(0.65, 0.45, 0.25))`);
+    lines.push(`h.add_railing([${stairX}, ${stairY}], [${(stairX + 3.6).toFixed(2)}, ${stairY}], height=0.95, z_bottom=${elev.toFixed(2)}, name="${sName}_Stair_Handrail", rgb=(0.20, 0.20, 0.22))`);
+    lines.push("");
+  }
+
+  lines.push("count = h.commit()");
+  lines.push("save_and_load_ifc()");
+  lines.push(`print(f"Storey ${sName}: committed {count} elements.")`);
+
+  return {
+    code: lines.join("\n"),
+    bounds: { minX: sMinX, minY: sMinY - balcDepth, maxX: sMaxX, maxY: sMaxY, topZ: elev + height }
+  };
+}
+
+/**
+ * Self-contained roof script - looks up the top storey live from the IFC
+ * model (no dependency on a previous call's local variables), so it can run
+ * as its own execute_ifc_code_tool call after every storey has already been
+ * built and verified independently.
+ */
+export function synthesizeRoofPythonCode(roofType: string, bounds: StoreyBounds): string {
+  const rawRoof = String(roofType || "gable").toLowerCase();
+  const rType = rawRoof.includes("none") ? "none" : rawRoof.includes("flat") ? "flat" : rawRoof.includes("shed") ? "shed" : rawRoof.includes("hip") ? "hip" : "gable";
+  if (rType === "none") return "";
+
+  const { minX, minY, maxX, maxY, topZ } = bounds;
+  const roofHeight = rType === "flat" ? 0.3 : 2.5;
+  const lines: string[] = [
+    "ifc = get_ifc_file()",
+    `_storeys = ifc.by_type("IfcBuildingStorey")`,
+    `_top_st = max(_storeys, key=lambda s: float(s.Elevation or 0)) if _storeys else None`,
+    `h_roof = InfraStudioHarness(ifc, _top_st)`,
+    "# ========================================================",
+    `# ROOF STRUCTURE: ${rType.toUpperCase()}`,
+    "# ========================================================"
+  ];
+
+  if (rType === "flat") {
+    const roofFp = `[[${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}]]`;
+    lines.push(`_roof_slab = h_roof.create_slab(${roofFp}, thickness=0.25, z_elevation=${topZ.toFixed(2)})`);
+    lines.push(`h_roof.add_mesh_element(_roof_slab, "Flat_Roof_Diaphragm", ifc_class="IfcSlab", mat_name="Insulated Membrane Roof Slab", rgb=(0.70, 0.70, 0.68))`);
+    lines.push(`_p1 = h_roof.create_wall([${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+    lines.push(`_p2 = h_roof.create_wall([${(maxX + 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], [${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+    lines.push(`_p3 = h_roof.create_wall([${(maxX + 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+    lines.push(`_p4 = h_roof.create_wall([${(minX - 0.2).toFixed(2)}, ${(maxY + 0.2).toFixed(2)}], [${(minX - 0.2).toFixed(2)}, ${(minY - 0.2).toFixed(2)}], height=0.9, thickness=0.25, z_bottom=${topZ.toFixed(2)})`);
+    lines.push(`h_roof.add_mesh_element(_p1, "Roof_Parapet_South", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+    lines.push(`h_roof.add_mesh_element(_p2, "Roof_Parapet_East", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+    lines.push(`h_roof.add_mesh_element(_p3, "Roof_Parapet_North", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+    lines.push(`h_roof.add_mesh_element(_p4, "Roof_Parapet_West", ifc_class="IfcWall", mat_name="Capped Architectural Parapet", rgb=(0.92, 0.92, 0.90))`);
+  } else {
+    const roofFp = `[[${(minX - 0.5).toFixed(2)}, ${(minY - 0.5).toFixed(2)}], [${(maxX + 0.5).toFixed(2)}, ${(minY - 0.5).toFixed(2)}], [${(maxX + 0.5).toFixed(2)}, ${(maxY + 0.5).toFixed(2)}], [${(minX - 0.5).toFixed(2)}, ${(maxY + 0.5).toFixed(2)}]]`;
+    lines.push(`_roof_mesh = h_roof.create_roof(${roofFp}, roof_type="${rType}", height=${roofHeight}, z_elevation=${(topZ + 0.15).toFixed(2)}, thickness=0.30)`);
+    lines.push(`h_roof.add_mesh_element(_roof_mesh, "Architectural_${rType}_Roof", ifc_class="IfcRoof", mat_name="Standing Seam Architectural Zinc", rgb=(0.24, 0.26, 0.28))`);
+  }
+  lines.push(`h_roof.commit()`);
+  lines.push("save_and_load_ifc()");
+  lines.push(`print("Roof structure complete.")`);
+  return lines.join("\n");
+}
+
 function repairPlan(plan: any, brief?: any): any {
   if (!plan || typeof plan !== "object") plan = {};
   for (const key of ["architectural_analysis", "design_plan", "building_plan", "project_plan", "layout_plan"]) {
@@ -1490,13 +2023,51 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
   const textCheck = requestedText(brief);
   const category = brief.structure_category || (/cofferdam|coffer|bridge|rail|road|pier|jetty|pier/i.test(textCheck) ? "infrastructure" : "building");
   const isBuilding = category === "building";
+
+  // OpenHands (a real coding agent, downstream in agent-bim) does its own
+  // interpretation AND planning as part of one continuous agentic session -
+  // running this file's own two-model-call room/component planning first
+  // would just be discarded work (OpenHands gets the raw brief, not this
+  // plan's component list - see agent-bim's build_code handler). Skip
+  // straight to a minimal passthrough for new builds; edits still need this
+  // file's real planning since OpenHands isn't wired for edits.
+  const useOpenHands = (typeof Deno !== "undefined" ? Deno.env.get("USE_OPENHANDS_ENGINE") : process.env.USE_OPENHANDS_ENGINE) === "true";
+  if (useOpenHands && !brief.is_edit) {
+    console.log(`[handleArchitect] USE_OPENHANDS_ENGINE=true - skipping model-based planning, passing the raw brief straight through for OpenHands to interpret, plan, and build itself.`);
+    return {
+      structure_name: brief.project_type || String(brief.client_requirements || textCheck).slice(0, 60) || "OpenHands-designed structure",
+      structure_category: category,
+      is_edit: false,
+      client_requirements: brief.client_requirements || textCheck,
+      prompt: brief.prompt || brief.client_requirements || textCheck,
+    };
+  }
+
+  // Planning is split from coding for both categories - qwen3.8-max decides
+  // WHAT to build (room programme / component list) and the actual geometry
+  // is written as real custom code afterward, one piece at a time, against
+  // the real built scene (generateStoreyFreeform / generateInfrastructureFreeform
+  // in antigravity_kimi_agent.ts). No deterministic layout or geometry
+  // templating anywhere - this is exactly where one-shot whole-structure
+  // generation kept failing. Edits to an existing structure skip this
+  // (there is no "whole structure" to re-plan) and keep the direct
+  // python_code path below.
+  if (!brief.is_edit) {
+    if (isBuilding) {
+      console.log(`[handleArchitect] Building request - using split planning (glm-5.3 room programme, model-authored freeform geometry).`);
+      return await planStructuralLayout(brief);
+    }
+    console.log(`[handleArchitect] Infrastructure request - using split planning (glm-5.3 component list, model-authored freeform geometry).`);
+    return await planInfrastructureLayout(brief);
+  }
+
   const prompt = isBuilding ? systemPrompt : infrastructurePrompt;
   let promptStr = JSON.stringify(brief);
   if (brief.reviewHistory) {
     promptStr += `\n\nPREVIOUS REVIEW FAILED. Fix these issues: ${JSON.stringify(brief.reviewHistory)}`;
   }
 
-  const selectedModel = "kimi-k3";
+  const selectedModel = "glm-5.3";
   try {
     let res = await callQwen(prompt, promptStr, true, selectedModel);
     if (!res || res.trim().length < 5) {
@@ -1545,30 +2116,11 @@ export async function handleArchitect(rawBrief: any): Promise<any> {
 
     throw new Error("Model response did not contain executable Python code.");
   } catch (error) {
-    console.warn(`[handleArchitect] ${selectedModel} failed (${error instanceof Error ? error.message : String(error)}). Attempting emergency Astra synthesis...`);
-    try {
-      const astraRes = await callAstra(prompt, promptStr, true, "gpt-6-astra");
-      const astraCode = extractPythonCode(astraRes);
-      if (astraCode && astraCode.length > 50) {
-        let astraName = brief.structure_name || brief.project_type || "Astra Architectural Model";
-        try {
-          const parsedAstra = cleanJsonResponse(astraRes);
-          if (parsedAstra?.structure_name) astraName = parsedAstra.structure_name;
-        } catch { /* ignore */ }
-
-        console.log(`[handleArchitect] Emergency Astra code generated (${astraCode.length} chars).`);
-        return {
-          structure_name: astraName,
-          structure_category: category,
-          is_edit: false,
-          python_code: astraCode,
-          layout_validation: { status: "PASS", repairs: [], constraint_audits: [] }
-        };
-      }
-    } catch (aErr) {
-      console.error("[handleArchitect] Emergency Astra synthesis also failed:", aErr);
-    }
-
+    // No fallback: qwen3.8-max is the only model this system designs with. If it
+    // fails, the caller must be told the truth - never silently substitute a
+    // different model's or a deterministic template's design as if it were
+    // the requested one.
+    console.error(`[handleArchitect] ${selectedModel} failed and no fallback is configured:`, error);
     throw new Error(`Architectural AI synthesis failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

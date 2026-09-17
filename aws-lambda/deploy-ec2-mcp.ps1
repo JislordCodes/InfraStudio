@@ -1,5 +1,11 @@
-$env:AWS_ACCESS_KEY_ID = "AKIA5GEUHPJUBQOJVFM7"
-$env:AWS_SECRET_ACCESS_KEY = "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"
+# Credentials must come from the environment (or an AWS profile / IAM role) -
+# never hardcode access keys in a committed script. Set AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY yourself before running this, or configure a named
+# profile and pass --profile to the aws CLI calls below instead.
+if (-not $env:AWS_ACCESS_KEY_ID -or -not $env:AWS_SECRET_ACCESS_KEY) {
+    Write-Error "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY must be set in the environment before running this script."
+    exit 1
+}
 $env:AWS_DEFAULT_REGION = "us-east-1"
 
 $AMI_ID = "ami-0332d564d76dbd8d6"  # Amazon Linux 2023 x86_64

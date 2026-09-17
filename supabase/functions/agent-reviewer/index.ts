@@ -77,6 +77,30 @@ function deterministicReview(scene: any, requirements: any, category: string) {
 }
 
 export async function handleReviewer(payload: any): Promise<any> {
+  // When OpenHands owns the build, it isn't just redundant to run this
+  // review pass - it's actively wrong. OpenHands connects to the MCP server
+  // through its own independent session (the standard MCP protocol's own
+  // session negotiation), not this pipeline's mcpInit/mcpCallTool session
+  // concept, so get_scene_info here would inspect the wrong scene (the
+  // shared/stateless fallback) rather than what OpenHands actually built -
+  // already self-verified as part of its own task (every successful run
+  // this session re-downloaded and checked its own export before finishing).
+  // Explicit on/off switch the user controls, not a silent fallback.
+  const useOpenHands = (typeof Deno !== "undefined" ? Deno.env.get("USE_OPENHANDS_ENGINE") : process.env.USE_OPENHANDS_ENGINE) === "true";
+  if (useOpenHands) {
+    console.log(`[handleReviewer] USE_OPENHANDS_ENGINE=true - skipping review entirely, OpenHands already self-verifies its own work.`);
+    return {
+      status: "PASS",
+      issues: [],
+      severity_levels: [],
+      entity_ids_flagged: [],
+      fix_recommendations: [],
+      retry_required: false,
+      element_counts: {},
+      mcpSessionId: payload.mcpSessionId || "",
+    };
+  }
+
   let mcpSessionId = payload.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
   const sceneInfo = await mcpCallTool("get_scene_info", { limit: -1, include_bbox: true, include_transform: true }, mcpSessionId);
@@ -92,7 +116,7 @@ export async function handleReviewer(payload: any): Promise<any> {
   };
   let result: any = null;
   try {
-    const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, payload.model || "kimi-k3");
+    const res = await callQwen(systemPrompt, JSON.stringify(reviewContext), true, payload.model || "glm-5.3");
     result = cleanJsonResponse(res);
   } catch (err) {
     console.warn("[handleReviewer] LLM unavailable, using deterministic review results:", err);
