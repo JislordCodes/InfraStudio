@@ -1,7 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download } from 'lucide-react';
+import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon } from 'lucide-react';
 import { runAntigravityBuild } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
+import { supabase } from '../lib/supabase';
+
+interface AttachedImage {
+  id: string;
+  file: File;
+  previewUrl: string;
+  caption: string;
+}
 
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
@@ -28,9 +36,54 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const [currentSteps, setCurrentSteps] = useState<string[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 640 : false);
+  const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Reference image attachments (floor plans, sketches, aerial views, etc.) ──
+
+  const handleFilesSelected = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const next: AttachedImage[] = Array.from(files)
+      .filter(f => f.type.startsWith('image/'))
+      .map(f => ({ id: `${Date.now()}-${f.name}-${Math.random().toString(36).slice(2, 8)}`, file: f, previewUrl: URL.createObjectURL(f), caption: '' }));
+    if (next.length) setAttachedImages(prev => [...prev, ...next]);
+  };
+
+  const removeAttachedImage = (id: string) => {
+    setAttachedImages(prev => {
+      const found = prev.find(img => img.id === id);
+      if (found) URL.revokeObjectURL(found.previewUrl);
+      return prev.filter(img => img.id !== id);
+    });
+  };
+
+  const updateImageCaption = (id: string, caption: string) => {
+    setAttachedImages(prev => prev.map(img => img.id === id ? { ...img, caption } : img));
+  };
+
+  // Uploads every attached image to the public "reference-images" Supabase
+  // Storage bucket and returns their public URLs - Antigravity runs headless
+  // on a remote EC2 box with no access to the browser's local files, so the
+  // image has to live somewhere fetchable by URL before the build can see it.
+  const uploadAttachedImages = async (images: AttachedImage[]): Promise<{ url: string; caption?: string }[]> => {
+    const results: { url: string; caption?: string }[] = [];
+    for (const img of images) {
+      const ext = img.file.name.split('.').pop() || 'jpg';
+      const path = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+      const { error } = await supabase.storage.from('reference-images').upload(path, img.file, {
+        contentType: img.file.type || 'image/jpeg',
+        upsert: false,
+      });
+      if (error) throw new Error(`Failed to upload ${img.file.name}: ${error.message}`);
+      const { data } = supabase.storage.from('reference-images').getPublicUrl(path);
+      results.push({ url: data.publicUrl, caption: img.caption.trim() || undefined });
+    }
+    return results;
+  };
 
   // Responsive window resize listener
   useEffect(() => {
@@ -99,19 +152,33 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && attachedImages.length === 0) || isLoading) return;
 
-    const userContent = input.trim();
+    const userContent = input.trim() || 'Build a model based on the attached reference image(s).';
     const userMsg: ChatMessage = { role: 'user', content: userContent };
+    const imagesToUpload = attachedImages;
 
     setIsLoading(true);
     setExpanded(true);
     setInput('');
+    setAttachedImages([]);
     setCurrentSteps(['🚀 Initializing session...']);
 
     let sid = activeSessionId;
 
     try {
+      let uploadedImages: { url: string; caption?: string }[] = [];
+      if (imagesToUpload.length > 0) {
+        setIsUploadingImages(true);
+        setCurrentSteps(['📎 Uploading reference image(s)...']);
+        try {
+          uploadedImages = await uploadAttachedImages(imagesToUpload);
+        } finally {
+          setIsUploadingImages(false);
+          imagesToUpload.forEach(img => URL.revokeObjectURL(img.previewUrl));
+        }
+      }
+
       if (!sid) {
         try {
           const s = await createSession(userContent.slice(0, 40) || 'New Design');
@@ -141,6 +208,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
             tool_calls: assistantObj.tool_calls,
           });
         },
+        uploadedImages,
       );
 
       if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
@@ -379,29 +447,72 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
           </div>
         )}
 
+        {/* Attached Reference Images (floor plans, sketches, aerial views, schematics) */}
+        {attachedImages.length > 0 && (
+          <div className="flex items-center gap-2 px-3 pt-2.5 pb-1 border-t border-white/5 overflow-x-auto">
+            {attachedImages.map(img => (
+              <div key={img.id} className="relative shrink-0 group">
+                <img src={img.previewUrl} alt="attached reference" className="w-14 h-14 rounded-lg object-cover border border-white/15" />
+                <button
+                  type="button"
+                  onClick={() => removeAttachedImage(img.id)}
+                  className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-red-500 text-white shadow-md"
+                  title="Remove image"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+                <input
+                  type="text"
+                  value={img.caption}
+                  onChange={(e) => updateImageCaption(img.id, e.target.value)}
+                  placeholder="label (e.g. floor plan)"
+                  className="mt-1 w-14 bg-transparent text-[9px] text-neutral-400 placeholder-neutral-600 focus:outline-none text-center truncate"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Chat Input Bar (16px text-base on mobile prevents iOS auto-zoom) */}
-        <form onSubmit={handleSend} className="flex items-center gap-2 px-3 py-2.5 border-t border-white/5">
+        <form onSubmit={handleSend} className={`flex items-center gap-2 px-3 py-2.5 ${attachedImages.length > 0 ? '' : 'border-t border-white/5'}`}>
           {!expanded && (
             <button type="button" onClick={() => setShowSidebar(v => !v)} className="p-1 text-neutral-400 hover:text-white transition-colors shrink-0">
               <PanelLeftOpen className="w-4 h-4" />
             </button>
           )}
           <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => { handleFilesSelected(e.target.files); e.target.value = ''; }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            title="Attach floor plan, sketch, aerial view, or schematic"
+            className="p-1.5 text-neutral-400 hover:text-white transition-colors shrink-0 disabled:opacity-30"
+          >
+            <Paperclip className="w-4 h-4" />
+          </button>
+          <input
             ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onFocus={() => (hasContent || loadingMessages) && setExpanded(true)}
-            placeholder={activeSession ? `Continue "${activeSession.title}"...` : 'Describe structure to build...'}
+            placeholder={attachedImages.length > 0 ? 'Add instructions (optional)...' : activeSession ? `Continue "${activeSession.title}"...` : 'Describe structure to build...'}
             className="flex-1 bg-transparent text-base sm:text-sm text-white placeholder-neutral-500 focus:outline-none py-1"
             disabled={isLoading}
           />
           <button
             type="submit"
-            disabled={!input.trim() || isLoading}
+            disabled={(!input.trim() && attachedImages.length === 0) || isLoading}
             className="shrink-0 w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-blue-600 hover:bg-blue-500 active:scale-95 disabled:opacity-30 rounded-full text-white transition-all shadow-md"
           >
-            <Send className="w-4 h-4 ml-0.5" />
+            {isUploadingImages ? <ImageIcon className="w-4 h-4 animate-pulse" /> : <Send className="w-4 h-4 ml-0.5" />}
           </button>
         </form>
       </div>

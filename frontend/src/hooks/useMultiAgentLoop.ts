@@ -9,6 +9,11 @@ export interface MultiAgentResult {
   mcp_session_id?: string;
 }
 
+export interface ReferenceImageInput {
+  url: string;
+  caption?: string;
+}
+
 /**
  * Direct build path for the Antigravity engine (USE_ANTIGRAVITY_ENGINE=true
  * on the Lambda): sends the user's raw message straight to agent-bim's
@@ -28,6 +33,7 @@ export async function runAntigravityBuild(
   clientSessionId: string,
   onStep: (step: string) => void,
   onAssistantMessage?: (msg: any) => void,
+  images: ReferenceImageInput[] = [],
 ): Promise<MultiAgentResult> {
   const steps: string[] = [];
   const pushStep = (msg: string) => {
@@ -55,7 +61,7 @@ export async function runAntigravityBuild(
   try {
     let bimRes = await callEdge('agent-bim', {
       action: 'build_code',
-      plan: { client_requirements: userMessage },
+      plan: { client_requirements: userMessage, images },
       mcpSessionId: clientSessionId,
     });
     let sessionId = bimRes.mcpSessionId || clientSessionId;

@@ -2,7 +2,7 @@ import { CORS, mcpInit, mcpCallTool, fetchMcpTools, callQwen, callGLM, runAntigr
 import type { SceneElement } from "../_shared/shared.ts";
 import { handleReviewer } from "../agent-reviewer/index.ts";
 import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_agent.ts";
-import { startAntigravityBuild, pollAntigravityBuild } from "../_shared/antigravity_agent.ts";
+import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -686,6 +686,24 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
           : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId };
       }
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
+      const jobId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `job-${Date.now()}`;
+
+      // Reference images (floor plans, sketches, aerial views, schematics)
+      // attached from the frontend - uploaded to Supabase Storage there, only
+      // the public URLs travel through this JSON payload. Antigravity can't
+      // see a URL from inside its headless shell session, so these get
+      // downloaded onto the EC2 box (see startAntigravityBuild) at the exact
+      // paths computed here, and the brief tells it to read each one by path
+      // before designing anything - confirmed this session that agy's
+      // Gemini 3.8 Flash vision genuinely reads and correctly describes an
+      // arbitrary image file placed in its --add-dir workspace.
+      const images: ReferenceImage[] = Array.isArray(payload.plan?.images)
+        ? payload.plan.images.filter((img: any) => img && typeof img.url === "string" && img.url.trim())
+        : [];
+      const imageSection = images.length > 0
+        ? `\n\nIMPORTANT reference images provided (read each one with your file-reading tool BEFORE designing anything - they are ground truth for whatever they depict, not loose inspiration):\n${images.map((img, i) => `- ${refImagePath(jobId, i, img.url)} — ${img.caption?.trim() || "reference image: inspect its layout/form/style and use it to inform the design"}`).join("\n")}\nIf an image is a floor plan or schematic, replicate its actual room layout, wall positions, and proportions rather than inventing a different layout. If it is a sketch, aerial view, or elevation, match the massing, style, and site orientation it shows.`
+        : "";
+
       // Same standing instructions as the OpenHands brief below (native tool
       // calls only, mandatory materials, real engineering form before
       // geometry) - both engines are stateless headless agents with the same
@@ -711,11 +729,10 @@ IMPORTANT reviewer rule (before export): once the shell/structure is built, call
 
 First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
 
-${userBrief}
+${userBrief}${imageSection}
 
 When finished, call get_scene_info to confirm the total element count, then call export_ifc.`;
-      const jobId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `job-${Date.now()}`;
-      const commandId = await startAntigravityBuild(brief, jobId);
+      const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
       return { status: "continue", continuation: newContinuation, progress: "Antigravity build started...", mcpSessionId: jobId };
     }

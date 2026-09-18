@@ -32,6 +32,52 @@ function b64(s: string): string {
   return typeof Buffer !== "undefined" ? Buffer.from(s, "utf-8").toString("base64") : btoa(s);
 }
 
+export interface ReferenceImage {
+  url: string;
+  /** e.g. "floor plan", "aerial view", "hand sketch" - shown to Antigravity next to the file path so it knows what each image represents before reading it. */
+  caption?: string;
+}
+
+function safeJobId(jobId: string): string {
+  return jobId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "job";
+}
+
+function extForUrl(url: string): string {
+  const clean = url.split("?")[0];
+  const match = clean.match(/\.([a-zA-Z0-9]{2,5})$/);
+  return match ? match[1].toLowerCase() : "jpg";
+}
+
+/** On-box directory a build's reference images are downloaded into - shared between the download script and the brief text so both agree on paths without a runtime round-trip. */
+export function refImageDir(jobId: string): string {
+  return `/root/agy_jobs/${safeJobId(jobId)}/images`;
+}
+
+export function refImagePath(jobId: string, index: number, url: string): string {
+  return `${refImageDir(jobId)}/ref_${String(index + 1).padStart(2, "0")}.${extForUrl(url)}`;
+}
+
+/**
+ * Shell lines that download every reference image to its predetermined
+ * refImagePath before agy starts, so agy's workspace already has them by the
+ * time it reads the brief's file-path references. Downloads over plain HTTP
+ * from a public URL (Supabase Storage) rather than embedding image bytes in
+ * the SSM command itself - SSM's command payload is far too small for real
+ * image files (a single photo can already exceed it), the way it comfortably
+ * fits the brief's own text.
+ */
+function buildImageFetchScript(jobId: string, images: ReferenceImage[]): string {
+  if (!images.length) return "";
+  const dir = refImageDir(jobId);
+  const lines = [`mkdir -p ${dir}`];
+  images.forEach((img, i) => {
+    const path = refImagePath(jobId, i, img.url);
+    const urlB64 = b64(img.url);
+    lines.push(`curl -sL --max-time 30 -o "${path}" "$(echo ${urlB64} | base64 -d)" || echo "WARN: failed to download reference image ${i + 1}"`);
+  });
+  return lines.join("\n");
+}
+
 /**
  * Builds the on-box shell script for one build. The agy process itself is
  * backgrounded so this script can run a heartbeat loop alongside it that
@@ -49,9 +95,11 @@ function b64(s: string): string {
  * that is created here - if the box is ever replaced/rebooted, that one-time
  * setup needs to be redone before this will work again.
  */
-function buildScript(brief: string, jobId: string): string {
-  const safeId = jobId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "job";
+function buildScript(brief: string, jobId: string, images: ReferenceImage[] = []): string {
+  const safeId = safeJobId(jobId);
   const briefB64 = b64(brief);
+  const imageFetch = buildImageFetchScript(jobId, images);
+  const addDirFlag = images.length ? `--add-dir ${refImageDir(jobId)}` : "";
   const inner = `#!/bin/bash
 export HOME=/root
 export PATH="$HOME/.local/bin:$PATH"
@@ -59,10 +107,12 @@ source /root/dbus_env.sh
 mkdir -p /root/agy_jobs
 pkill -9 -f "agy -p" || true
 
+${imageFetch}
+
 echo "${briefB64}" | base64 -d > /root/agy_jobs/task_${safeId}.txt
 BRIEF=$(cat /root/agy_jobs/task_${safeId}.txt)
 
-setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
 
 # Nothing needs to run alongside agy here - live progress is read by the
@@ -102,9 +152,9 @@ else:
   return `echo ${b64(inner)} | base64 -d > /tmp/run_agy_${safeId}.sh && bash /tmp/run_agy_${safeId}.sh`;
 }
 
-export async function startAntigravityBuild(brief: string, jobId: string): Promise<string> {
+export async function startAntigravityBuild(brief: string, jobId: string, images: ReferenceImage[] = []): Promise<string> {
   if (!brief || !brief.trim()) throw new Error("startAntigravityBuild: empty brief");
-  const script = buildScript(brief, jobId);
+  const script = buildScript(brief, jobId, images);
   const res = await ssmClient.send(new SendCommandCommand({
     InstanceIds: [INSTANCE_ID],
     DocumentName: "AWS-RunShellScript",
