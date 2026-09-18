@@ -105,12 +105,25 @@ export HOME=/root
 export PATH="$HOME/.local/bin:$PATH"
 source /root/dbus_env.sh
 mkdir -p /root/agy_jobs
-pkill -9 -f "agy -p" || true
 
 ${imageFetch}
 
 echo "${briefB64}" | base64 -d > /root/agy_jobs/task_${safeId}.txt
 BRIEF=$(cat /root/agy_jobs/task_${safeId}.txt)
+
+# The MCP/Blender server behind every build holds exactly ONE global in-memory
+# IFC scene (IfcStore) - there is no per-session isolation on that side at
+# all. Killing whatever build was previously running (the old behavior here)
+# could interrupt it mid tool-call, leaving its partial geometry in the scene
+# for the NEXT build's initialize_project to (sometimes) fail to fully clear -
+# this is what produced real reports of one session's model bleeding into
+# another session's freshly-generated export. flock makes every build wait
+# for the previous one to finish cleanly instead of interrupting it, so the
+# shared scene only ever has one build's geometry in it at a time. The wait
+# is bounded well past agy's own 30m print-timeout so a genuinely wedged
+# build can't block every future request forever.
+exec 200>/root/agy_jobs/build.lock
+flock -w 2100 200 || { echo "BUILD_ERROR:Timed out waiting for another build already in progress to finish - the system is under heavy load, please try again shortly."; exit 1; }
 
 setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
@@ -159,7 +172,7 @@ export async function startAntigravityBuild(brief: string, jobId: string, images
     InstanceIds: [INSTANCE_ID],
     DocumentName: "AWS-RunShellScript",
     Parameters: { commands: [script] },
-    TimeoutSeconds: 2400, // 40 min ceiling - covers the 30m --print-timeout plus heartbeat/export overhead
+    TimeoutSeconds: 4500, // 75 min ceiling - up to 35 min waiting on the build lock, then the 30m --print-timeout, plus export overhead
   }));
   const commandId = res.Command?.CommandId;
   if (!commandId) throw new Error("startAntigravityBuild: SendCommand returned no CommandId");
