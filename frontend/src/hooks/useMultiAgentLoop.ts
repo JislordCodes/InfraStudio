@@ -56,7 +56,7 @@ export async function runAntigravityBuild(
     return res.json();
   };
 
-  pushStep("🤖 Antigravity build starting...");
+  pushStep("🤖 InfraStudio Engine build starting...");
 
   try {
     let bimRes = await callEdge('agent-bim', {
@@ -88,15 +88,15 @@ export async function runAntigravityBuild(
       return { reply: "Build is still running in the background.", steps, mcp_session_id: sessionId };
     }
     if (bimRes.status === 'error') {
-      throw new Error(bimRes.error || 'Antigravity build failed.');
+      throw new Error(bimRes.error || 'Build failed.');
     }
 
-    pushStep("✅ Antigravity build complete.");
-    const reply = "Antigravity build complete. The model is ready.";
+    pushStep("✅ Build complete.");
+    const reply = "Build complete. The model is ready.";
     if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: reply });
     return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId };
   } catch (err: any) {
-    pushStep(`💥 Antigravity build error: ${err.message}`);
+    pushStep(`💥 Build error: ${err.message}`);
     throw err;
   }
 }

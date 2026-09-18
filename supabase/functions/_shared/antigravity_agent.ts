@@ -227,12 +227,12 @@ export async function pollAntigravityBuild(commandId: string): Promise<Antigravi
         };
       }
       const errMatch = out.match(/BUILD_ERROR:([\s\S]*)/);
-      return { done: true, error: errMatch ? errMatch[1].trim().slice(0, 500) : "Antigravity run finished but produced no IFC URL and no error marker." };
+      return { done: true, error: errMatch ? errMatch[1].trim().slice(0, 500) : "Build finished but produced no IFC URL and no error marker." };
     }
 
     if (status === "Failed" || status === "Cancelled" || status === "TimedOut") {
-      const errText = res.StandardErrorContent || out || `SSM command ended with status ${status}`;
-      return { done: true, error: `Antigravity SSM command ${status}: ${errText.slice(0, 500)}` };
+      const errText = res.StandardErrorContent || out || `Build process ended with status ${status}`;
+      return { done: true, error: `Build ${status}: ${errText.slice(0, 500)}` };
     }
 
     // Pending / InProgress / Delayed - SSM gives us nothing usable here (see
@@ -250,17 +250,17 @@ export async function pollAntigravityBuild(commandId: string): Promise<Antigravi
       done: false,
       elementCount,
       progressMessage: elementCount !== undefined
-        ? `Antigravity is building... ${elementCount.toLocaleString()} elements created so far`
-        : "Antigravity build starting...",
+        ? `Building... ${elementCount.toLocaleString()} elements created so far`
+        : "Build starting...",
     };
   } catch (err: any) {
     const msg = String(err?.name || err?.message || err);
     if (msg.includes("InvocationDoesNotExist")) {
       // A freshly-sent command can briefly 404 before it propagates to the instance.
       await new Promise((r) => setTimeout(r, 8000));
-      return { done: false, progressMessage: "Antigravity build starting..." };
+      return { done: false, progressMessage: "Build starting..." };
     }
     await new Promise((r) => setTimeout(r, 8000));
-    return { done: false, progressMessage: `Antigravity status check warning: ${msg.slice(0, 200)}` };
+    return { done: false, progressMessage: `Build status check warning: ${msg.slice(0, 200)}` };
   }
 }

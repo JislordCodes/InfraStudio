@@ -154,6 +154,23 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     e.preventDefault();
     if ((!input.trim() && attachedImages.length === 0) || isLoading) return;
 
+    // Every build call resets the MCP scene from scratch (Antigravity has no
+    // edit mode in this pipeline) - sending a second message into a session
+    // that already produced a model would silently overwrite it with
+    // something unrelated. Block that here instead of losing work quietly.
+    const currentSession = sessions.find(s => s.id === activeSessionId);
+    if (currentSession?.last_ifc_url) {
+      const warnMsg: ChatMessage = {
+        role: 'assistant',
+        content: '⚠️ This project already has a generated model. Building again here would overwrite it. Start a new project (tap "New" in the sidebar) to create something different.',
+      };
+      setMessages(prev => [...prev, warnMsg]);
+      saveMessage(currentSession.id, warnMsg).catch(() => {});
+      setInput('');
+      setExpanded(true);
+      return;
+    }
+
     const userContent = input.trim() || 'Build a model based on the attached reference image(s).';
     const userMsg: ChatMessage = { role: 'user', content: userContent };
     const imagesToUpload = attachedImages;
@@ -377,10 +394,10 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
                 )}
                 <div
                   className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-[10px] sm:text-xs font-medium border border-emerald-500/20 shrink-0"
-                  title="AI Engine: Antigravity (Gemini 3.8 Flash, High Reasoning)"
+                  title="InfraStudio Engine (High Reasoning)"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>🧠 Antigravity</span>
+                  <span>🧠 InfraStudio Engine</span>
                   <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-200 uppercase font-semibold">High</span>
                 </div>
               </div>

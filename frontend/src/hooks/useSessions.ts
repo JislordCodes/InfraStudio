@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { getDeviceId } from '../lib/deviceId';
 
 export interface ChatSession {
   id: string;
@@ -79,6 +80,7 @@ export function useSessions() {
       const { data, error } = await supabase
         .from('ifc_sessions')
         .select('*')
+        .eq('device_id', getDeviceId())
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -101,7 +103,7 @@ export function useSessions() {
     try {
       const { data, error } = await supabase
         .from('ifc_sessions')
-        .insert({ title, mcp_session_id: '' })
+        .insert({ title, mcp_session_id: '', device_id: getDeviceId() })
         .select()
         .single();
 
