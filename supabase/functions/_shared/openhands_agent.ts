@@ -19,7 +19,7 @@
  * existing status:"continue" contract every other action in this file
  * already uses.
  */
-import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "npm:@aws-sdk/client-ssm";
+import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 
 const INSTANCE_ID = "i-006cf1785c4abbb6d";
 const REGION = "us-east-1";

@@ -95586,9 +95586,36 @@ var ssmClient2 = new import_client_ssm2.SSMClient({ region: REGION2 });
 function b642(s3) {
   return typeof Buffer !== "undefined" ? Buffer.from(s3, "utf-8").toString("base64") : btoa(s3);
 }
-function buildScript2(brief, jobId) {
-  const safeId = jobId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "job";
+function safeJobId(jobId) {
+  return jobId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "job";
+}
+function extForUrl(url) {
+  const clean = url.split("?")[0];
+  const match = clean.match(/\.([a-zA-Z0-9]{2,5})$/);
+  return match ? match[1].toLowerCase() : "jpg";
+}
+function refImageDir(jobId) {
+  return `/root/agy_jobs/${safeJobId(jobId)}/images`;
+}
+function refImagePath(jobId, index, url) {
+  return `${refImageDir(jobId)}/ref_${String(index + 1).padStart(2, "0")}.${extForUrl(url)}`;
+}
+function buildImageFetchScript(jobId, images) {
+  if (!images.length) return "";
+  const dir = refImageDir(jobId);
+  const lines = [`mkdir -p ${dir}`];
+  images.forEach((img, i9) => {
+    const path = refImagePath(jobId, i9, img.url);
+    const urlB64 = b642(img.url);
+    lines.push(`curl -sL --max-time 30 -o "${path}" "$(echo ${urlB64} | base64 -d)" || echo "WARN: failed to download reference image ${i9 + 1}"`);
+  });
+  return lines.join("\n");
+}
+function buildScript2(brief, jobId, images = []) {
+  const safeId = safeJobId(jobId);
   const briefB64 = b642(brief);
+  const imageFetch = buildImageFetchScript(jobId, images);
+  const addDirFlag = images.length ? `--add-dir ${refImageDir(jobId)}` : "";
   const inner = `#!/bin/bash
 export HOME=/root
 export PATH="$HOME/.local/bin:$PATH"
@@ -95596,10 +95623,12 @@ source /root/dbus_env.sh
 mkdir -p /root/agy_jobs
 pkill -9 -f "agy -p" || true
 
+${imageFetch}
+
 echo "${briefB64}" | base64 -d > /root/agy_jobs/task_${safeId}.txt
 BRIEF=$(cat /root/agy_jobs/task_${safeId}.txt)
 
-setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
 
 # Nothing needs to run alongside agy here - live progress is read by the
@@ -95638,9 +95667,9 @@ else:
 `;
   return `echo ${b642(inner)} | base64 -d > /tmp/run_agy_${safeId}.sh && bash /tmp/run_agy_${safeId}.sh`;
 }
-async function startAntigravityBuild(brief, jobId) {
+async function startAntigravityBuild(brief, jobId, images = []) {
   if (!brief || !brief.trim()) throw new Error("startAntigravityBuild: empty brief");
-  const script = buildScript2(brief, jobId);
+  const script = buildScript2(brief, jobId, images);
   const res = await ssmClient2.send(new import_client_ssm2.SendCommandCommand({
     InstanceIds: [INSTANCE_ID2],
     DocumentName: "AWS-RunShellScript",
@@ -95688,27 +95717,27 @@ async function pollAntigravityBuild(commandId) {
         };
       }
       const errMatch = out.match(/BUILD_ERROR:([\s\S]*)/);
-      return { done: true, error: errMatch ? errMatch[1].trim().slice(0, 500) : "Antigravity run finished but produced no IFC URL and no error marker." };
+      return { done: true, error: errMatch ? errMatch[1].trim().slice(0, 500) : "Build finished but produced no IFC URL and no error marker." };
     }
     if (status === "Failed" || status === "Cancelled" || status === "TimedOut") {
-      const errText = res.StandardErrorContent || out || `SSM command ended with status ${status}`;
-      return { done: true, error: `Antigravity SSM command ${status}: ${errText.slice(0, 500)}` };
+      const errText = res.StandardErrorContent || out || `Build process ended with status ${status}`;
+      return { done: true, error: `Build ${status}: ${errText.slice(0, 500)}` };
     }
     const elementCount = await fetchLiveElementCount();
     await new Promise((r9) => setTimeout(r9, 8e3));
     return {
       done: false,
       elementCount,
-      progressMessage: elementCount !== void 0 ? `Antigravity is building... ${elementCount.toLocaleString()} elements created so far` : "Antigravity build starting..."
+      progressMessage: elementCount !== void 0 ? `Building... ${elementCount.toLocaleString()} elements created so far` : "Build starting..."
     };
   } catch (err) {
     const msg = String(err?.name || err?.message || err);
     if (msg.includes("InvocationDoesNotExist")) {
       await new Promise((r9) => setTimeout(r9, 8e3));
-      return { done: false, progressMessage: "Antigravity build starting..." };
+      return { done: false, progressMessage: "Build starting..." };
     }
     await new Promise((r9) => setTimeout(r9, 8e3));
-    return { done: false, progressMessage: `Antigravity status check warning: ${msg.slice(0, 200)}` };
+    return { done: false, progressMessage: `Build status check warning: ${msg.slice(0, 200)}` };
   }
 }
 
@@ -96294,23 +96323,37 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
         return result.error ? { status: "error", error: result.error, mcpSessionId: continuation2.jobId } : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId };
       }
       const userBrief = payload3.plan?.client_requirements || payload3.plan?.prompt || payload3.plan?.structure_name || "";
-      const brief = `IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
+      const jobId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `job-${Date.now()}`;
+      const images = Array.isArray(payload3.plan?.images) ? payload3.plan.images.filter((img) => img && typeof img.url === "string" && img.url.trim()) : [];
+      const imageSection = images.length > 0 ? `
+
+IMPORTANT reference images provided (read each one with your file-reading tool BEFORE designing anything - they are ground truth for whatever they depict, not loose inspiration):
+${images.map((img, i9) => `- ${refImagePath(jobId, i9, img.url)} \u2014 ${img.caption?.trim() || "reference image: inspect its layout/form/style and use it to inform the design"}`).join("\n")}
+If an image is a floor plan or schematic, replicate its actual room layout, wall positions, and proportions rather than inventing a different layout. If it is a sketch, aerial view, or elevation, match the massing, style, and site orientation it shows.` : "";
+      const brief = `You are acting as the complete pipeline for this build, not just an executor: interpreter (figure out what is really being asked), architect (invent every spec that isn't given), executor (build it via real tool calls), and reviewer (check your own result before exporting). No other agent will look at this before export - own every decision yourself.
+
+IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
+
+IMPORTANT architect rule: if the request below is vague or incomplete (missing dimensions, materials, style, room program, structural system, etc.), do NOT ask the user for clarification and do NOT build a minimal placeholder while you wait - you have no way to ask, so invent complete, coherent, real-world-plausible specs yourself, exactly as a senior architect/engineer would when only given a one-line client brief. Decide the site/footprint, floor count and heights, full room program, structural system, facade materials, roof form, and styling direction before writing any geometry code, and commit to that decision. A short prompt is not permission to build something small or generic - it just means more of the design responsibility is yours.
 
 IMPORTANT quality bar: every element you build must have a real, appropriate material/surface style applied (via create_surface_style/apply_style_to_object or equivalent) before you export - realistic colors/finishes matching what each element actually is (concrete, steel, timber, glass, etc.), not bare unstyled geometry. This applies even if the user's request doesn't explicitly mention materials. No element should be left unstyled.
+
+IMPORTANT complexity bar (non-negotiable, applies to every build regardless of how the request was phrased): the final model must be genuinely complex and sophisticated - target at least 1,000+ real elements and an exported IFC file size in the multiple-megabyte range. Achieve this honestly, through real architectural/structural detail (individual structural members, window/door openings with frames, railings, stairs, roof detail, facade articulation, secondary structure) - never by padding with meaningless duplicate or degenerate geometry. If a request is small or vague, that is exactly when you should be adding the MOST design detail yourself, not less.
 
 IMPORTANT design-accuracy rule: you have no memory of this project and no prior context beyond this message - do not default to a generic or approximate shape just because a request is short. Before building, identify the REAL engineering/architectural form of whatever is being asked for, and commit to specific, correct structural details before writing any geometry code. If a brief names a specific structure type, treat getting that type's real form right as more important than speed - do not substitute a different (even superficially similar) real-world structure type than the one named.
 
 IMPORTANT execution constraint: if you use execute_ifc_code_tool, each call has a hard 60-second server-side execution timeout - split large builds into multiple calls (e.g. one per structural section/chunk of a few hundred elements) rather than one giant call. When assigning elements to the building storey, do NOT call spatial.assign_container once per element (this is O(n^2) and will time out as element count grows) - collect all new elements created within a single call into a list and call spatial.assign_container ONCE with the full list at the end of that call.
 
+IMPORTANT reviewer rule (before export): once the shell/structure is built, call get_scene_info yourself and check it against the two bars above - is every element styled, and does the element count/complexity actually meet the 1,000+ element / multi-MB target? If not, go back and add the missing detail (more structural members, facade articulation, interior detail, materials) before exporting. Only call export_ifc once you would sign off on the result as genuinely complex and fully styled.
+
 First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
 
-${userBrief}
+${userBrief}${imageSection}
 
 When finished, call get_scene_info to confirm the total element count, then call export_ifc.`;
-      const jobId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `job-${Date.now()}`;
-      const commandId = await startAntigravityBuild(brief, jobId);
+      const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
-      return { status: "continue", continuation: newContinuation, progress: "Antigravity build started...", mcpSessionId: jobId };
+      return { status: "continue", continuation: newContinuation, progress: "Build started...", mcpSessionId: jobId };
     }
     if (useOpenHands && !payload3.plan?.is_edit) {
       const deadline2 = Number(payload3._deadline) || 0;

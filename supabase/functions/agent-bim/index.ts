@@ -734,7 +734,7 @@ ${userBrief}${imageSection}
 When finished, call get_scene_info to confirm the total element count, then call export_ifc.`;
       const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
-      return { status: "continue", continuation: newContinuation, progress: "Antigravity build started...", mcpSessionId: jobId };
+      return { status: "continue", continuation: newContinuation, progress: "Build started...", mcpSessionId: jobId };
     }
 
     if (useOpenHands && !payload.plan?.is_edit) {

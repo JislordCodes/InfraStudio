@@ -19,7 +19,7 @@
  * frontend's continuation loop already renders whatever `progress` string
  * comes back on each pass.
  */
-import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "npm:@aws-sdk/client-ssm";
+import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 import { getMcpUrl, extractText } from "./shared.ts";
 
 const INSTANCE_ID = "i-006cf1785c4abbb6d";

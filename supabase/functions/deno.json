@@ -1,0 +1,5 @@
+{
+  "imports": {
+    "@aws-sdk/client-ssm": "npm:@aws-sdk/client-ssm"
+  }
+}
