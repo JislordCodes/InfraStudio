@@ -9,6 +9,67 @@ export interface IfcViewerHandle {
   loadIfcFromUrl: (url: string) => Promise<void>;
 }
 
+/** Near/far planes on BOTH cameras — an ortho camera needs a negative near to keep
+ *  geometry behind the target visible, so it can't share the perspective values. */
+function applyClipRange(camera: OBC.OrthoPerspectiveCamera, near: number, far: number) {
+  const persp = camera.threePersp;
+  if (persp) {
+    persp.near = near;
+    persp.far = far;
+    persp.updateProjectionMatrix();
+  }
+  const ortho = camera.threeOrtho;
+  if (ortho) {
+    ortho.near = -far;
+    ortho.far = far;
+    ortho.updateProjectionMatrix();
+  }
+}
+
+/** Rescale travel limits, pan speed and clipping to the model actually loaded, so the
+ *  same controls work for a handrail detail and for a 2.4 km city. */
+function tuneNavigationToModel(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.Box3) {
+  const span = bbox.getSize(new THREE.Vector3()).length() || 60;
+  const controls = camera.controls;
+  controls.minDistance = Math.max(0.05, span / 100000);
+  controls.maxDistance = Math.max(5000, span * 20);
+  // Pan (truck) covers a consistent fraction of the model per drag instead of a
+  // fixed number of metres — the reason panning across a city felt stuck.
+  controls.truckSpeed = Math.max(2, span / 60);
+  applyClipRange(camera, Math.max(0.05, span / 50000), Math.max(10000, span * 40));
+}
+
+/** Frame a box from a three-quarter aerial angle at a distance derived from its size.
+ *  Done explicitly rather than via fitToBox, which reuses the current view direction
+ *  and leaves wide sites viewed edge-on from near ground level. */
+function frameBox(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.Box3, transition = true) {
+  const center = new THREE.Vector3();
+  bbox.getCenter(center);
+  const size = bbox.getSize(new THREE.Vector3());
+  // Distance that comfortably fits the widest horizontal extent in view.
+  const reach = Math.max(size.x, size.z, size.y) || 60;
+  const d = reach * 0.25;
+  camera.controls.setLookAt(
+    center.x + d * 0.75, center.y + d * 0.60, center.z + d * 0.75,
+    center.x, center.y, center.z,
+    transition,
+  );
+}
+
+/** One zoom click moves a PROPORTION of the current viewing distance, so the step
+ *  stays useful at every scale. A fixed step is imperceptible on a large site. */
+function zoomByStep(camera: OBC.OrthoPerspectiveCamera | null, direction: 1 | -1) {
+  if (!camera) return;
+  const controls = camera.controls;
+  if (camera.projection.current === 'Orthographic') {
+    const zoom = camera.threeOrtho?.zoom ?? 1;
+    controls.zoom(direction > 0 ? zoom * 0.4 : -zoom * 0.3, true);
+    return;
+  }
+  const distance = controls.distance || 10;
+  controls.dolly(direction > 0 ? distance * 0.35 : -distance * 0.5, true);
+}
+
 export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -18,6 +79,23 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const [initError, setInitError] = useState<string | null>(null);
   const modelBboxRef = useRef<THREE.Box3 | null>(null);
   const cameraRef = useRef<OBC.OrthoPerspectiveCamera | null>(null);
+  // Fragments render through their own streaming/LOD pipeline, so the THREE object
+  // graph holds no measurable meshes — THREE.Box3().setFromObject() returns EMPTY.
+  // The model itself exposes the real bounds, so keep the models and ask them.
+  const modelsRef = useRef<{ box?: THREE.Box3; object?: THREE.Object3D }[]>([]);
+
+  /** Live bounds of everything loaded. Falls back to the object graph if needed. */
+  const currentModelBbox = (): THREE.Box3 | null => {
+    const box = new THREE.Box3();
+    for (const model of modelsRef.current) {
+      const b = model?.box;
+      if (b && !b.isEmpty()) box.union(b);
+      else if (model?.object) box.union(new THREE.Box3().setFromObject(model.object, true));
+    }
+    if (box.isEmpty()) return modelBboxRef.current;
+    modelBboxRef.current = box;
+    return box;
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -50,6 +128,13 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
     // Don't dolly toward cursor — keeps zoom constant while orbiting
     world.camera.controls.dollyToCursor = false;
+
+    // Baseline navigation range. The defaults are tuned for a single building;
+    // a city-scale model needs orders of magnitude more travel, and a far plane
+    // that doesn't clip the whole scene away as soon as you pull back.
+    world.camera.controls.minDistance = 0.1;
+    world.camera.controls.maxDistance = 100000;
+    applyClipRange(world.camera, 0.1, 200000);
 
     // ── 3. Grid ──────────────────────────────────────────────────────────────
     components.get(OBC.Grids).create(world);
@@ -90,37 +175,56 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         if (isMounted) fragments.core.update();
       });
 
+      // Streaming only advances while the camera is moving, so a view that ends far
+      // from where it started settles with most geometry still unloaded. Forcing a
+      // refresh once motion stops fills in the rest — this is what makes a big
+      // zoom-out or pan actually show the model instead of an empty site.
+      world.camera.controls.addEventListener('rest', () => {
+        if (isMounted) fragments.core.update(true);
+      });
+
       // When a model is loaded → add it to the scene + center the camera orbit on it
       fragments.list.onItemSet.add(({ value: model }) => {
         console.log('FragmentsModel received in onItemSet, adding to scene...');
         model.useCamera(world.camera!.three);
         world.scene!.three.add(model.object);
+        if (!modelsRef.current.includes(model)) modelsRef.current.push(model);
+        // By default distant items are culled/LOD'd by screen size, which leaves a
+        // city-scale model looking empty when you pull back far enough to see it all.
+        try {
+          model.graphicsQuality = 1;
+          model.setLodMode?.(2 /* LodMode.ALL_GEOMETRY */);
+        } catch (e) {
+          console.warn('Could not raise LOD mode:', e);
+        }
         fragments.core.update(true);
         console.log('FragmentsModel added to scene and updated core.');
 
-        // --- Center camera on loaded model ---
-        const bbox = new THREE.Box3();
-        bbox.setFromObject(model.object, true);
-        console.log('Model Bounding Box (computed):', bbox.isEmpty() ? 'EMPTY' : JSON.stringify(bbox));
-
-        if (!bbox.isEmpty()) {
-          const center = new THREE.Vector3();
-          bbox.getCenter(center);
-          
-          modelBboxRef.current = bbox;
-
-          if (isMounted && world.camera) {
-            world.camera.controls.setTarget(center.x, center.y, center.z, false);
-            world.camera.controls.fitToBox(bbox, true, {
-              paddingTop: 0.1, paddingBottom: 0.1, paddingLeft: 0.1, paddingRight: 0.1,
-            });
+        // --- Frame the model once its geometry has actually streamed in ---
+        // model.box is the authoritative extent; it can still be empty on the first
+        // tick, so retry briefly rather than falling back to a fixed near camera.
+        const frameModel = (attempt = 0) => {
+          if (!isMounted || !world.camera) return;
+          const bbox = currentModelBbox();
+          if (!bbox || bbox.isEmpty()) {
+            if (attempt < 20) {
+              setTimeout(() => frameModel(attempt + 1), 250);
+            } else if (world.camera) {
+              console.warn('Model bounds unavailable — using fallback camera position');
+              world.camera.controls.setLookAt(30, 30, 30, 0, 0, 0, true);
+            }
+            return;
           }
-        } else {
-          console.warn('Manual bbox still empty — using scene fallback camera position');
-          if (isMounted && world.camera) {
-            world.camera.controls.setLookAt(30, 30, 30, 0, 0, 0, true);
-          }
-        }
+          const size = bbox.getSize(new THREE.Vector3());
+          console.log(`Model bounds: ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m`);
+          tuneNavigationToModel(world.camera, bbox);
+          frameBox(world.camera, bbox, true);
+          // A large camera jump outruns the streamer's incremental updates, so force
+          // a refresh once the move has settled or the site renders empty.
+          window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, 700);
+          window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, 1800);
+        };
+        frameModel();
       });
 
       // Remove z-fighting on new materials
@@ -243,16 +347,16 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
       {/* Action Toolbar - Vertical, right side */}
       <div className="absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 bg-neutral-900/90 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/10 shadow-lg pointer-events-auto">
-        <button 
-          onClick={() => cameraRef.current?.controls.dolly(5, true)}
+        <button
+          onClick={() => zoomByStep(cameraRef.current, 1)}
           className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
           title="Zoom In"
         >
           <ZoomIn size={18} strokeWidth={2.5} />
         </button>
-        
-        <button 
-          onClick={() => cameraRef.current?.controls.dolly(-5, true)}
+
+        <button
+          onClick={() => zoomByStep(cameraRef.current, -1)}
           className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
           title="Zoom Out"
         >
@@ -263,10 +367,12 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
         <button 
           onClick={() => {
-            if (cameraRef.current && modelBboxRef.current) {
-              cameraRef.current.controls.fitToBox(modelBboxRef.current, true, {
-                paddingTop: 0.1, paddingBottom: 0.1, paddingLeft: 0.1, paddingRight: 0.1
-              });
+            const bbox = currentModelBbox();
+            if (cameraRef.current && bbox) {
+              // Re-tune first: a streamed-in model can be far bigger than it was at
+              // load time, and the travel limits have to grow with it.
+              tuneNavigationToModel(cameraRef.current, bbox);
+              frameBox(cameraRef.current, bbox, true);
             }
           }}
           className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
@@ -277,12 +383,17 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
         <button 
           onClick={() => {
-            if (cameraRef.current && modelBboxRef.current) {
+            const bbox = currentModelBbox();
+            if (cameraRef.current && bbox) {
               const center = new THREE.Vector3();
-              modelBboxRef.current.getCenter(center);
+              bbox.getCenter(center);
+              // Stand off by a fraction of the model, not a fixed 20 m — on a city
+              // that put the camera underground in the middle of the site.
+              const span = bbox.getSize(new THREE.Vector3()).length() || 60;
+              const d = span * 0.55;
               cameraRef.current.controls.setLookAt(
-                center.x + 20, center.y + 20, center.z + 20, 
-                center.x, center.y, center.z, 
+                center.x + d, center.y + d * 0.8, center.z + d,
+                center.x, center.y, center.z,
                 true
               );
             }
