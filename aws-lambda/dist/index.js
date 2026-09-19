@@ -95654,8 +95654,8 @@ AGY_PID=$!
 # build was already done anyway.
 wait $AGY_PID
 
-python3 -c "
-import json, re
+cat > /root/agy_jobs/parse_${safeId}.py <<'PYEOF'
+import json, re, subprocess, time
 with open('/root/agy_jobs/${safeId}.log') as f:
     content = f.read()
 try:
@@ -95668,15 +95668,30 @@ url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
 size_match = re.search(r'([\\d,]+)\\s*bytes', resp)
 count_match = re.search(r'[Tt]otal[^:]*:\\s*\\**\\s*([\\d,]+)', resp)
 if url_match:
-    url = url_match.group(0).rstrip(').,\\"\\'')
-    print(f'IFC_URL:{url}')
+    url = url_match.group(0).rstrip(').,"\\'')
+    # The MCP server exports every build to ONE shared S3 key (its path is
+    # md5 of a constant session id), so a saved link would show whichever
+    # build exported last - one user's model replacing another's. Copy this
+    # build's file to a key unique to this job while still holding the build
+    # lock (nobody else can have exported in between), and hand back that
+    # link instead. Falls back to the shared link only if the copy fails.
+    final_url = url
+    m = re.match(r'https://([^.]+)\\.s3[.\\w-]*\\.amazonaws\\.com/([^?]+)', url)
+    if m:
+        bucket, shared_key = m.group(1), m.group(2)
+        unique_key = 'models/${safeId}/model.ifc'
+        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', 'us-east-1'], capture_output=True, text=True)
+        if r.returncode == 0:
+            final_url = f'https://{bucket}.s3.us-east-1.amazonaws.com/{unique_key}?t={int(time.time())}'
+    print(f'IFC_URL:{final_url}')
     if size_match:
-        print(f'FILE_SIZE:{size_match.group(1).replace(\\",\\", \\"\\")}')
+        print(f'FILE_SIZE:{size_match.group(1).replace(",", "")}')
     if count_match:
-        print(f'ELEMENT_COUNT:{count_match.group(1).replace(\\",\\", \\"\\")}')
+        print(f'ELEMENT_COUNT:{count_match.group(1).replace(",", "")}')
 else:
     print(f'BUILD_ERROR:{resp[-500:]}')
-"
+PYEOF
+python3 /root/agy_jobs/parse_${safeId}.py
 `;
   return `echo ${b642(inner)} | base64 -d > /tmp/run_agy_${safeId}.sh && bash /tmp/run_agy_${safeId}.sh`;
 }
