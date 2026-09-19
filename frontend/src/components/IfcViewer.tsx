@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 're
 import * as OBC from '@thatopen/components';
 import * as THREE from 'three';
 import Stats from 'stats.js';
-import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon } from 'lucide-react';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -70,6 +70,35 @@ function zoomByStep(camera: OBC.OrthoPerspectiveCamera | null, direction: 1 | -1
   controls.dolly(direction > 0 ? distance * 0.35 : -distance * 0.5, true);
 }
 
+type SceneTheme = 'dark' | 'light';
+const THEME_KEY = 'infrastudio_scene_theme';
+const THEMES: Record<SceneTheme, { bg: string; grid: string; panel: string; btn: string; text: string; divider: string }> = {
+  dark: {
+    bg: '#171717',
+    grid: '#666666',
+    panel: 'bg-neutral-900/90 border-white/10',
+    btn: 'text-white/80 hover:text-white bg-white/5',
+    text: 'text-white',
+    divider: 'bg-white/15',
+  },
+  light: {
+    bg: '#eef0f3',
+    grid: '#b4bac2',
+    panel: 'bg-white/90 border-black/10',
+    btn: 'text-neutral-700 hover:text-white bg-black/5',
+    text: 'text-neutral-800',
+    divider: 'bg-black/15',
+  },
+};
+
+function loadTheme(): SceneTheme {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
 export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -77,6 +106,9 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const initPromiseRef = useRef<Promise<void> | null>(null);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<SceneTheme>(loadTheme);
+  const themeRef = useRef<SceneTheme>(theme);
+  const gridRef = useRef<OBC.SimpleGrid | null>(null);
   const modelBboxRef = useRef<THREE.Box3 | null>(null);
   const cameraRef = useRef<OBC.OrthoPerspectiveCamera | null>(null);
   // Fragments render through their own streaming/LOD pipeline, so the THREE object
@@ -96,6 +128,19 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     modelBboxRef.current = box;
     return box;
   };
+
+  // The scene background is transparent, so the theme is the container colour plus the
+  // grid line colour. Persisted per device; storage can throw in private windows.
+  useEffect(() => {
+    themeRef.current = theme;
+    const grid = gridRef.current;
+    if (grid) grid.config.color = new THREE.Color(THEMES[theme].grid);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* storage unavailable — theme just won't persist */
+    }
+  }, [theme]);
 
   useEffect(() => {
     let isMounted = true;
@@ -137,7 +182,9 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     applyClipRange(world.camera, 0.1, 200000);
 
     // ── 3. Grid ──────────────────────────────────────────────────────────────
-    components.get(OBC.Grids).create(world);
+    const grid = components.get(OBC.Grids).create(world);
+    gridRef.current = grid;
+    grid.config.color = new THREE.Color(THEMES[themeRef.current].grid);
 
     // ── 4. Stats panel ───────────────────────────────────────────────────────
     const stats = new Stats();
@@ -319,7 +366,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   }));
 
   return (
-    <div className="relative w-full h-full bg-neutral-900 overflow-hidden">
+    <div
+      className="relative w-full h-full overflow-hidden transition-colors duration-300"
+      style={{ backgroundColor: THEMES[theme].bg }}
+    >
       <div
         ref={containerRef}
         className="absolute inset-0 w-full h-full"
@@ -334,7 +384,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       )}
 
       {/* Engine status badge */}
-      <div className="absolute top-4 right-4 z-10 text-white font-mono text-xs pointer-events-none bg-black/50 px-2 py-1 rounded">
+      <div className="absolute top-4 right-4 z-10 text-white font-mono text-xs pointer-events-none bg-black/60 px-2 py-1 rounded">
         <div className={isLoaded ? 'opacity-50' : 'text-yellow-400'}>
           {isLoaded ? 'Engine Ready' : 'Initializing Engine...'}
         </div>
@@ -346,10 +396,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       </div>
 
       {/* Action Toolbar - Vertical, right side */}
-      <div className="absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 bg-neutral-900/90 backdrop-blur-xl rounded-xl sm:rounded-2xl border border-white/10 shadow-lg pointer-events-auto">
+      <div className={`absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 backdrop-blur-xl rounded-xl sm:rounded-2xl border shadow-lg pointer-events-auto ${THEMES[theme].panel}`}>
         <button
           onClick={() => zoomByStep(cameraRef.current, 1)}
-          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Zoom In"
         >
           <ZoomIn size={18} strokeWidth={2.5} />
@@ -357,13 +407,13 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
         <button
           onClick={() => zoomByStep(cameraRef.current, -1)}
-          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Zoom Out"
         >
           <ZoomOut size={18} strokeWidth={2.5} />
         </button>
 
-        <div className="h-px w-6 bg-white/15 my-0.5 rounded-full" />
+        <div className={`h-px w-6 my-0.5 rounded-full ${THEMES[theme].divider}`} />
 
         <button 
           onClick={() => {
@@ -375,7 +425,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
               frameBox(cameraRef.current, bbox, true);
             }
           }}
-          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Fit to View"
         >
           <Maximize size={18} strokeWidth={2.5} />
@@ -398,13 +448,13 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
               );
             }
           }}
-          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Reset Orbit Angle"
         >
           <RotateCcw size={18} strokeWidth={2.5} />
         </button>
 
-        <div className="h-px w-6 bg-white/15 my-0.5 rounded-full" />
+        <div className={`h-px w-6 my-0.5 rounded-full ${THEMES[theme].divider}`} />
 
         <button 
           onClick={() => {
@@ -417,10 +467,18 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
                }
             }
           }}
-          className="p-2 text-white/80 hover:text-white hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center bg-white/5 active:scale-90"
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Toggle Perspective / Orthographic"
         >
           <Box size={18} strokeWidth={2.5} />
+        </button>
+
+        <button
+          onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
+          title={theme === 'dark' ? 'Switch to light scene' : 'Switch to dark scene'}
+        >
+          {theme === 'dark' ? <Sun size={18} strokeWidth={2.5} /> : <Moon size={18} strokeWidth={2.5} />}
         </button>
       </div>
     </div>
