@@ -58,32 +58,69 @@ function frameBox(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.Box3, transiti
 
 /** One zoom click moves a PROPORTION of the current viewing distance, so the step
  *  stays useful at every scale. A fixed step is imperceptible on a large site. */
+/** Per-click zoom factor. ~1.15 = about 13-15 % of the current distance per click. */
+const ZOOM_STEP = 1.15;
+
 function zoomByStep(camera: OBC.OrthoPerspectiveCamera | null, direction: 1 | -1) {
   if (!camera) return;
   const controls = camera.controls;
   if (camera.projection.current === 'Orthographic') {
     const zoom = camera.threeOrtho?.zoom ?? 1;
-    controls.zoom(direction > 0 ? zoom * 0.4 : -zoom * 0.3, true);
+    controls.zoom(direction > 0 ? zoom * (ZOOM_STEP - 1) : -zoom * (1 - 1 / ZOOM_STEP), true);
     return;
   }
+  // dollyTo (absolute) rather than dolly (relative): repeated clicks while a move is
+  // still easing can't stack into one big jump, and in/out are exact inverses.
   const distance = controls.distance || 10;
-  controls.dolly(direction > 0 ? distance * 0.35 : -distance * 0.5, true);
+  controls.dollyTo(direction > 0 ? distance / ZOOM_STEP : distance * ZOOM_STEP, true);
+}
+
+/** Size the ground grid to the model so it's visible at any scale, and rest it on the
+ *  model's lowest point when the model floats above ground level. */
+function fitGridToModel(grid: OBC.SimpleGrid | null, bbox: THREE.Box3) {
+  if (!grid) return;
+  try {
+    const size = bbox.getSize(new THREE.Vector3());
+    const span = Math.max(size.x, size.z, 1);
+    const cell = Math.min(1000, Math.max(0.5, Math.pow(10, Math.floor(Math.log10(span / 40)))));
+    grid.config.primarySize = cell;
+    grid.config.secondarySize = cell * 10;
+    grid.config.distance = Math.max(500, span * 10);
+    grid.three.position.y = (bbox.min.y > 0.5 ? bbox.min.y : 0) - 0.03;
+  } catch (e) {
+    console.warn('Could not fit grid to model:', e);
+  }
+}
+
+/** Keep the depth range tight around what is actually in view. A fixed 0.05 m .. 36 km
+ *  range leaves only tens of centimetres of depth resolution a few hundred metres out,
+ *  so anything standing on a floor z-fights and looks sunk into it. */
+function updateDynamicClip(camera: OBC.OrthoPerspectiveCamera, span: number) {
+  const persp = camera.threePersp;
+  if (!persp || camera.projection.current !== 'Perspective') return;
+  const dist = Math.max(camera.controls.distance, 0.5);
+  const near = Math.min(Math.max(dist * 0.01, 0.05), Math.max(span, 1));
+  const far = dist + span * 1.5 + 50;
+  if (Math.abs(near - persp.near) / persp.near < 0.02 && Math.abs(far - persp.far) / persp.far < 0.02) return;
+  persp.near = near;
+  persp.far = far;
+  persp.updateProjectionMatrix();
 }
 
 type SceneTheme = 'dark' | 'light';
 const THEME_KEY = 'infrastudio_scene_theme';
 const THEMES: Record<SceneTheme, { bg: string; grid: string; panel: string; btn: string; text: string; divider: string }> = {
   dark: {
-    bg: '#171717',
-    grid: '#666666',
+    bg: 'linear-gradient(180deg, #47546a 0%, #2b3342 45%, #1a202a 100%)',
+    grid: '#a3b0c4',
     panel: 'bg-neutral-900/90 border-white/10',
     btn: 'text-white/80 hover:text-white bg-white/5',
     text: 'text-white',
     divider: 'bg-white/15',
   },
   light: {
-    bg: '#eef0f3',
-    grid: '#b4bac2',
+    bg: 'linear-gradient(180deg, #fafbfd 0%, #e6eaf0 100%)',
+    grid: '#8d97a6',
     panel: 'bg-white/90 border-black/10',
     btn: 'text-neutral-700 hover:text-white bg-black/5',
     text: 'text-neutral-800',
@@ -134,7 +171,13 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   useEffect(() => {
     themeRef.current = theme;
     const grid = gridRef.current;
-    if (grid) grid.config.color = new THREE.Color(THEMES[theme].grid);
+    if (grid) {
+      try {
+        grid.config.color = new THREE.Color(THEMES[theme].grid);
+      } catch {
+        gridRef.current = null; // grid belongs to a disposed world (remount / hot reload)
+      }
+    }
     try {
       localStorage.setItem(THEME_KEY, theme);
     } catch {
@@ -185,6 +228,11 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     const grid = components.get(OBC.Grids).create(world);
     gridRef.current = grid;
     grid.config.color = new THREE.Color(THEMES[themeRef.current].grid);
+    grid.config.primarySize = 1;
+    grid.config.secondarySize = 10;
+
+    // Sky/ground fill so faces turned away from the sun aren't crushed to black.
+    world.scene.three.add(new THREE.HemisphereLight(0xdfe8ff, 0x4a5264, 0.9));
 
     // ── 4. Stats panel ───────────────────────────────────────────────────────
     const stats = new Stats();
@@ -219,7 +267,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
       // Camera update loop
       world.camera.controls.addEventListener('update', () => {
-        if (isMounted) fragments.core.update();
+        if (!isMounted) return;
+        const b = currentModelBbox();
+        updateDynamicClip(world.camera!, b ? b.getSize(new THREE.Vector3()).length() : 100);
+        fragments.core.update();
       });
 
       // Streaming only advances while the camera is moving, so a view that ends far
@@ -265,6 +316,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
           const size = bbox.getSize(new THREE.Vector3());
           console.log(`Model bounds: ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m`);
           tuneNavigationToModel(world.camera, bbox);
+          fitGridToModel(gridRef.current, bbox);
           frameBox(world.camera, bbox, true);
           // A large camera jump outruns the streamer's incremental updates, so force
           // a refresh once the move has settled or the site renders empty.
@@ -274,15 +326,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         frameModel();
       });
 
-      // Remove z-fighting on new materials
-      fragments.core.models.materials.list.onItemSet.add(({ value: material }) => {
-        if (!isMounted) return;
-        if (!('isLodMaterial' in material && material.isLodMaterial)) {
-          material.polygonOffset = true;
-          material.polygonOffsetUnits = 1;
-          material.polygonOffsetFactor = Math.random();
-        }
-      });
+      // Deliberately no per-material polygonOffset. It used to be randomised
+      // (Math.random()) to hide z-fighting, which shifted surfaces by arbitrary depth
+      // amounts so objects standing on a floor could lose to it and look sunk in.
+      // Depth precision is handled by updateDynamicClip() instead.
 
       if (!isMounted) return;
 
@@ -301,6 +348,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
     return () => {
       isMounted = false;
+      gridRef.current = null;
       resizeObserver.disconnect();
       components.dispose();
       stats.dom.remove();
@@ -368,7 +416,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   return (
     <div
       className="relative w-full h-full overflow-hidden transition-colors duration-300"
-      style={{ backgroundColor: THEMES[theme].bg }}
+      style={{ background: THEMES[theme].bg }}
     >
       <div
         ref={containerRef}
@@ -422,6 +470,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
               // Re-tune first: a streamed-in model can be far bigger than it was at
               // load time, and the travel limits have to grow with it.
               tuneNavigationToModel(cameraRef.current, bbox);
+              fitGridToModel(gridRef.current, bbox);
               frameBox(cameraRef.current, bbox, true);
             }
           }}
