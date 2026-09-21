@@ -32,7 +32,7 @@ function tuneNavigationToModel(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.B
   const span = bbox.getSize(new THREE.Vector3()).length() || 60;
   const controls = camera.controls;
   controls.minDistance = Math.max(0.05, span / 100000);
-  controls.maxDistance = Math.max(5000, span * 20);
+  controls.maxDistance = Infinity;
   // Pan (truck) covers a consistent fraction of the model per drag instead of a
   // fixed number of metres — the reason panning across a city felt stuck.
   controls.truckSpeed = Math.max(2, span / 60);
@@ -48,7 +48,11 @@ function frameBox(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.Box3, transiti
   const size = bbox.getSize(new THREE.Vector3());
   // Distance that comfortably fits the widest horizontal extent in view.
   const reach = Math.max(size.x, size.z, size.y) || 60;
-  const d = reach * 0.25;
+  // Big sites must be framed tight (the fragment streamer leaves far geometry unloaded),
+  // but that same factor puts the camera INSIDE a small building. Blend from a full
+  // standoff for building-sized models down to the tight one for city-sized models.
+  const t = Math.min(Math.max((reach - 150) / 450, 0), 1);
+  const d = reach * (1.0 - 0.75 * t);
   camera.controls.setLookAt(
     center.x + d * 0.75, center.y + d * 0.60, center.z + d * 0.75,
     center.x, center.y, center.z,
@@ -61,7 +65,7 @@ function frameBox(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.Box3, transiti
 /** Per-click zoom factor. ~1.15 = about 13-15 % of the current distance per click. */
 const ZOOM_STEP = 1.15;
 
-function zoomByStep(camera: OBC.OrthoPerspectiveCamera | null, direction: 1 | -1) {
+function zoomByStep(camera: OBC.OrthoPerspectiveCamera | null, direction: 1 | -1, span = 60) {
   if (!camera) return;
   const controls = camera.controls;
   if (camera.projection.current === 'Orthographic') {
@@ -72,12 +76,53 @@ function zoomByStep(camera: OBC.OrthoPerspectiveCamera | null, direction: 1 | -1
   // dollyTo (absolute) rather than dolly (relative): repeated clicks while a move is
   // still easing can't stack into one big jump, and in/out are exact inverses.
   const distance = controls.distance || 10;
-  controls.dollyTo(direction > 0 ? distance / ZOOM_STEP : distance * ZOOM_STEP, true);
+  // Zooming toward a fixed orbit target can only ever approach it (each click covers a
+  // fraction of what's left), so you could never get INTO a building. Once the camera is
+  // as close to its target as it should get, keep going by pushing the target forward
+  // through the scene at a walking-pace step instead.
+  const nearLimit = Math.min(Math.max(span / 500, 0.5), 4);
+  const flyStep = nearLimit * 0.6;
+  if (direction > 0) {
+    if (distance <= nearLimit * 1.01) {
+      controls.dollyInFixed(flyStep, true);
+    } else {
+      controls.dollyTo(Math.max(nearLimit, distance / ZOOM_STEP), true);
+    }
+  } else {
+    // Out has no ceiling either; the minimum step keeps it from crawling when
+    // the camera is tucked in close (13 % of 0.5 m would be almost nothing).
+    controls.dollyTo(distance + Math.max(distance * (ZOOM_STEP - 1), flyStep), true);
+  }
+}
+
+/** World-space height of the model's own ground (IFC elevation 0).
+ *
+ *  The importer recentres every model on the origin, so the IFC's zero level ends up
+ *  at some arbitrary height (a 3.7 m house lands 2.1 m BELOW y = 0). A grid fixed at
+ *  y = 0 then floats through the building, which looks like the model has sunk into
+ *  the floor. The coordination matrix records exactly where elevation 0 went. */
+async function modelGroundY(
+  models: { getCoordinationMatrix?: () => Promise<THREE.Matrix4> }[],
+  bbox: THREE.Box3,
+): Promise<number> {
+  let ground: number | null = null;
+  for (const m of models) {
+    try {
+      const y = (await m.getCoordinationMatrix?.())?.elements?.[13];
+      if (typeof y === 'number' && Number.isFinite(y)) ground = ground === null ? y : Math.min(ground, y);
+    } catch {
+      /* model without a coordination matrix — fall back below */
+    }
+  }
+  if (ground === null) ground = 0;
+  // A model that floats entirely above its origin rests the grid on its lowest point.
+  if (bbox.min.y > ground + 0.5) ground = bbox.min.y;
+  return ground;
 }
 
 /** Size the ground grid to the model so it's visible at any scale, and rest it on the
  *  model's lowest point when the model floats above ground level. */
-function fitGridToModel(grid: OBC.SimpleGrid | null, bbox: THREE.Box3) {
+function fitGridToModel(grid: OBC.SimpleGrid | null, bbox: THREE.Box3, groundY: number) {
   if (!grid) return;
   try {
     const size = bbox.getSize(new THREE.Vector3());
@@ -86,7 +131,7 @@ function fitGridToModel(grid: OBC.SimpleGrid | null, bbox: THREE.Box3) {
     grid.config.primarySize = cell;
     grid.config.secondarySize = cell * 10;
     grid.config.distance = Math.max(500, span * 10);
-    grid.three.position.y = (bbox.min.y > 0.5 ? bbox.min.y : 0) - 0.03;
+    grid.three.position.y = groundY - 0.03;
   } catch (e) {
     console.warn('Could not fit grid to model:', e);
   }
@@ -146,12 +191,15 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const [theme, setTheme] = useState<SceneTheme>(loadTheme);
   const themeRef = useRef<SceneTheme>(theme);
   const gridRef = useRef<OBC.SimpleGrid | null>(null);
+  const groundYRef = useRef<number | null>(null);
   const modelBboxRef = useRef<THREE.Box3 | null>(null);
   const cameraRef = useRef<OBC.OrthoPerspectiveCamera | null>(null);
   // Fragments render through their own streaming/LOD pipeline, so the THREE object
   // graph holds no measurable meshes — THREE.Box3().setFromObject() returns EMPTY.
   // The model itself exposes the real bounds, so keep the models and ask them.
-  const modelsRef = useRef<{ box?: THREE.Box3; object?: THREE.Object3D }[]>([]);
+  const modelsRef = useRef<
+    { box?: THREE.Box3; object?: THREE.Object3D; getCoordinationMatrix?: () => Promise<THREE.Matrix4> }[]
+  >([]);
 
   /** Live bounds of everything loaded. Falls back to the object graph if needed. */
   const currentModelBbox = (): THREE.Box3 | null => {
@@ -164,6 +212,11 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     if (box.isEmpty()) return modelBboxRef.current;
     modelBboxRef.current = box;
     return box;
+  };
+
+  const modelSpan = (): number => {
+    const b = currentModelBbox();
+    return b ? b.getSize(new THREE.Vector3()).length() || 60 : 60;
   };
 
   // The scene background is transparent, so the theme is the container colour plus the
@@ -221,7 +274,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     // a city-scale model needs orders of magnitude more travel, and a far plane
     // that doesn't clip the whole scene away as soon as you pull back.
     world.camera.controls.minDistance = 0.1;
-    world.camera.controls.maxDistance = 100000;
+    world.camera.controls.maxDistance = Infinity;
+    world.camera.controls.minZoom = 1e-6;
+    // Mouse wheel: past the minimum distance, push the target instead of stopping.
+    world.camera.controls.infinityDolly = true;
     applyClipRange(world.camera, 0.1, 200000);
 
     // ── 3. Grid ──────────────────────────────────────────────────────────────
@@ -315,8 +371,12 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
           }
           const size = bbox.getSize(new THREE.Vector3());
           console.log(`Model bounds: ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)} m`);
-          tuneNavigationToModel(world.camera, bbox);
-          fitGridToModel(gridRef.current, bbox);
+                    tuneNavigationToModel(world.camera, bbox);
+          void modelGroundY(modelsRef.current, bbox).then((groundY) => {
+            groundYRef.current = groundY;
+            if (isMounted) fitGridToModel(gridRef.current, bbox, groundY);
+            console.log(`Ground level (IFC elevation 0) at y = ${groundY.toFixed(2)}`);
+          });
           frameBox(world.camera, bbox, true);
           // A large camera jump outruns the streamer's incremental updates, so force
           // a refresh once the move has settled or the site renders empty.
@@ -446,7 +506,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       {/* Action Toolbar - Vertical, right side */}
       <div className={`absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 backdrop-blur-xl rounded-xl sm:rounded-2xl border shadow-lg pointer-events-auto ${THEMES[theme].panel}`}>
         <button
-          onClick={() => zoomByStep(cameraRef.current, 1)}
+          onClick={() => zoomByStep(cameraRef.current, 1, modelSpan())}
           className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Zoom In"
         >
@@ -454,7 +514,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         </button>
 
         <button
-          onClick={() => zoomByStep(cameraRef.current, -1)}
+          onClick={() => zoomByStep(cameraRef.current, -1, modelSpan())}
           className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
           title="Zoom Out"
         >
@@ -470,7 +530,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
               // Re-tune first: a streamed-in model can be far bigger than it was at
               // load time, and the travel limits have to grow with it.
               tuneNavigationToModel(cameraRef.current, bbox);
-              fitGridToModel(gridRef.current, bbox);
+              fitGridToModel(gridRef.current, bbox, groundYRef.current ?? 0);
               frameBox(cameraRef.current, bbox, true);
             }
           }}
