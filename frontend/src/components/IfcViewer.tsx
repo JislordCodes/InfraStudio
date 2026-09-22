@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 're
 import * as OBC from '@thatopen/components';
 import * as THREE from 'three';
 import Stats from 'stats.js';
-import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon, SlidersHorizontal, X } from 'lucide-react';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -189,6 +189,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [theme, setTheme] = useState<SceneTheme>(loadTheme);
+  const [controlsOpen, setControlsOpen] = useState(false);
   const themeRef = useRef<SceneTheme>(theme);
   const gridRef = useRef<OBC.SimpleGrid | null>(null);
   const groundYRef = useRef<number | null>(null);
@@ -491,20 +492,38 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         </div>
       )}
 
-      {/* Engine status badge */}
-      <div className="absolute top-4 right-4 z-10 text-white font-mono text-xs pointer-events-none bg-black/60 px-2 py-1 rounded">
-        <div className={isLoaded ? 'opacity-50' : 'text-yellow-400'}>
-          {isLoaded ? 'Engine Ready' : 'Initializing Engine...'}
-        </div>
-        {initError && (
-          <div className="text-red-400 mt-1 max-w-xs break-words">
-            Error: {initError}
+      {/* Engine status - bottom-right, out of the way of the download button
+          that now claims the top-right corner. Only shown while initializing
+          or on error; once ready it's not worth permanent screen space. */}
+      {(!isLoaded || initError) && (
+        <div className="absolute bottom-4 right-4 z-10 text-white font-mono text-xs pointer-events-none bg-black/60 px-2 py-1 rounded">
+          <div className={isLoaded ? 'opacity-50' : 'text-yellow-400'}>
+            {isLoaded ? 'Engine Ready' : 'Initializing Engine...'}
           </div>
-        )}
-      </div>
+          {initError && (
+            <div className="text-red-400 mt-1 max-w-xs break-words">
+              Error: {initError}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Action Toolbar - Vertical, right side */}
-      <div className={`absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 backdrop-blur-xl rounded-xl sm:rounded-2xl border shadow-lg pointer-events-auto ${THEMES[theme].panel}`}>
+      {/* Action Toolbar - Vertical, right side. Collapses to one button; the toggle
+          is always the first item so it stays in the same place open or closed. */}
+      <div className={`absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 backdrop-blur-xl rounded-xl sm:rounded-2xl border shadow-lg pointer-events-auto transition-all duration-200 ${THEMES[theme].panel}`}>
+        <button
+          onClick={() => setControlsOpen(v => !v)}
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
+          title={controlsOpen ? 'Hide controls' : 'Show controls'}
+        >
+          {controlsOpen ? <X size={18} strokeWidth={2.5} /> : <SlidersHorizontal size={18} strokeWidth={2.5} />}
+        </button>
+
+        <div
+          className={`flex flex-col items-center gap-1 sm:gap-1.5 overflow-hidden transition-all duration-200 origin-top ${
+            controlsOpen ? 'opacity-100 scale-100 max-h-[400px] mt-1 sm:mt-1.5' : 'opacity-0 scale-95 max-h-0 pointer-events-none'
+          }`}
+        >
         <button
           onClick={() => zoomByStep(cameraRef.current, 1, modelSpan())}
           className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
@@ -589,6 +608,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         >
           {theme === 'dark' ? <Sun size={18} strokeWidth={2.5} /> : <Moon size={18} strokeWidth={2.5} />}
         </button>
+        </div>
       </div>
     </div>
   );

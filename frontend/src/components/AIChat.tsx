@@ -13,9 +13,14 @@ interface AttachedImage {
 
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
+  /** Fired whenever the active session's model changes - including to `null`
+   *  when switching to a session that doesn't have one yet - so a caller can
+   *  show/hide something like a download button without duplicating session
+   *  state of its own. */
+  onActiveIfcUrlChange?: (url: string | null) => void;
 }
 
-export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
+export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange }) => {
   const {
     sessions,
     activeSessionId,
@@ -106,6 +111,9 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
     if (session?.last_ifc_url && onLoadIfcUrl) {
       onLoadIfcUrl(session.last_ifc_url);
     }
+    // Always fire, including with null - a session with no model yet must
+    // clear any download affordance left over from a previously active one.
+    onActiveIfcUrlChange?.(session?.last_ifc_url || null);
     if (messages.length > 0 || loadingMessages) {
       setExpanded(true);
     }
@@ -245,6 +253,9 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
       if (result.ifc_url && onLoadIfcUrl) {
         onLoadIfcUrl(result.ifc_url);
       }
+      if (result.ifc_url) {
+        onActiveIfcUrlChange?.(result.ifc_url);
+      }
 
       setCurrentSteps([]);
     } catch (err) {
@@ -274,6 +285,28 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
   // ── Render ──
+
+  // Collapsed: a single floating button, nothing else in the DOM - pressing it
+  // opens the full panel below. A small dot signals there's an existing
+  // conversation worth reopening, distinct from the pulsing spinner used
+  // while a build is actively running.
+  if (!expanded) {
+    return (
+      <button
+        onClick={() => {
+          setExpanded(true);
+          setTimeout(() => inputRef.current?.focus(), 50);
+        }}
+        className="relative flex items-center justify-center w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-500 active:scale-90 text-white shadow-2xl shadow-blue-600/40 border border-blue-400/30 transition-all pointer-events-auto"
+        title="Open chat"
+      >
+        {isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : <Bot className="w-6 h-6" />}
+        {hasContent && !isLoading && (
+          <span className="absolute top-0.5 right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-neutral-950" />
+        )}
+      </button>
+    );
+  }
 
   return (
     <div className="flex z-10 max-w-2xl w-full relative" style={{ isolation: 'isolate' }}>
@@ -492,11 +525,6 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl }) => {
 
         {/* Chat Input Bar (16px text-base on mobile prevents iOS auto-zoom) */}
         <form onSubmit={handleSend} className={`flex items-center gap-2 px-3 py-2.5 ${attachedImages.length > 0 ? '' : 'border-t border-white/5'}`}>
-          {!expanded && (
-            <button type="button" onClick={() => setShowSidebar(v => !v)} className="p-1 text-neutral-400 hover:text-white transition-colors shrink-0">
-              <PanelLeftOpen className="w-4 h-4" />
-            </button>
-          )}
           <input
             ref={fileInputRef}
             type="file"

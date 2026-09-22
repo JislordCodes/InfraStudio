@@ -1,18 +1,36 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Download, Upload } from 'lucide-react';
 import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
-import { Uploader } from './components/Uploader';
 import './index.css';
 
 function App() {
   const viewerRef = useRef<IfcViewerHandle | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // The model currently shown in the viewer, tracked here (rather than read
+  // back out of the chat's session state) so the download button works
+  // regardless of how the model got loaded - a chat build, a local upload, or
+  // the ?ifc_url= / codex-bridge paths below, none of which are "a session".
+  const [currentIfcUrl, setCurrentIfcUrl] = useState<string | null>(null);
 
   const handleFileUpload = (file: File) => {
     viewerRef.current?.loadIfc(file);
+    // A local upload has no URL to offer back for download - it's already on
+    // the user's machine - so any previous model's download button goes away
+    // rather than pointing at the wrong file.
+    setCurrentIfcUrl(null);
   };
 
   const handleLoadIfcUrl = (url: string) => {
     viewerRef.current?.loadIfcFromUrl(url);
+    setCurrentIfcUrl(url);
+  };
+
+  // Mirrors whatever the active chat session actually has (including "none"),
+  // so switching to an empty project correctly hides the download button
+  // instead of leaving the previous session's link showing.
+  const handleActiveIfcUrlChange = (url: string | null) => {
+    setCurrentIfcUrl(url);
   };
 
   useEffect(() => {
@@ -56,30 +74,67 @@ function App() {
   }, []);
 
   return (
-    <div className="flex flex-col w-full h-[100dvh] overflow-hidden bg-neutral-950">
+    <div className="relative w-full h-[100dvh] overflow-hidden bg-neutral-950">
+      {/* No chrome bar - the scene fills the entire viewport, everything else floats on top. */}
+      <IfcViewer ref={viewerRef} />
 
-      {/* Header bar — mobile-ready with safe margins */}
-      <header className="flex shrink-0 items-center justify-between px-3 sm:px-6 py-2.5 sm:py-3 bg-neutral-950/95 border-b border-neutral-800/80 z-30 backdrop-blur-md">
-        <h1 className="text-base sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
-          <div className="w-4 h-4 sm:w-5 sm:h-5 bg-blue-600 rounded-sm shadow-sm shrink-0" />
-          InfraStudio<span className="text-neutral-500 font-light hidden xs:inline text-xs sm:text-base">BIM</span>
-        </h1>
-        <div className="flex items-center gap-2">
-          <Uploader onFileUpload={handleFileUpload} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".ifc"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            if (file.name.toLowerCase().endsWith('.ifc')) {
+              handleFileUpload(file);
+            } else {
+              alert('Please select a valid .ifc file');
+            }
+          }
+          e.target.value = '';
+        }}
+      />
+
+      {/* Brand mark + local upload - bottom-left, out of the way of the FPS/engine
+          overlays IfcViewer already renders in the top corners. */}
+      <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-20 flex items-center gap-1.5 pointer-events-auto">
+        <div
+          className="flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 rounded-full border border-white/10 shadow-lg backdrop-blur-xl bg-neutral-900/80"
+          title="InfraStudio"
+        >
+          <div className="w-4 h-4 bg-blue-600 rounded-sm shadow-sm shrink-0" />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="p-1.5 rounded-full text-neutral-300 hover:text-white hover:bg-blue-600 active:scale-90 transition-all"
+            title="Load a local IFC file"
+          >
+            <Upload size={15} strokeWidth={2.5} />
+          </button>
         </div>
-      </header>
+      </div>
 
-      {/* Full-screen 3D viewer container */}
-      <main className="flex-1 relative w-full h-full overflow-hidden">
-        <IfcViewer ref={viewerRef} />
+      {/* Download - the one CTA that should never be easy to miss once a model exists. */}
+      {currentIfcUrl && (
+        <a
+          href={currentIfcUrl}
+          download="model.ifc"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="absolute top-3 right-3 sm:top-4 sm:right-4 z-20 flex items-center gap-1.5 sm:gap-2 pl-3 pr-3.5 sm:pl-4 sm:pr-5 py-2 sm:py-2.5 rounded-full bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs sm:text-sm font-semibold shadow-lg shadow-blue-600/30 border border-blue-400/30 transition-all pointer-events-auto"
+          title="Download the generated IFC model"
+        >
+          <Download size={16} strokeWidth={2.5} />
+          <span>Download IFC</span>
+        </a>
+      )}
 
-        {/* Floating chat — responsive bottom overlay with safe-area spacing */}
-        <div className="absolute bottom-2 sm:bottom-6 left-1/2 -translate-x-1/2 w-[95%] sm:w-full max-w-xl z-20 px-0 sm:px-4 pb-safe pointer-events-none">
-          <div className="pointer-events-auto">
-            <AIChat onLoadIfcUrl={handleLoadIfcUrl} />
-          </div>
+      {/* Floating chat - collapses to a single button, see AIChat's own `expanded` state. */}
+      <div className="absolute bottom-2 sm:bottom-6 left-1/2 -translate-x-1/2 w-[95%] sm:w-full max-w-xl z-20 px-0 sm:px-4 pb-safe pointer-events-none flex justify-center">
+        <div className="pointer-events-auto">
+          <AIChat onLoadIfcUrl={handleLoadIfcUrl} onActiveIfcUrlChange={handleActiveIfcUrlChange} />
         </div>
-      </main>
+      </div>
     </div>
   );
 }
