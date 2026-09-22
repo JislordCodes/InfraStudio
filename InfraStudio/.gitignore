@@ -4,3 +4,4 @@
 data/waitlist.csv
 
 node_modules/
+.vercel
