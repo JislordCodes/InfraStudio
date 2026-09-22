@@ -3,6 +3,8 @@ import type { SceneElement } from "../_shared/shared.ts";
 import { handleReviewer } from "../agent-reviewer/index.ts";
 import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_agent.ts";
 import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
+import { CLASH_CHECK_PYTHON } from "../_shared/clash_check.ts";
+import { jevSafe } from "../_shared/jev_client.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -681,11 +683,46 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       if (continuation?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation.ssmCommandId);
         if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, mcpSessionId: continuation.jobId };
+        // clash_report/clash_verdict are informational only right now (shadow
+        // mode - see triageClashReport) and safe for the frontend to ignore;
+        // present regardless of Jev verdict, never blocks a successful build.
         return result.error
           ? { status: "error", error: result.error, mcpSessionId: continuation.jobId }
-          : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId };
+          : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict };
       }
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
+
+      // Jev prompt-intake gate: a fast, cheap sanity check before committing to a
+      // build that can run up to ~35 minutes of paid EC2/SSM time. SHADOW MODE -
+      // logs its verdict but never blocks a build. No-ops entirely (jevSafe
+      // returns null) when JEV_API_KEY isn't set, so this is strictly additive.
+      // Once real verdict distributions have been observed in the logs, an
+      // off_topic verdict with high confidence can be turned into an early
+      // "status: error" return instead of a log line.
+      const jevIntake = await jevSafe(
+        { prompt: userBrief, hasReferenceImages: Array.isArray(payload.plan?.images) && payload.plan.images.length > 0 },
+        {
+          in_scope: {
+            type: "noul",
+            instructions: "Is this a legitimate request to model a real building or physical structure as a 3D BIM/IFC model?",
+            criteria: { true: "Describes a real building, structure, or site to model", false: "Off-topic, spam, abusive, or not a building request" },
+          },
+          intent: {
+            type: "choice",
+            instructions: "What kind of request is this?",
+            criteria: {
+              new_build: "A new building/structure to model from scratch",
+              refine_existing: "Sounds like it's modifying or continuing an existing model, not starting fresh",
+              off_topic: "Not a building/structure request at all",
+              ambiguous: "Too vague or short to act on even with reasonable invention",
+            },
+          },
+        },
+      );
+      if (jevIntake) {
+        console.log(`[jev shadow] intake: in_scope=${jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul.toFixed(2) : "?"} intent=${jevIntake.intent.type === "choice" ? `${jevIntake.intent.choice} (${jevIntake.intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+      }
+
       const jobId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `job-${Date.now()}`;
 
       // Reference images (floor plans, sketches, aerial views, schematics)
@@ -727,11 +764,17 @@ IMPORTANT execution constraint: if you use execute_ifc_code_tool, each call has 
 
 IMPORTANT reviewer rule (before export): once the shell/structure is built, call get_scene_info yourself and check it against the two bars above - is every element styled, and does the element count/complexity actually meet the 1,000+ element / multi-MB target? If not, go back and add the missing detail (more structural members, facade articulation, interior detail, materials) before exporting. Only call export_ifc once you would sign off on the result as genuinely complex and fully styled.
 
+IMPORTANT clash check (before export, after the reviewer rule above): call execute_ifc_code_tool ONE more time with exactly this code, unmodified, as its own call:
+
+${CLASH_CHECK_PYTHON}
+
+This checks structural elements (walls, slabs, beams, columns, footings, piles, roofs, stairs) for real geometric overlaps - not the normal contact of a wall meeting a slab, only genuine penetrations - and prints a CLASH_REPORT: line with a clash_types breakdown by class pair and a worst-offenders sample. Read clash_types first: bounding-box checks on diagonal/radial members (bracing, diagrids, trusses, radial beams) commonly flag many overlaps between the SAME two classes at a similar depth near where they converge, because a box drawn around a thin diagonal member is much bigger than the member itself - that is expected geometry, not a real clash, and does not need fixing. Only fix entries that are NOT part of one dominant repeated class-pair AND have depth_m over 0.3 (a real structural conflict, e.g. a beam driven through a wall/slab that isn't explained by that pattern). Do not spend more than one fix pass on this - if clashes remain after one fix attempt, export anyway with them present rather than looping.
+
 First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
 
 ${userBrief}${imageSection}
 
-When finished, call get_scene_info to confirm the total element count, then call export_ifc.`;
+When finished: call get_scene_info to confirm the total element count, run the clash check above, then call export_ifc.`;
       const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
       return { status: "continue", continuation: newContinuation, progress: "Build started...", mcpSessionId: jobId };

@@ -95579,6 +95579,189 @@ async function pollOpenHandsBuild(commandId, deadline) {
 
 // ../supabase/functions/_shared/antigravity_agent.ts
 var import_client_ssm2 = __toESM(require_dist_cjs32());
+
+// ../supabase/functions/_shared/clash_check.ts
+var CLASH_CHECK_PYTHON = `
+import json as _json
+
+def _run_clash_check():
+    import ifcopenshell.geom as _geom
+    CLASH_MIN_DEPTH_M = 0.05
+    CLASH_MAX_REPORTED = 40
+    STRUCTURAL_CLASSES = {
+        "IfcWall", "IfcWallStandardCase", "IfcSlab", "IfcBeam", "IfcColumn",
+        "IfcFooting", "IfcPile", "IfcRoof", "IfcRamp", "IfcStair",
+    }
+    settings = _geom.settings()
+    settings.set(settings.USE_WORLD_COORDS, True)
+
+    def bbox_of(el):
+        shape = _geom.create_shape(settings, el)
+        v = shape.geometry.verts
+        if len(v) < 9:
+            return None
+        xs, ys, zs = v[0::3], v[1::3], v[2::3]
+        return (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
+
+    def overlap_depth(a, b):
+        dx = min(a[3], b[3]) - max(a[0], b[0])
+        dy = min(a[4], b[4]) - max(a[1], b[1])
+        dz = min(a[5], b[5]) - max(a[2], b[2])
+        if dx <= 0 or dy <= 0 or dz <= 0:
+            return 0.0
+        return min(dx, dy, dz)
+
+    ifc = get_ifc_file()
+    items = []
+    for el in ifc.by_type("IfcElement"):
+        if el.is_a() not in STRUCTURAL_CLASSES:
+            continue
+        try:
+            bb = bbox_of(el)
+        except Exception:
+            bb = None
+        if bb is None:
+            continue
+        tile = (round((bb[0] + bb[3]) / 2 / 8.0), round((bb[1] + bb[4]) / 2 / 8.0),
+                round((bb[2] + bb[5]) / 2 / 4.0))
+        items.append((el, bb, tile))
+
+    buckets = {}
+    for el, bb, tile in items:
+        buckets.setdefault(tile, []).append((el, bb))
+
+    seen = set()
+    clashes = []
+    for (tx, ty, tz), _ in buckets.items():
+        neighbours = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    neighbours.extend(buckets.get((tx + dx, ty + dy, tz + dz), []))
+        for i in range(len(neighbours)):
+            el_a, bb_a = neighbours[i]
+            for j in range(i + 1, len(neighbours)):
+                el_b, bb_b = neighbours[j]
+                if el_a is el_b:
+                    continue
+                pair_key = tuple(sorted((el_a.id(), el_b.id())))
+                if pair_key in seen:
+                    continue
+                seen.add(pair_key)
+                depth = overlap_depth(bb_a, bb_b)
+                if depth >= CLASH_MIN_DEPTH_M:
+                    clashes.append({
+                        "a": el_a.Name or el_a.is_a(), "a_class": el_a.is_a(),
+                        "b": el_b.Name or el_b.is_a(), "b_class": el_b.is_a(),
+                        "depth_m": round(depth, 3),
+                    })
+
+    # A pure top-N-by-depth report gets swamped by one repeated shape - e.g.
+    # radial/diagonal members converging near a shared point legitimately have
+    # overlapping AXIS-ALIGNED bounding boxes even when the thin members
+    # themselves don't actually intersect (confirmed against a real diagrid
+    # structure: 1,560 "clashes", ~99% one class-pair, same ~3.5m depth,
+    # around convergence points). Grouping by class-pair and capping each
+    # group keeps that one pattern from burying a rare but real clash between
+    # a different pair of classes, and the per-group counts tell Jev how much
+    # of the total is one repeated pattern versus how spread out it is.
+    clashes.sort(key=lambda c: -c["depth_m"])
+    by_pair = {}
+    for c in clashes:
+        key = tuple(sorted((c["a_class"], c["b_class"])))
+        by_pair.setdefault(key, []).append(c)
+    PER_PAIR_CAP = 6
+    worst = []
+    for key in sorted(by_pair.keys(), key=lambda k: -max(c["depth_m"] for c in by_pair[k])):
+        worst.extend(by_pair[key][:PER_PAIR_CAP])
+    worst = worst[:CLASH_MAX_REPORTED]
+    report = {
+        "elements_checked": len(items),
+        "clashes_found": len(clashes),
+        "clash_types": [
+            {"classes": list(key), "count": len(by_pair[key]), "max_depth_m": round(max(c["depth_m"] for c in by_pair[key]), 3)}
+            for key in sorted(by_pair.keys(), key=lambda k: -len(by_pair[k]))
+        ],
+        "worst": worst,
+    }
+    print("CLASH_REPORT:" + _json.dumps(report))
+    return report
+
+try:
+    _clash_report = _run_clash_check()
+except Exception as _e:
+    print("CLASH_REPORT:" + _json.dumps({"error": str(_e), "elements_checked": 0, "clashes_found": 0, "worst": []}))
+`.trim();
+function extractClashReport(stdout) {
+  const lines = stdout.split("\n").filter((l5) => l5.startsWith("CLASH_REPORT:"));
+  if (lines.length === 0) return null;
+  try {
+    return JSON.parse(lines[lines.length - 1].slice("CLASH_REPORT:".length));
+  } catch {
+    return null;
+  }
+}
+
+// ../supabase/functions/_shared/jev_client.ts
+var JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+var JEV_MODEL = "jev-latest";
+function getJevApiKey() {
+  const key = typeof Deno !== "undefined" ? Deno.env.get("JEV_API_KEY") : process.env.JEV_API_KEY;
+  return key?.trim() || void 0;
+}
+function jevEnabled() {
+  return !!getJevApiKey();
+}
+var JevError = class extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+    this.name = "JevError";
+  }
+  status;
+};
+async function jevAsk(state3, questions, timeoutMs = 5e3) {
+  const apiKey = getJevApiKey();
+  if (!apiKey) throw new JevError("JEV_API_KEY is not configured");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(JEV_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ state: state3, model: JEV_MODEL, questions }),
+      signal: controller.signal
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new JevError(`Jev API returned ${res.status}: ${text.slice(0, 300)}`, res.status);
+    }
+    const parsed = JSON.parse(text);
+    return parsed.answers;
+  } catch (e9) {
+    if (e9 instanceof JevError) throw e9;
+    if (e9 instanceof Error && e9.name === "AbortError") {
+      throw new JevError(`Jev request timed out after ${timeoutMs}ms`);
+    }
+    throw new JevError(`Jev request failed: ${e9 instanceof Error ? e9.message : String(e9)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function jevSafe(state3, questions, timeoutMs = 5e3) {
+  if (!jevEnabled()) return null;
+  try {
+    return await jevAsk(state3, questions, timeoutMs);
+  } catch (e9) {
+    console.warn(`[jev] call failed, continuing without it: ${e9 instanceof Error ? e9.message : String(e9)}`);
+    return null;
+  }
+}
+
+// ../supabase/functions/_shared/antigravity_agent.ts
 var INSTANCE_ID2 = "i-006cf1785c4abbb6d";
 var REGION2 = "us-east-1";
 var AGY_MODEL = "gemini-3.8-flash-high";
@@ -95727,6 +95910,38 @@ async function fetchLiveElementCount() {
     return void 0;
   }
 }
+async function triageClashReport(report) {
+  if (report.clashes_found === 0) return void 0;
+  const state3 = {
+    elements_checked: report.elements_checked,
+    clashes_found: report.clashes_found,
+    // clash_types (counts per pair of classes) matters more here than the raw
+    // list: a bounding-box check on diagonal/radial members (bracing,
+    // diagrids, trusses) produces many geometrically-expected overlaps
+    // between the SAME two classes at a similar depth, because an
+    // axis-aligned box around a thin diagonal member is much bigger than the
+    // member itself - confirmed against a real diagrid structure (1,560
+    // flagged, ~99% one class-pair around convergence points, not real
+    // problems). One class-pair dominating the count is a signal to weigh
+    // that pattern down, not a signal of 1,560 real problems.
+    clash_types: report.clash_types,
+    worst_clashes: report.worst.slice(0, 20)
+  };
+  const answers = await jevSafe(state3, {
+    verdict: {
+      type: "choice",
+      instructions: "Given this geometric clash report from a just-built IFC building model, how severe is the situation overall? Note: a bounding-box check flags many expected overlaps between diagonal/radial structural members (bracing, diagrids, trusses) even when the members themselves don't truly intersect - if clash_types shows one class-pair accounting for most of clashes_found at a similar depth, that is very likely this pattern, not real problems, and should weigh toward PASS. Weigh toward MAJOR_REGENERATE only when the report shows real structural-type clashes (e.g. a beam or column driven through a wall/slab) that aren't explained by one repeated diagonal-member pattern.",
+      criteria: {
+        PASS: "No clashes worth caring about at this modelling scale - trivial/shallow overlaps, or dominated by one repeated diagonal-member bounding-box pattern",
+        MINOR_AUTO_FIX: "A handful of real, distinct clashes outside any repeated pattern - worth noting, not worth rejecting the model",
+        MAJOR_REGENERATE: "Deep structural clashes (e.g. a beam or column driven through a wall/slab) that are NOT explained by a single repeated diagonal-member class-pair, suggesting a genuine modelling error"
+      }
+    }
+  });
+  if (!answers || answers.verdict.type !== "choice") return void 0;
+  const a9 = answers.verdict;
+  return { action: a9.choice, confidence: a9.confidence };
+}
 async function pollAntigravityBuild(commandId) {
   try {
     const res = await ssmClient2.send(new import_client_ssm2.GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID2 }));
@@ -95737,11 +95952,18 @@ async function pollAntigravityBuild(commandId) {
       if (urlMatch) {
         const sizeMatch = out.match(/FILE_SIZE:(\d+)/);
         const countMatch = out.match(/ELEMENT_COUNT:(\d+)/);
+        const clashReport = extractClashReport(out) ?? void 0;
+        const clashVerdict = clashReport ? await triageClashReport(clashReport) : void 0;
+        if (clashReport) {
+          console.log(`[jev shadow] clash triage: ${clashReport.clashes_found} clash(es) among ${clashReport.elements_checked} checked -> ${clashVerdict ? `${clashVerdict.action} (${clashVerdict.confidence.toFixed(2)})` : "no verdict (Jev unavailable)"}`);
+        }
         return {
           done: true,
           ifcUrl: urlMatch[1],
           fileSize: sizeMatch ? Number(sizeMatch[1]) : void 0,
-          elementCount: countMatch ? Number(countMatch[1]) : void 0
+          elementCount: countMatch ? Number(countMatch[1]) : void 0,
+          clashReport,
+          clashVerdict
         };
       }
       const errMatch = out.match(/BUILD_ERROR:([\s\S]*)/);
@@ -96348,9 +96570,32 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
       if (continuation2?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation2.ssmCommandId);
         if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, mcpSessionId: continuation2.jobId };
-        return result.error ? { status: "error", error: result.error, mcpSessionId: continuation2.jobId } : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId };
+        return result.error ? { status: "error", error: result.error, mcpSessionId: continuation2.jobId } : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict };
       }
       const userBrief = payload3.plan?.client_requirements || payload3.plan?.prompt || payload3.plan?.structure_name || "";
+      const jevIntake = await jevSafe(
+        { prompt: userBrief, hasReferenceImages: Array.isArray(payload3.plan?.images) && payload3.plan.images.length > 0 },
+        {
+          in_scope: {
+            type: "noul",
+            instructions: "Is this a legitimate request to model a real building or physical structure as a 3D BIM/IFC model?",
+            criteria: { true: "Describes a real building, structure, or site to model", false: "Off-topic, spam, abusive, or not a building request" }
+          },
+          intent: {
+            type: "choice",
+            instructions: "What kind of request is this?",
+            criteria: {
+              new_build: "A new building/structure to model from scratch",
+              refine_existing: "Sounds like it's modifying or continuing an existing model, not starting fresh",
+              off_topic: "Not a building/structure request at all",
+              ambiguous: "Too vague or short to act on even with reasonable invention"
+            }
+          }
+        }
+      );
+      if (jevIntake) {
+        console.log(`[jev shadow] intake: in_scope=${jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul.toFixed(2) : "?"} intent=${jevIntake.intent.type === "choice" ? `${jevIntake.intent.choice} (${jevIntake.intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+      }
       const jobId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `job-${Date.now()}`;
       const images = Array.isArray(payload3.plan?.images) ? payload3.plan.images.filter((img) => img && typeof img.url === "string" && img.url.trim()) : [];
       const imageSection = images.length > 0 ? `
@@ -96374,11 +96619,17 @@ IMPORTANT execution constraint: if you use execute_ifc_code_tool, each call has 
 
 IMPORTANT reviewer rule (before export): once the shell/structure is built, call get_scene_info yourself and check it against the two bars above - is every element styled, and does the element count/complexity actually meet the 1,000+ element / multi-MB target? If not, go back and add the missing detail (more structural members, facade articulation, interior detail, materials) before exporting. Only call export_ifc once you would sign off on the result as genuinely complex and fully styled.
 
+IMPORTANT clash check (before export, after the reviewer rule above): call execute_ifc_code_tool ONE more time with exactly this code, unmodified, as its own call:
+
+${CLASH_CHECK_PYTHON}
+
+This checks structural elements (walls, slabs, beams, columns, footings, piles, roofs, stairs) for real geometric overlaps - not the normal contact of a wall meeting a slab, only genuine penetrations - and prints a CLASH_REPORT: line with a clash_types breakdown by class pair and a worst-offenders sample. Read clash_types first: bounding-box checks on diagonal/radial members (bracing, diagrids, trusses, radial beams) commonly flag many overlaps between the SAME two classes at a similar depth near where they converge, because a box drawn around a thin diagonal member is much bigger than the member itself - that is expected geometry, not a real clash, and does not need fixing. Only fix entries that are NOT part of one dominant repeated class-pair AND have depth_m over 0.3 (a real structural conflict, e.g. a beam driven through a wall/slab that isn't explained by that pattern). Do not spend more than one fix pass on this - if clashes remain after one fix attempt, export anyway with them present rather than looping.
+
 First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
 
 ${userBrief}${imageSection}
 
-When finished, call get_scene_info to confirm the total element count, then call export_ifc.`;
+When finished: call get_scene_info to confirm the total element count, run the clash check above, then call export_ifc.`;
       const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
       return { status: "continue", continuation: newContinuation, progress: "Build started...", mcpSessionId: jobId };

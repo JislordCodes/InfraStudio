@@ -21,6 +21,8 @@
  */
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 import { getMcpUrl, extractText } from "./shared.ts";
+import { extractClashReport, type ClashReport } from "./clash_check.ts";
+import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
 const INSTANCE_ID = "i-006cf1785c4abbb6d";
 const REGION = "us-east-1";
@@ -227,6 +229,51 @@ export interface AntigravityPollResult {
   elementCount?: number;
   error?: string;
   progressMessage?: string;
+  /** Raw geometric clash report Antigravity printed before exporting, if the
+   *  brief asked it to run one (see clash_check.ts). Undefined if it never
+   *  ran or printed nothing parseable - never treated as a failure either way. */
+  clashReport?: ClashReport;
+  /** Jev's severity triage of clashReport, if JEV_API_KEY is configured.
+   *  SHADOW MODE: purely informational right now, never blocks returning the
+   *  model - see the "MAJOR_REGENERATE" note where this is read. */
+  clashVerdict?: { action: string; confidence: number };
+}
+
+/** Turns a raw (and potentially long) clash list into a short severity verdict
+ *  Jev can reason about, without exceeding its ~32k token state+question cap
+ *  and without burning tokens on trivial low-depth overlaps that don't matter.
+ *  Never throws - see jevSafe. */
+async function triageClashReport(report: ClashReport): Promise<{ action: string; confidence: number } | undefined> {
+  if (report.clashes_found === 0) return undefined;
+  const state = {
+    elements_checked: report.elements_checked,
+    clashes_found: report.clashes_found,
+    // clash_types (counts per pair of classes) matters more here than the raw
+    // list: a bounding-box check on diagonal/radial members (bracing,
+    // diagrids, trusses) produces many geometrically-expected overlaps
+    // between the SAME two classes at a similar depth, because an
+    // axis-aligned box around a thin diagonal member is much bigger than the
+    // member itself - confirmed against a real diagrid structure (1,560
+    // flagged, ~99% one class-pair around convergence points, not real
+    // problems). One class-pair dominating the count is a signal to weigh
+    // that pattern down, not a signal of 1,560 real problems.
+    clash_types: report.clash_types,
+    worst_clashes: report.worst.slice(0, 20),
+  };
+  const answers = await jevSafe(state, {
+    verdict: {
+      type: "choice",
+      instructions: "Given this geometric clash report from a just-built IFC building model, how severe is the situation overall? Note: a bounding-box check flags many expected overlaps between diagonal/radial structural members (bracing, diagrids, trusses) even when the members themselves don't truly intersect - if clash_types shows one class-pair accounting for most of clashes_found at a similar depth, that is very likely this pattern, not real problems, and should weigh toward PASS. Weigh toward MAJOR_REGENERATE only when the report shows real structural-type clashes (e.g. a beam or column driven through a wall/slab) that aren't explained by one repeated diagonal-member pattern.",
+      criteria: {
+        PASS: "No clashes worth caring about at this modelling scale - trivial/shallow overlaps, or dominated by one repeated diagonal-member bounding-box pattern",
+        MINOR_AUTO_FIX: "A handful of real, distinct clashes outside any repeated pattern - worth noting, not worth rejecting the model",
+        MAJOR_REGENERATE: "Deep structural clashes (e.g. a beam or column driven through a wall/slab) that are NOT explained by a single repeated diagonal-member class-pair, suggesting a genuine modelling error",
+      },
+    },
+  });
+  if (!answers || answers.verdict.type !== "choice") return undefined;
+  const a = answers.verdict as ChoiceAnswer;
+  return { action: a.choice, confidence: a.confidence };
 }
 
 /**
@@ -247,11 +294,23 @@ export async function pollAntigravityBuild(commandId: string): Promise<Antigravi
       if (urlMatch) {
         const sizeMatch = out.match(/FILE_SIZE:(\d+)/);
         const countMatch = out.match(/ELEMENT_COUNT:(\d+)/);
+        const clashReport = extractClashReport(out) ?? undefined;
+        // SHADOW MODE: the verdict is computed and logged so real-world severity
+        // distributions can be observed before this is ever allowed to change
+        // what gets returned to the user. To make MAJOR_REGENERATE actually
+        // block/retry, branch on clashVerdict.action here instead of always
+        // returning done:true.
+        const clashVerdict = clashReport ? await triageClashReport(clashReport) : undefined;
+        if (clashReport) {
+          console.log(`[jev shadow] clash triage: ${clashReport.clashes_found} clash(es) among ${clashReport.elements_checked} checked -> ${clashVerdict ? `${clashVerdict.action} (${clashVerdict.confidence.toFixed(2)})` : "no verdict (Jev unavailable)"}`);
+        }
         return {
           done: true,
           ifcUrl: urlMatch[1],
           fileSize: sizeMatch ? Number(sizeMatch[1]) : undefined,
           elementCount: countMatch ? Number(countMatch[1]) : undefined,
+          clashReport,
+          clashVerdict,
         };
       }
       const errMatch = out.match(/BUILD_ERROR:([\s\S]*)/);
