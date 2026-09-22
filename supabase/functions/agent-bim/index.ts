@@ -3,7 +3,7 @@ import type { SceneElement } from "../_shared/shared.ts";
 import { handleReviewer } from "../agent-reviewer/index.ts";
 import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_agent.ts";
 import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
-import { CLASH_CHECK_PYTHON } from "../_shared/clash_check.ts";
+import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
 
 type McpCall = { resultText: string; session: string };
@@ -259,6 +259,54 @@ async function exportWithMaterials(mcpSessionId: string): Promise<{ ifc_url: str
     materialResult,
     rawData: exportData,
   };
+}
+
+/**
+ * Brief for a targeted repair pass, sent as a SECOND, separate Antigravity
+ * invocation when Jev's post-build verdict is MAJOR_REGENERATE (see the
+ * "antigravity" continuation branch below). Deliberately NOT a rebuild-from-
+ * scratch brief - the MCP server's scene is a single global store that still
+ * holds the just-built model, so this asks Antigravity to patch only the
+ * specific elements the clash report named, the same way an engineer would
+ * fix a clash in an existing model rather than start over.
+ *
+ * Real risk this does not fully solve: builds are serialized with flock, but
+ * that lock is released when the FIRST invocation's script exits and only
+ * re-acquired when this SECOND invocation starts - a different build could
+ * squeeze in between and call initialize_project, replacing the scene this
+ * brief expects to still be there. The verification step below (check the
+ * named elements still exist before touching anything) is the mitigation:
+ * it can detect that and abort cleanly instead of mutating an unrelated
+ * scene, but it cannot prevent the race itself. Given how tight the queue
+ * already runs, this is judged an acceptable residual risk rather than
+ * something worth a bigger redesign (e.g. per-build scene snapshots) for now.
+ */
+function buildClashFixBrief(report: ClashReport): string {
+  const worstList = report.worst.slice(0, 20)
+    .map((c) => `- "${c.a}" (${c.a_class}) overlaps "${c.b}" (${c.b_class}) by ${c.depth_m} m`)
+    .join("\n");
+  const typesList = report.clash_types
+    .map((t) => `- ${t.classes[0]} vs ${t.classes[1]}: ${t.count} occurrence(s), deepest ${t.max_depth_m} m`)
+    .join("\n");
+
+  return `This is a REPAIR pass on a model that was just built in this same MCP scene - do NOT call initialize_project, do NOT rebuild anything from scratch. The scene already contains the finished building; you are fixing a specific list of geometric clashes an automated check found in it.
+
+IMPORTANT verification step (do this first): call get_scene_info and confirm the named elements below still exist in the scene with matching classes. If they do NOT (e.g. the scene looks empty, unrelated, or like a different project), STOP and just call export_ifc on whatever is currently in the scene without changing anything - do not attempt any fix in that case.
+
+If the elements do match, fix ONLY these specific clashes by adjusting the position and/or dimensions of the elements involved (via update_wall or execute_ifc_code_tool) so they no longer overlap - keep each element's material/style assignment intact, and do not touch any element not listed here:
+
+${worstList}
+
+For context, the overall pattern breakdown was:
+${typesList}
+
+Many of these may be the SAME repeated pattern (diagonal/radial members whose bounding boxes overlap near a convergence point even though the members themselves don't truly intersect - not a real problem). Prioritize fixing entries that are NOT part of one dominant repeated class-pair, especially any involving a wall, slab, footing, or column with a deep overlap - those are the ones most likely to be genuine structural errors.
+
+Once done, run this exact clash-check code again as its own execute_ifc_code_tool call to confirm the fix:
+
+${CLASH_CHECK_PYTHON}
+
+Then call export_ifc. Do this in one pass - do not loop or re-check more than once, export with whatever remains after this single fix attempt.`;
 }
 
 export async function handleBim(payload: any): Promise<any> {
@@ -683,12 +731,38 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       if (continuation?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation.ssmCommandId);
         if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, mcpSessionId: continuation.jobId };
-        // clash_report/clash_verdict are informational only right now (shadow
-        // mode - see triageClashReport) and safe for the frontend to ignore;
-        // present regardless of Jev verdict, never blocks a successful build.
-        return result.error
-          ? { status: "error", error: result.error, mcpSessionId: continuation.jobId }
-          : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict };
+        if (result.error) return { status: "error", error: result.error, mcpSessionId: continuation.jobId };
+
+        // Act on a MAJOR_REGENERATE verdict with ONE targeted repair pass,
+        // rather than only logging it: a second Antigravity invocation, in the
+        // SAME MCP scene (no initialize_project), told exactly which elements
+        // clashed and asked to fix only those - not a full rebuild. Capped at
+        // one attempt via continuation.fixAttempted, mirroring the one-pass
+        // cap already given to Antigravity's own in-session fix step, so this
+        // can never loop. If starting the repair pass itself fails for any
+        // reason, fall back to returning the original build rather than
+        // turning a working (if imperfect) result into a hard error.
+        if (result.clashVerdict?.action === "MAJOR_REGENERATE" && !continuation.fixAttempted && result.clashReport) {
+          try {
+            const fixBrief = buildClashFixBrief(result.clashReport);
+            const fixCommandId = await startAntigravityBuild(fixBrief, continuation.jobId, []);
+            console.log(`[jev] MAJOR_REGENERATE verdict - starting targeted repair pass for job ${continuation.jobId} (${result.clashReport.clashes_found} clashes)`);
+            return {
+              status: "continue",
+              continuation: { kind: "antigravity", ssmCommandId: fixCommandId, jobId: continuation.jobId, fixAttempted: true },
+              progress: "Correcting flagged structural clashes...",
+              mcpSessionId: continuation.jobId,
+            };
+          } catch (fixErr: any) {
+            console.warn(`[jev] failed to start repair pass, returning original build instead: ${fixErr?.message || fixErr}`);
+          }
+        }
+
+        // clash_report/clash_verdict are informational and safe for the
+        // frontend to ignore. If a repair pass just ran (fixAttempted), this
+        // is its result - the corrected model, or the same clashes again if
+        // the fix didn't fully resolve them (not retried further, see above).
+        return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
       }
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
 

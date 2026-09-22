@@ -251,9 +251,9 @@ export interface AntigravityPollResult {
    *  brief asked it to run one (see clash_check.ts). Undefined if it never
    *  ran or printed nothing parseable - never treated as a failure either way. */
   clashReport?: ClashReport;
-  /** Jev's severity triage of clashReport, if JEV_API_KEY is configured.
-   *  SHADOW MODE: purely informational right now, never blocks returning the
-   *  model - see the "MAJOR_REGENERATE" note where this is read. */
+  /** Jev's severity triage of clashReport, if JEV_API_KEY is configured. A
+   *  MAJOR_REGENERATE action is acted on by the caller (agent-bim/index.ts) -
+   *  it triggers one targeted repair pass rather than just being logged. */
   clashVerdict?: { action: string; confidence: number };
 }
 
@@ -313,14 +313,13 @@ export async function pollAntigravityBuild(commandId: string): Promise<Antigravi
         const sizeMatch = out.match(/FILE_SIZE:(\d+)/);
         const countMatch = out.match(/ELEMENT_COUNT:(\d+)/);
         const clashReport = extractClashReport(out) ?? undefined;
-        // SHADOW MODE: the verdict is computed and logged so real-world severity
-        // distributions can be observed before this is ever allowed to change
-        // what gets returned to the user. To make MAJOR_REGENERATE actually
-        // block/retry, branch on clashVerdict.action here instead of always
-        // returning done:true.
+        // This poll always returns done:true here regardless of the verdict -
+        // acting on MAJOR_REGENERATE (starting a repair pass) is the caller's
+        // job (agent-bim/index.ts), since that's where build briefs already
+        // live and where the one-attempt cap is tracked via the continuation.
         const clashVerdict = clashReport ? await triageClashReport(clashReport) : undefined;
         if (clashReport) {
-          console.log(`[jev shadow] clash triage: ${clashReport.clashes_found} clash(es) among ${clashReport.elements_checked} checked -> ${clashVerdict ? `${clashVerdict.action} (${clashVerdict.confidence.toFixed(2)})` : "no verdict (Jev unavailable)"}`);
+          console.log(`[jev] clash triage: ${clashReport.clashes_found} clash(es) among ${clashReport.elements_checked} checked -> ${clashVerdict ? `${clashVerdict.action} (${clashVerdict.confidence.toFixed(2)})` : "no verdict (Jev unavailable)"}`);
         }
         return {
           done: true,

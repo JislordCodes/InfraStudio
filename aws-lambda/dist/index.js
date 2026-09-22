@@ -95973,7 +95973,7 @@ async function pollAntigravityBuild(commandId) {
         const clashReport = extractClashReport(out) ?? void 0;
         const clashVerdict = clashReport ? await triageClashReport(clashReport) : void 0;
         if (clashReport) {
-          console.log(`[jev shadow] clash triage: ${clashReport.clashes_found} clash(es) among ${clashReport.elements_checked} checked -> ${clashVerdict ? `${clashVerdict.action} (${clashVerdict.confidence.toFixed(2)})` : "no verdict (Jev unavailable)"}`);
+          console.log(`[jev] clash triage: ${clashReport.clashes_found} clash(es) among ${clashReport.elements_checked} checked -> ${clashVerdict ? `${clashVerdict.action} (${clashVerdict.confidence.toFixed(2)})` : "no verdict (Jev unavailable)"}`);
         }
         return {
           done: true,
@@ -96221,6 +96221,28 @@ async function exportWithMaterials(mcpSessionId) {
     materialResult,
     rawData: exportData
   };
+}
+function buildClashFixBrief(report) {
+  const worstList = report.worst.slice(0, 20).map((c9) => `- "${c9.a}" (${c9.a_class}) overlaps "${c9.b}" (${c9.b_class}) by ${c9.depth_m} m`).join("\n");
+  const typesList = report.clash_types.map((t) => `- ${t.classes[0]} vs ${t.classes[1]}: ${t.count} occurrence(s), deepest ${t.max_depth_m} m`).join("\n");
+  return `This is a REPAIR pass on a model that was just built in this same MCP scene - do NOT call initialize_project, do NOT rebuild anything from scratch. The scene already contains the finished building; you are fixing a specific list of geometric clashes an automated check found in it.
+
+IMPORTANT verification step (do this first): call get_scene_info and confirm the named elements below still exist in the scene with matching classes. If they do NOT (e.g. the scene looks empty, unrelated, or like a different project), STOP and just call export_ifc on whatever is currently in the scene without changing anything - do not attempt any fix in that case.
+
+If the elements do match, fix ONLY these specific clashes by adjusting the position and/or dimensions of the elements involved (via update_wall or execute_ifc_code_tool) so they no longer overlap - keep each element's material/style assignment intact, and do not touch any element not listed here:
+
+${worstList}
+
+For context, the overall pattern breakdown was:
+${typesList}
+
+Many of these may be the SAME repeated pattern (diagonal/radial members whose bounding boxes overlap near a convergence point even though the members themselves don't truly intersect - not a real problem). Prioritize fixing entries that are NOT part of one dominant repeated class-pair, especially any involving a wall, slab, footing, or column with a deep overlap - those are the ones most likely to be genuine structural errors.
+
+Once done, run this exact clash-check code again as its own execute_ifc_code_tool call to confirm the fix:
+
+${CLASH_CHECK_PYTHON}
+
+Then call export_ifc. Do this in one pass - do not loop or re-check more than once, export with whatever remains after this single fix attempt.`;
 }
 async function handleBim(payload3) {
   if (payload3.action === "test_model") {
@@ -96588,7 +96610,23 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
       if (continuation2?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation2.ssmCommandId);
         if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, mcpSessionId: continuation2.jobId };
-        return result.error ? { status: "error", error: result.error, mcpSessionId: continuation2.jobId } : { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict };
+        if (result.error) return { status: "error", error: result.error, mcpSessionId: continuation2.jobId };
+        if (result.clashVerdict?.action === "MAJOR_REGENERATE" && !continuation2.fixAttempted && result.clashReport) {
+          try {
+            const fixBrief = buildClashFixBrief(result.clashReport);
+            const fixCommandId = await startAntigravityBuild(fixBrief, continuation2.jobId, []);
+            console.log(`[jev] MAJOR_REGENERATE verdict - starting targeted repair pass for job ${continuation2.jobId} (${result.clashReport.clashes_found} clashes)`);
+            return {
+              status: "continue",
+              continuation: { kind: "antigravity", ssmCommandId: fixCommandId, jobId: continuation2.jobId, fixAttempted: true },
+              progress: "Correcting flagged structural clashes...",
+              mcpSessionId: continuation2.jobId
+            };
+          } catch (fixErr) {
+            console.warn(`[jev] failed to start repair pass, returning original build instead: ${fixErr?.message || fixErr}`);
+          }
+        }
+        return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation2.fixAttempted };
       }
       const userBrief = payload3.plan?.client_requirements || payload3.plan?.prompt || payload3.plan?.structure_name || "";
       const jevIntake = await jevSafe(
