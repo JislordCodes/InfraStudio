@@ -693,12 +693,16 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
 
       // Jev prompt-intake gate: a fast, cheap sanity check before committing to a
-      // build that can run up to ~35 minutes of paid EC2/SSM time. SHADOW MODE -
-      // logs its verdict but never blocks a build. No-ops entirely (jevSafe
-      // returns null) when JEV_API_KEY isn't set, so this is strictly additive.
-      // Once real verdict distributions have been observed in the logs, an
-      // off_topic verdict with high confidence can be turned into an early
-      // "status: error" return instead of a log line.
+      // build that can run up to ~35 minutes of paid EC2/SSM time. Blocks only
+      // when BOTH signals clearly agree the request has nothing to do with
+      // modelling a building/structure (in_scope very low AND intent is
+      // off_topic with high confidence) - requiring both to agree is a
+      // deliberate guard against a single noisy signal wrongly rejecting a real
+      // request. Ambiguous/short prompts are NOT blocked - the architect rule
+      // below already handles those by inventing specs, which is the existing,
+      // intended behaviour. No-ops entirely (jevSafe returns null, request
+      // proceeds normally) when JEV_API_KEY isn't set or the call fails, so a
+      // TypeSafe outage degrades to "gate skipped", never a broken pipeline.
       const jevIntake = await jevSafe(
         { prompt: userBrief, hasReferenceImages: Array.isArray(payload.plan?.images) && payload.plan.images.length > 0 },
         {
@@ -720,7 +724,18 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         },
       );
       if (jevIntake) {
-        console.log(`[jev shadow] intake: in_scope=${jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul.toFixed(2) : "?"} intent=${jevIntake.intent.type === "choice" ? `${jevIntake.intent.choice} (${jevIntake.intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+        const inScope = jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul : undefined;
+        const intent = jevIntake.intent.type === "choice" ? jevIntake.intent : undefined;
+        console.log(`[jev] intake: in_scope=${inScope?.toFixed(2) ?? "?"} intent=${intent ? `${intent.choice} (${intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+        const clearlyOffTopic = inScope !== undefined && inScope < 0.15
+          && intent?.choice === "off_topic" && intent.confidence > 0.8;
+        if (clearlyOffTopic) {
+          console.log(`[jev] BLOCKED intake - not a construction/building request: "${userBrief.slice(0, 120)}"`);
+          return {
+            status: "error",
+            error: "This doesn't look like a request to model a building or structure. Try describing what you'd like built - e.g. a house, office, bridge, tower, or other physical structure.",
+          };
+        }
       }
 
       const jobId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `job-${Date.now()}`;

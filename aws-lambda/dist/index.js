@@ -95850,6 +95850,24 @@ except Exception:
 url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
 size_match = re.search(r'([\\d,]+)\\s*bytes', resp)
 count_match = re.search(r'[Tt]otal[^:]*:\\s*\\**\\s*([\\d,]+)', resp)
+# CLASH_REPORT:{...} is printed by the clash-check code agy runs and ends up
+# embedded somewhere in its own prose response (e.g. inside a \`\`\`json fence),
+# not necessarily at the end - confirmed live. A real report nests objects
+# inside clash_types/worst, so a non-greedy regex up to the first '}' would
+# truncate it there; json.JSONDecoder.raw_decode consumes exactly one valid
+# JSON value from a given start position regardless of nesting, which a regex
+# can't do correctly for arbitrarily nested braces. Takes the LAST marker in
+# case agy quotes it more than once in its own summary.
+clash_json = None
+_dec = json.JSONDecoder()
+for _m in re.finditer(r'CLASH_REPORT:', resp):
+    try:
+        _obj, _ = _dec.raw_decode(resp, _m.end())
+        clash_json = _obj
+    except Exception:
+        pass
+if clash_json is not None:
+    print(f'CLASH_REPORT:{json.dumps(clash_json)}')
 if url_match:
     url = url_match.group(0).rstrip(').,"\\'')
     # The MCP server exports every build to ONE shared S3 key (its path is
@@ -96594,7 +96612,17 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
         }
       );
       if (jevIntake) {
-        console.log(`[jev shadow] intake: in_scope=${jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul.toFixed(2) : "?"} intent=${jevIntake.intent.type === "choice" ? `${jevIntake.intent.choice} (${jevIntake.intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+        const inScope = jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul : void 0;
+        const intent = jevIntake.intent.type === "choice" ? jevIntake.intent : void 0;
+        console.log(`[jev] intake: in_scope=${inScope?.toFixed(2) ?? "?"} intent=${intent ? `${intent.choice} (${intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+        const clearlyOffTopic = inScope !== void 0 && inScope < 0.15 && intent?.choice === "off_topic" && intent.confidence > 0.8;
+        if (clearlyOffTopic) {
+          console.log(`[jev] BLOCKED intake - not a construction/building request: "${userBrief.slice(0, 120)}"`);
+          return {
+            status: "error",
+            error: "This doesn't look like a request to model a building or structure. Try describing what you'd like built - e.g. a house, office, bridge, tower, or other physical structure."
+          };
+        }
       }
       const jobId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `job-${Date.now()}`;
       const images = Array.isArray(payload3.plan?.images) ? payload3.plan.images.filter((img) => img && typeof img.url === "string" && img.url.trim()) : [];

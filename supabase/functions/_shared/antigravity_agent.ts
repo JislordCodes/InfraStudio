@@ -153,6 +153,24 @@ except Exception:
 url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
 size_match = re.search(r'([\\d,]+)\\s*bytes', resp)
 count_match = re.search(r'[Tt]otal[^:]*:\\s*\\**\\s*([\\d,]+)', resp)
+# CLASH_REPORT:{...} is printed by the clash-check code agy runs and ends up
+# embedded somewhere in its own prose response (e.g. inside a \`\`\`json fence),
+# not necessarily at the end - confirmed live. A real report nests objects
+# inside clash_types/worst, so a non-greedy regex up to the first '}' would
+# truncate it there; json.JSONDecoder.raw_decode consumes exactly one valid
+# JSON value from a given start position regardless of nesting, which a regex
+# can't do correctly for arbitrarily nested braces. Takes the LAST marker in
+# case agy quotes it more than once in its own summary.
+clash_json = None
+_dec = json.JSONDecoder()
+for _m in re.finditer(r'CLASH_REPORT:', resp):
+    try:
+        _obj, _ = _dec.raw_decode(resp, _m.end())
+        clash_json = _obj
+    except Exception:
+        pass
+if clash_json is not None:
+    print(f'CLASH_REPORT:{json.dumps(clash_json)}')
 if url_match:
     url = url_match.group(0).rstrip(').,"\\'')
     # The MCP server exports every build to ONE shared S3 key (its path is
