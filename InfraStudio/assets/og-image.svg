@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0B0C0E"/>
+  <g opacity="0.5" stroke="#23252B" stroke-width="1">
+    <path d="M0 525H1200M0 420H1200M0 315H1200M0 210H1200M0 105H1200" />
+    <path d="M150 0V630M300 0V630M450 0V630M600 0V630M750 0V630M900 0V630M1050 0V630" />
+  </g>
+  <g transform="translate(120,175)">
+    <path d="M0 220V90l70-30 70 30v130l-70 30-70-30Z" fill="none" stroke="#2F6FED" stroke-width="3.5"/>
+    <path d="M0 90l70 30 70-30M70 120v130" fill="none" stroke="#2F6FED" stroke-width="3.5"/>
+  </g>
+  <text x="330" y="290" font-family="Arial, sans-serif" font-size="66" font-weight="700" fill="#FAFAF8">InfraStudio</text>
+  <text x="330" y="345" font-family="Arial, sans-serif" font-size="27" fill="#9A9A94">AI-native engineering design for the built world.</text>
+  <text x="330" y="400" font-family="Arial, sans-serif" font-size="22" fill="#2F6FED">Design the built world with AI.</text>
+</svg>

@@ -1,0 +1,9 @@
+{
+  "name": "infrastudio-landing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InfraStudio landing page — static site with a small local dev server for waitlist submissions.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>InfraStudio — AI-Native Engineering Design</title>
+<meta name="description" content="InfraStudio turns natural-language design intent into computable, editable, and validated BIM models for architecture and infrastructure teams." />
+<meta name="keywords" content="AI architecture software, AI BIM, AI BIM software, AI engineering design, computational design AI, generative BIM, AI architectural design, BIM automation, IFC AI, AI for construction, AI for architecture, computational building design, AEC AI, ConTech" />
+<meta name="author" content="InfraStudio" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="InfraStudio — AI-Native Engineering Design" />
+<meta property="og:description" content="InfraStudio turns natural-language design intent into computable, editable, and validated BIM models." />
+<meta property="og:image" content="https://infrastudio.app/assets/og-image.svg" />
+<meta property="og:url" content="https://infrastudio.app" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@infrastudioapp" />
+<meta name="twitter:title" content="InfraStudio — AI-Native Engineering Design" />
+<meta name="twitter:description" content="InfraStudio turns natural-language design intent into computable, editable, and validated BIM models." />
+<meta name="twitter:image" content="https://infrastudio.app/assets/og-image.svg" />
+
+<link rel="canonical" href="https://infrastudio.app" />
+
+<link rel="icon" href="/favicon.ico" sizes="48x48" />
+<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+<link rel="icon" type="image/png" sizes="48x48" href="./assets/favicon-48.png" />
+<link rel="icon" type="image/png" sizes="96x96" href="./assets/favicon-96.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="./assets/favicon-192.png" />
+<link rel="apple-touch-icon" href="./assets/favicon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ===================== NAV ===================== -->
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a href="#top" class="brand">
+      <svg width="22" height="22" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="currentColor" opacity="0.06"/><path d="M18 44V20l14-6 14 6v24l-14 6-14-6Z" fill="none" stroke="currentColor" stroke-width="3"/><path d="M18 20l14 6 14-6M32 26v24" fill="none" stroke="currentColor" stroke-width="3"/></svg>
+      <span>InfraStudio</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#product">Product</a>
+      <a href="#technology">Technology</a>
+      <a href="#vision">Vision</a>
+      <a href="#about">About</a>
+    </nav>
+    <div class="nav-cta">
+      <button class="btn btn-ghost" data-open-waitlist="early-access">Request Early Access</button>
+      <a class="btn btn-primary" href="https://infra-studio-z3xc.vercel.app" target="_blank" rel="noopener">Try Now</a>
+    </div>
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+  <div class="nav-mobile" id="navMobile">
+    <a href="#product">Product</a>
+    <a href="#technology">Technology</a>
+    <a href="#vision">Vision</a>
+    <a href="#about">About</a>
+    <button class="btn btn-ghost" data-open-waitlist="early-access">Request Early Access</button>
+    <a class="btn btn-primary" href="https://infra-studio-z3xc.vercel.app" target="_blank" rel="noopener">Try Now</a>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ===================== HERO ===================== -->
+<section class="hero" id="top">
+  <div class="hero-grid" aria-hidden="true"></div>
+  <div class="hero-inner">
+    <div class="hero-copy reveal">
+      <p class="eyebrow"><span class="dot"></span>Working prototype &mdash; early access opening</p>
+      <h1>Design the built world with AI.</h1>
+      <p class="hero-sub">InfraStudio turns natural-language design intent into computable, editable, and validated BIM models&mdash;giving AI a structured environment to reason about and work with buildings.</p>
+      <div class="hero-actions">
+        <button class="btn btn-primary btn-lg" data-open-waitlist="early-access">Request Early Access</button>
+        <a class="btn btn-outline btn-lg" href="#product">See the Workflow <span class="arrow">&darr;</span></a>
+      </div>
+      <div class="hero-meta">
+        <a href="https://infra-studio-z3xc.vercel.app" target="_blank" rel="noopener">Try the live prototype &rarr;</a>
+      </div>
+    </div>
+
+    <div class="hero-visual reveal" style="--delay:0.15s">
+      <div class="viewport-frame">
+        <div class="viewport-topbar">
+          <span class="vt-dot"></span><span class="vt-dot"></span><span class="vt-dot"></span>
+          <span class="vt-label">model_view.ifc &mdash; InfraStudio</span>
+        </div>
+        <canvas id="heroCanvas" aria-label="Rotating 3D BIM building model"></canvas>
+
+        <div class="hud hud-tl">
+          <span class="hud-label">NL Instruction</span>
+          <span class="hud-value">"Two-storey residence, four bedrooms, south-facing glazing"</span>
+        </div>
+        <div class="hud hud-tr">
+          <span class="hud-label">AI Reasoning</span>
+          <span class="hud-value hud-live"><span class="pulse"></span> Planning spatial layout&hellip;</span>
+        </div>
+        <div class="hud hud-bl">
+          <span class="hud-label">BIM Structure</span>
+          <span class="hud-value">Walls · Floors · Openings · Spaces</span>
+        </div>
+        <div class="hud hud-br">
+          <span class="hud-label">Validation</span>
+          <span class="hud-value hud-ok">&check; Geometry valid &nbsp;&check; IFC compliant</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== LOGOS / STATUS STRIP ===================== -->
+<section class="strip">
+  <div class="strip-inner">
+    <span>Working prototype</span>
+    <span class="sep">/</span>
+    <span>Natural language &rarr; IFC/BIM demonstrated</span>
+    <span class="sep">/</span>
+    <span>Currently validating with design partners</span>
+  </div>
+</section>
+
+<!-- ===================== PROBLEM ===================== -->
+<section class="section" id="problem">
+  <div class="section-inner">
+    <p class="kicker">The Problem</p>
+    <h2 class="section-title">AI can imagine buildings.<br/>It still struggles to build the model.</h2>
+    <p class="section-sub">Generative AI can produce convincing images of buildings. Professional architecture and engineering don&rsquo;t end with an image &mdash; they require structured, computable information.</p>
+
+    <div class="compare">
+      <div class="compare-col compare-bad reveal">
+        <span class="compare-tag">Today&rsquo;s generative AI</span>
+        <div class="compare-flow">
+          <div class="flow-step">Prompt</div>
+          <div class="flow-arrow">&darr;</div>
+          <div class="flow-step">Image</div>
+          <div class="flow-arrow flow-x">&times;</div>
+          <div class="flow-result">Not enough for professional workflows</div>
+        </div>
+      </div>
+      <div class="compare-col compare-good reveal" style="--delay:0.1s">
+        <span class="compare-tag">InfraStudio</span>
+        <div class="compare-flow">
+          <div class="flow-step">Prompt</div>
+          <div class="flow-arrow">&darr;</div>
+          <div class="flow-step">Reasoning</div>
+          <div class="flow-arrow">&darr;</div>
+          <div class="flow-step">Computational Model</div>
+          <div class="flow-arrow">&darr;</div>
+          <div class="flow-step">Validation</div>
+          <div class="flow-arrow flow-check">&check;</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-4">
+      <div class="mini-card reveal">
+        <h3>Slow</h3>
+        <p>Creating detailed BIM models can require significant manual work.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.05s">
+        <h3>Fragmented</h3>
+        <p>Design intent, geometry, BIM data, engineering tools, and validation live across different systems.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.1s">
+        <h3>Difficult to iterate</h3>
+        <p>Changing a design requires manually modifying interconnected model elements.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.15s">
+        <h3>AI is disconnected</h3>
+        <p>Generative AI can produce visual concepts without understanding the computational structure behind them.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PRODUCT / WORKFLOW ===================== -->
+<section class="section section-alt" id="product">
+  <div class="section-inner">
+    <p class="kicker">The Product</p>
+    <h2 class="section-title">From intent to a model you can actually work with.</h2>
+    <p class="section-sub">Instead of manually constructing everything, describe what you want. InfraStudio interprets your intent and produces a structured computational building model &mdash; not just a picture of one.</p>
+
+    <div class="pipeline reveal">
+      <div class="pipeline-step">
+        <span class="pipeline-index">01</span>
+        <h3>Describe</h3>
+        <p>Communicate design intent naturally &mdash; no manual modeling required to get started.</p>
+      </div>
+      <div class="pipeline-step">
+        <span class="pipeline-index">02</span>
+        <h3>Reason</h3>
+        <p>Specialized AI agents interpret spaces, relationships, dimensions and constraints.</p>
+      </div>
+      <div class="pipeline-step">
+        <span class="pipeline-index">03</span>
+        <h3>Generate</h3>
+        <p>The system builds structured geometry and BIM relationships through controlled tools.</p>
+      </div>
+      <div class="pipeline-step">
+        <span class="pipeline-index">04</span>
+        <h3>Validate</h3>
+        <p>Generated models are checked for structural and computational validity.</p>
+      </div>
+      <div class="pipeline-step">
+        <span class="pipeline-index">05</span>
+        <h3>Iterate</h3>
+        <p>Where validation fails, the system revises the model and re-checks it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TECHNICAL ARCHITECTURE ===================== -->
+<section class="section section-dark" id="technology">
+  <div class="section-inner">
+    <p class="kicker kicker-light">Technical Architecture</p>
+    <h2 class="section-title title-light">AI that operates inside the model.</h2>
+    <p class="section-sub sub-light">InfraStudio combines specialized AI agents with constrained engineering tools and a deterministic geometry engine. The AI never has unrestricted access to arbitrary operations &mdash; it works through defined tools.</p>
+
+    <div class="arch-wrap reveal">
+      <svg class="arch-diagram" id="archDiagram" viewBox="0 0 720 900" role="img" aria-label="Architecture pipeline diagram">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#4C4C48" />
+          </marker>
+        </defs>
+        <!-- connecting line, animated dash -->
+        <line x1="360" y1="60" x2="360" y2="840" stroke="#2A2A27" stroke-width="2" />
+        <line class="arch-flow-line" x1="360" y1="60" x2="360" y2="840" stroke="#2F6FED" stroke-width="2" stroke-dasharray="6 10" />
+
+        <g class="arch-node" data-node="0" transform="translate(360,40)">
+          <text text-anchor="middle" class="arch-user">USER</text>
+        </g>
+
+        <g class="arch-node" data-node="1" transform="translate(360,160)">
+          <rect x="-140" y="-30" width="280" height="60" rx="10" />
+          <text text-anchor="middle" dy="6">Natural Language Input</text>
+        </g>
+
+        <g class="arch-node" data-node="2" transform="translate(360,290)">
+          <rect x="-140" y="-34" width="280" height="68" rx="10" class="arch-box-accent" />
+          <text text-anchor="middle" dy="-4">Interpreter Agent</text>
+          <text text-anchor="middle" dy="18" class="arch-sub">Structures design intent</text>
+        </g>
+
+        <g class="arch-node" data-node="3" transform="translate(360,420)">
+          <rect x="-140" y="-34" width="280" height="68" rx="10" class="arch-box-accent" />
+          <text text-anchor="middle" dy="-4">Architectural Agent</text>
+          <text text-anchor="middle" dy="18" class="arch-sub">Spaces, composition, relationships</text>
+        </g>
+
+        <g class="arch-node" data-node="4" transform="translate(360,550)">
+          <rect x="-140" y="-34" width="280" height="68" rx="10" class="arch-box-accent" />
+          <text text-anchor="middle" dy="-4">BIM / MCP Agent</text>
+          <text text-anchor="middle" dy="18" class="arch-sub">Constrained tool calls only</text>
+        </g>
+
+        <g class="arch-node" data-node="5" transform="translate(360,670)">
+          <rect x="-140" y="-30" width="280" height="60" rx="10" />
+          <text text-anchor="middle" dy="6">Deterministic Geometry Engine</text>
+        </g>
+
+        <g class="arch-node" data-node="6" transform="translate(360,780)">
+          <rect x="-140" y="-30" width="280" height="60" rx="10" />
+          <text text-anchor="middle" dy="6">IFC / BIM Model</text>
+        </g>
+
+        <g class="arch-node" data-node="7" transform="translate(360,880)">
+          <rect x="-160" y="-30" width="320" height="60" rx="10" class="arch-box-validate" />
+          <text text-anchor="middle" dy="6">Quality Validation &rarr; Revision</text>
+        </g>
+      </svg>
+
+      <div class="arch-legend">
+        <div class="arch-legend-item">
+          <h4>Interpreter Agent</h4>
+          <p>Converts natural-language requirements into structured design intent.</p>
+        </div>
+        <div class="arch-legend-item">
+          <h4>Architectural Agent</h4>
+          <p>Reasons about architectural composition, spaces, relationships and design decisions.</p>
+        </div>
+        <div class="arch-legend-item">
+          <h4>BIM / MCP Agent</h4>
+          <p>Uses constrained BIM operations through Model Context Protocol&ndash;style tool interfaces &mdash; never arbitrary, unrestricted actions.</p>
+        </div>
+        <div class="arch-legend-item">
+          <h4>Deterministic Geometry Engine</h4>
+          <p>Computational geometry / BIM tooling actually creates the model &mdash; currently Python, IfcOpenShell, IFC, and MCP.</p>
+        </div>
+        <div class="arch-legend-item">
+          <h4>Quality / Validation Agent</h4>
+          <p>Reviews the generated model, identifies problems, and can trigger a generate &rarr; validate &rarr; revise loop.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== OPEN STANDARDS ===================== -->
+<section class="section" id="standards">
+  <div class="section-inner section-inner-narrow">
+    <p class="kicker">Open Standards</p>
+    <h2 class="section-title">Built for interoperability.</h2>
+    <p class="section-sub">InfraStudio is built around open BIM standards and interoperable tooling, allowing generated models to participate in the broader AEC software ecosystem rather than being trapped inside a proprietary format.</p>
+    <div class="tag-row reveal">
+      <span class="tag">IFC</span>
+      <span class="tag">Open BIM</span>
+      <span class="tag">Interoperability</span>
+      <span class="tag">APIs</span>
+    </div>
+    <p class="standards-note reveal">IFC &mdash; Industry Foundation Classes &mdash; is an open standard for exchanging BIM information. InfraStudio isn&rsquo;t building another closed design format; it generates structured models that can move between the tools your team already uses.</p>
+  </div>
+</section>
+
+<!-- ===================== USE CASES ===================== -->
+<section class="section section-alt" id="use-cases">
+  <div class="section-inner">
+    <p class="kicker">Use Cases</p>
+    <h2 class="section-title">Starting narrow, on purpose.</h2>
+    <div class="grid-5">
+      <div class="mini-card reveal">
+        <h3>Conceptual Design</h3>
+        <p>Turn early design ideas into structured computational models.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.05s">
+        <h3>Design Iteration</h3>
+        <p>Modify models using natural language instead of manual rework.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.1s">
+        <h3>BIM Automation</h3>
+        <p>Automate repetitive model creation tasks.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.15s">
+        <h3>Design Exploration</h3>
+        <p>Generate and evaluate multiple design directions.</p>
+      </div>
+      <div class="mini-card reveal" style="--delay:0.2s">
+        <h3>Engineering Workflows</h3>
+        <p>Create structured models that feed downstream computational workflows.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== WHO IT'S FOR ===================== -->
+<section class="section" id="who">
+  <div class="section-inner">
+    <p class="kicker">Who It&rsquo;s For</p>
+    <h2 class="section-title">Built for people who design the physical world.</h2>
+    <div class="grid-4">
+      <div class="mini-card mini-card-lg reveal">
+        <h3>Architects</h3>
+        <p>Move from concept to structured model faster.</p>
+      </div>
+      <div class="mini-card mini-card-lg reveal" style="--delay:0.05s">
+        <h3>BIM Teams</h3>
+        <p>Reduce repetitive modeling work.</p>
+      </div>
+      <div class="mini-card mini-card-lg reveal" style="--delay:0.1s">
+        <h3>Engineers</h3>
+        <p>Work with structured computational representations.</p>
+      </div>
+      <div class="mini-card mini-card-lg reveal" style="--delay:0.15s">
+        <h3>Design Studios</h3>
+        <p>Explore more design alternatives without proportional increases in manual modeling.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== VISION / WHY NOW ===================== -->
+<section class="section section-dark" id="vision">
+  <div class="section-inner">
+    <p class="kicker kicker-light">Vision</p>
+    <h2 class="section-title title-light">Architecture is our starting point, not our destination.</h2>
+    <p class="section-sub sub-light">We believe increasingly capable AI will need reliable interfaces to the structured systems that govern the physical world. Buildings are one of the first places where this becomes tangible. InfraStudio is building toward a future where AI can reason about, design, modify, and validate complex physical systems.</p>
+
+    <div class="vision-path reveal">
+      <span class="vp-step vp-active">Architecture</span>
+      <span class="vp-arrow">&rarr;</span>
+      <span class="vp-step">Infrastructure</span>
+      <span class="vp-arrow">&rarr;</span>
+      <span class="vp-step">Engineering</span>
+      <span class="vp-arrow">&rarr;</span>
+      <span class="vp-step">The interface between AI and the physical world</span>
+    </div>
+
+    <div class="why-now">
+      <div class="why-card reveal">
+        <span class="why-index">01</span>
+        <h3>More capable AI models</h3>
+        <p>Modern models can reason across increasingly complex instructions and workflows.</p>
+      </div>
+      <div class="why-card reveal" style="--delay:0.08s">
+        <span class="why-index">02</span>
+        <h3>Agentic systems</h3>
+        <p>AI can increasingly use tools and execute multi-step tasks instead of only producing responses.</p>
+      </div>
+      <div class="why-card reveal" style="--delay:0.16s">
+        <span class="why-index">03</span>
+        <h3>Open computational infrastructure</h3>
+        <p>Standards like IFC and tools such as IfcOpenShell make it possible to programmatically interact with structured building models.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== EARLY PRODUCT STATUS ===================== -->
+<section class="section" id="status">
+  <div class="section-inner section-inner-narrow center">
+    <p class="kicker">Where We Are</p>
+    <h2 class="section-title">We&rsquo;re building it now.</h2>
+    <p class="section-sub">InfraStudio is currently in working-prototype stage. We&rsquo;ve demonstrated the core workflow from natural-language architectural intent to structured IFC/BIM models, and are now working with users to identify the highest-value workflow for our first customers.</p>
+    <button class="btn btn-primary btn-lg" data-open-waitlist="design-partner">Become an Early Design Partner</button>
+  </div>
+</section>
+
+<!-- ===================== FOUNDERS ===================== -->
+<section class="section section-alt" id="about">
+  <div class="section-inner">
+    <p class="kicker">Founders</p>
+    <h2 class="section-title">Built by a small team, on purpose.</h2>
+    <div class="founders reveal">
+      <div class="founder-card">
+        <div class="founder-avatar" aria-hidden="true">AJ</div>
+        <h3>Ayomide Walter Jislord</h3>
+        <span class="founder-role">Co-founder &amp; CEO</span>
+        <p>AI/ML engineer focused on agentic AI, computational systems, and AI applications in the physical world.</p>
+      </div>
+      <div class="founder-card">
+        <div class="founder-avatar" aria-hidden="true">BD</div>
+        <h3>Bolaji David</h3>
+        <span class="founder-role">Co-founder &amp; CTO</span>
+        <p>Technical builder responsible for implementation and turning InfraStudio&rsquo;s architecture into a working product.</p>
+      </div>
+    </div>
+    <p class="founder-statement reveal">&ldquo;We&rsquo;re building InfraStudio because we believe AI&rsquo;s next frontier isn&rsquo;t just generating more content. It&rsquo;s learning how to reliably operate within the structured systems that make the physical world work.&rdquo;</p>
+  </div>
+</section>
+
+<!-- ===================== FINAL CTA ===================== -->
+<section class="final-cta">
+  <div class="section-inner section-inner-narrow center reveal">
+    <h2 class="section-title">The next interface for the built world starts here.</h2>
+    <p class="section-sub">We&rsquo;re looking for architects, engineers, BIM teams, and forward-thinking AEC companies to help shape the first workflows.</p>
+    <div class="hero-actions center">
+      <button class="btn btn-primary btn-lg" data-open-waitlist="early-access">Request Early Access</button>
+      <button class="btn btn-outline btn-lg" data-open-waitlist="design-partner">Become a Design Partner</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <a href="#top" class="brand">
+        <svg width="20" height="20" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="currentColor" opacity="0.08"/><path d="M18 44V20l14-6 14 6v24l-14 6-14-6Z" fill="none" stroke="currentColor" stroke-width="3"/><path d="M18 20l14 6 14-6M32 26v24" fill="none" stroke="currentColor" stroke-width="3"/></svg>
+        <span>InfraStudio</span>
+      </a>
+      <p>AI-native engineering design for the built world.</p>
+    </div>
+    <div class="footer-links">
+      <div>
+        <h4>Site</h4>
+        <a href="#product">Product</a>
+        <a href="#technology">Technology</a>
+        <a href="#vision">Vision</a>
+        <a href="#about">About</a>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <a href="mailto:jislorda@gmail.com">jislorda@gmail.com</a>
+        <a href="https://x.com/infrastudioapp" target="_blank" rel="noopener" data-social>X</a>
+        <a href="#" data-social>LinkedIn</a>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>&copy; <span id="year"></span> InfraStudio. All rights reserved.</span>
+  </div>
+</footer>
+
+<!-- ===================== WAITLIST MODAL ===================== -->
+<div class="modal-overlay" id="waitlistOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="waitlistTitle">
+    <button class="modal-close" id="modalClose" aria-label="Close">&times;</button>
+
+    <div class="modal-body" id="modalForm">
+      <p class="kicker" id="modalKicker">Early Access</p>
+      <h3 id="waitlistTitle">Join the waitlist</h3>
+      <p class="modal-sub" id="modalSub">Tell us a bit about you. This helps us shape the first workflows around real design work.</p>
+
+      <form id="waitlistForm" novalidate>
+        <input type="hidden" name="type" id="waitlistType" value="early-access" />
+        <label>
+          <span>Name</span>
+          <input type="text" name="name" required autocomplete="name" placeholder="Ada Lovelace" />
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" required autocomplete="email" placeholder="ada@studio.com" />
+        </label>
+        <label>
+          <span>Profession</span>
+          <input type="text" name="profession" required placeholder="Architect, BIM Manager, Engineer&hellip;" />
+        </label>
+        <label id="companyField" hidden>
+          <span>Studio / Company</span>
+          <input type="text" name="company" placeholder="Studio or firm name" />
+        </label>
+        <label>
+          <span id="notesLabel">What would you want InfraStudio to automate? <em>(optional)</em></span>
+          <textarea name="notes" rows="2" placeholder="Optional"></textarea>
+        </label>
+        <button type="submit" class="btn btn-primary btn-lg btn-block" id="submitLabel">Join the waitlist</button>
+        <p class="form-note">No spam. We&rsquo;ll reach out about early access and design-partner conversations.</p>
+      </form>
+    </div>
+
+    <div class="modal-success" id="modalSuccess" hidden>
+      <div class="success-icon">&check;</div>
+      <h3 id="successTitle">You&rsquo;re on the list.</h3>
+      <p id="successText">Thanks for your interest in InfraStudio. We&rsquo;ll be in touch as early access opens.</p>
+      <button class="btn btn-outline" id="modalDone">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="./js/main.js" defer></script>
+</body>
+</html>

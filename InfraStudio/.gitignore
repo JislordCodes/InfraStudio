@@ -1,0 +1,6 @@
+# Waitlist submissions collected by server.js contain real names/emails —
+# never commit them. The server (re)creates this file with a header row
+# on first run.
+data/waitlist.csv
+
+node_modules/
