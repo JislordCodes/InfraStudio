@@ -4,9 +4,10 @@
     <path d="M0 525H1200M0 420H1200M0 315H1200M0 210H1200M0 105H1200" />
     <path d="M150 0V630M300 0V630M450 0V630M600 0V630M750 0V630M900 0V630M1050 0V630" />
   </g>
-  <g transform="translate(120,175)">
-    <path d="M0 220V90l70-30 70 30v130l-70 30-70-30Z" fill="none" stroke="#2F6FED" stroke-width="3.5"/>
-    <path d="M0 90l70 30 70-30M70 120v130" fill="none" stroke="#2F6FED" stroke-width="3.5"/>
+  <rect x="120" y="175" width="140" height="140" rx="26" fill="#F2F1ED"/>
+  <g transform="translate(153,196)">
+    <path d="M0 63V26l37-16 37 16v37l-37 16-37-16Z" fill="none" stroke="#0B0C0E" stroke-width="4"/>
+    <path d="M0 26l37 16 37-16M37 42v37" fill="none" stroke="#0B0C0E" stroke-width="4"/>
   </g>
   <text x="330" y="290" font-family="Arial, sans-serif" font-size="66" font-weight="700" fill="#FAFAF8">InfraStudio</text>
   <text x="330" y="345" font-family="Arial, sans-serif" font-size="27" fill="#9A9A94">AI-native engineering design for the built world.</text>
