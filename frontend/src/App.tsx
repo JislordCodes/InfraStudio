@@ -21,17 +21,26 @@ function App() {
   const [hasUnlockCode, setHasUnlockCode] = useState(
     () => !!localStorage.getItem('infrastudio_unlock_code')
   );
-  const handleUnlockClick = () => {
-    const entered = window.prompt(hasUnlockCode ? 'Update access code (leave blank to clear):' : 'Access code:');
-    if (entered === null) return; // cancelled
-    const trimmed = entered.trim();
+  const applyUnlockCode = (trimmed: string) => {
     if (trimmed) {
       localStorage.setItem('infrastudio_unlock_code', trimmed);
       setHasUnlockCode(true);
+      // The button itself gives no visual confirmation on purpose - without
+      // this, entering the code "does nothing" as far as anyone can see
+      // unless they happen to already be gated, which is confusing even for
+      // the owner. The code is still only actually checked server-side on
+      // the next build.
+      window.alert('Access code saved on this browser. It will be used automatically on your next build.');
     } else {
       localStorage.removeItem('infrastudio_unlock_code');
       setHasUnlockCode(false);
+      window.alert('Access code cleared from this browser.');
     }
+  };
+  const handleUnlockClick = () => {
+    const entered = window.prompt(hasUnlockCode ? 'Update access code (leave blank to clear):' : 'Access code:');
+    if (entered === null) return; // cancelled
+    applyUnlockCode(entered.trim());
   };
 
   const handleFileUpload = (file: File) => {
@@ -59,6 +68,23 @@ function App() {
     const ifcUrl = url.searchParams.get('ifc_url');
     if (ifcUrl) {
       handleLoadIfcUrl(ifcUrl);
+    }
+  }, []);
+
+  useEffect(() => {
+    // A more reliable path to the same unlock than hunting for the
+    // deliberately near-invisible padlock button (see handleUnlockClick) -
+    // for the owner's own use, e.g. bookmarking
+    // https://www.infrastudio.app/studios?unlock=<code>. Strips the param
+    // from the visible URL immediately after so it isn't left sitting in
+    // the address bar, browser history, or an accidentally-shared link.
+    const url = new URL(window.location.href);
+    const unlock = url.searchParams.get('unlock');
+    if (unlock) {
+      localStorage.setItem('infrastudio_unlock_code', unlock.trim());
+      setHasUnlockCode(true);
+      url.searchParams.delete('unlock');
+      window.history.replaceState({}, '', url.toString());
     }
   }, []);
 

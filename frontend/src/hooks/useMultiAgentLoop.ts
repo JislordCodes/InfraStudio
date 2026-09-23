@@ -85,7 +85,13 @@ export async function runAntigravityBuild(
       if (bimRes.progress) pushStep(bimRes.progress);
       bimRes = await callEdge('agent-bim', {
         action: 'build_code',
-        plan: { client_requirements: userMessage, continuation: bimRes.continuation },
+        // unlockCode travels on every poll, not just the first call: the
+        // backend re-checks it on the SAME call that finally returns
+        // success (see agent-bim/index.ts) to decide whether to record this
+        // IP as having used its trial - without it here, an unlocked
+        // build's own completion call would look unlocked-less and get the
+        // owner's IP marked used anyway.
+        plan: { client_requirements: userMessage, continuation: bimRes.continuation, unlockCode },
         mcpSessionId: sessionId,
       });
       sessionId = bimRes.mcpSessionId || sessionId;
