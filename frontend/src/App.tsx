@@ -132,17 +132,21 @@ function App() {
           >
             <Upload size={15} strokeWidth={2.5} />
           </button>
-          <button
-            onClick={handleUnlockClick}
-            className={`p-1.5 rounded-full active:scale-90 transition-all ${
-              hasUnlockCode ? 'text-blue-400 hover:text-blue-300' : 'text-neutral-600 hover:text-neutral-400'
-            }`}
-            title=" "
-          >
-            <Lock size={13} strokeWidth={2.5} />
-          </button>
         </div>
       </div>
+
+      {/* Owner/trusted-tester unlock - deliberately bare (no pill, no border,
+          no shadow) and flush with the very bottom edge, away from every
+          other control, so it reads as empty space rather than a button. */}
+      <button
+        onClick={handleUnlockClick}
+        className={`absolute bottom-0 right-1.5 z-20 p-2 pointer-events-auto active:scale-90 transition-all ${
+          hasUnlockCode ? 'text-blue-500/50 hover:text-blue-400' : 'text-neutral-900 hover:text-neutral-700'
+        }`}
+        title=" "
+      >
+        <Lock size={11} strokeWidth={2.5} />
+      </button>
 
       {/* Download - the one CTA that should never be easy to miss once a model exists. */}
       {currentIfcUrl && (
