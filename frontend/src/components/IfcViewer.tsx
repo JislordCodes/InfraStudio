@@ -39,6 +39,29 @@ function tuneNavigationToModel(camera: OBC.OrthoPerspectiveCamera, bbox: THREE.B
   applyClipRange(camera, Math.max(0.05, span / 50000), Math.max(10000, span * 40));
 }
 
+/** ifcLoader.load()'s own promise can hang indefinitely even after the model has
+ *  genuinely finished streaming in and been added to the scene (observed in
+ *  production: onItemSet fires, bounds get computed, camera frames the model -
+ *  and load() still never settles), which left the "Converting IFC to
+ *  Fragments..." overlay stuck forever. onItemSet firing is independent proof
+ *  the model is usable, so race load() against it (plus a hard timeout in case
+ *  neither ever fires) instead of trusting load() alone to signal completion. */
+function raceLoadAgainstSceneAdd(
+  fragments: OBC.FragmentsManager,
+  loadPromise: Promise<unknown>,
+  timeoutMs = 60000,
+): Promise<void> {
+  const sceneAdded = new Promise<void>((resolve) => {
+    const handler = () => {
+      fragments.list.onItemSet.remove(handler);
+      resolve();
+    };
+    fragments.list.onItemSet.add(handler);
+  });
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
+  return Promise.race([loadPromise.then(() => undefined), sceneAdded, timeout]);
+}
+
 /** Frame a box from a three-quarter aerial angle at a distance derived from its size.
  *  Done explicitly rather than via fitToBox, which reuses the current view direction
  *  and leaves wide sites viewed edge-on from near ground level. */
@@ -320,7 +343,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
     const initAsync = async () => {
       // Point directly to the Fragments Web Worker script placed into our Vite public/ folder
-      fragments.init('/fragments-worker.mjs');
+      fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
 
       // Camera update loop
       world.camera.controls.addEventListener('update', () => {
@@ -422,18 +445,18 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       setIsLoadingFile(true);
       try {
         if (initPromiseRef.current) await initPromiseRef.current;
-        
+
         // Anti-crash failsafe: If fragments lost initialization, forcibly re-initialize
         const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
         if (!fragments.initialized) {
           console.warn('Fragments were uninitialized before load. Forcing FragmentsManager init.');
-          fragments.init('/fragments-worker.mjs');
+          fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
         }
 
         const data = new Uint8Array(await file.arrayBuffer());
         console.log('Starting IFC load, file size:', data.byteLength, 'bytes');
-        const model = await ifcLoaderRef.current.load(data, true, file.name);
-        console.log('IFC load() resolved successfully', !!model);
+        await raceLoadAgainstSceneAdd(fragments, ifcLoaderRef.current.load(data, true, file.name));
+        console.log('IFC load settled (resolved, model reached the scene, or timed out safely)');
       } catch (error) {
         console.error('Error loading IFC file:', error);
         alert(`Failed to load IFC file. Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -452,7 +475,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
         if (!fragments.initialized) {
           console.warn('Fragments were uninitialized before loadFromUrl. Forcing FragmentsManager init.');
-          fragments.init('/fragments-worker.mjs');
+          fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
         }
 
         console.log(`Fetching IFC from URL: ${url}`);
@@ -463,8 +486,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);
 
         const modelId = `supabase-model-${Date.now()}`;
-        const model = await ifcLoaderRef.current.load(data, true, modelId);
-        console.log('IFC model loaded from URL successfully', !!model);
+        await raceLoadAgainstSceneAdd(fragments, ifcLoaderRef.current.load(data, true, modelId));
+        console.log('IFC load settled (resolved, model reached the scene, or timed out safely)');
       } catch (error) {
         console.error('Error loading IFC from URL:', error);
         alert(`Failed to load IFC URL. Error: ${error instanceof Error ? error.message : String(error)}`);
