@@ -96071,42 +96071,6 @@ function isUnlockedRequest(payload3) {
   const provided = typeof payload3?.plan?.unlockCode === "string" ? payload3.plan.unlockCode.trim() : "";
   return !!provided && provided === expected;
 }
-async function isIpUnlocked(ipHash) {
-  if (!ipHash || !supabaseConfigured()) return false;
-  try {
-    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_unlocked_access?ip_hash=eq.${ipHash}&select=ip_hash&limit=1`;
-    const res = await fetch(url, {
-      headers: {
-        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
-        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`
-      }
-    });
-    if (!res.ok) return false;
-    const rows = await res.json();
-    return Array.isArray(rows) && rows.length > 0;
-  } catch (e9) {
-    console.warn("[trial_gate] isIpUnlocked check failed, denying unlock:", e9);
-    return false;
-  }
-}
-async function markIpUnlocked(ipHash) {
-  if (!ipHash || !supabaseConfigured()) return;
-  try {
-    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_unlocked_access`;
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
-        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates"
-      },
-      body: JSON.stringify({ ip_hash: ipHash })
-    });
-  } catch (e9) {
-    console.warn("[trial_gate] markIpUnlocked failed (non-fatal):", e9);
-  }
-}
 
 // ../supabase/functions/agent-bim/index.ts
 var MUTATION_TOOLS = /* @__PURE__ */ new Set([
@@ -96387,12 +96351,7 @@ async function handleBim(payload3) {
   }
   if (payload3.action === "identity") {
     const ipHash = await getIpHash(payload3);
-    const suppliedValidCode = isUnlockedRequest(payload3);
-    if (suppliedValidCode && ipHash) {
-      await markIpUnlocked(ipHash);
-    }
-    const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
-    return { status: "success", ip_hash: ipHash, unlocked };
+    return { status: "success", ip_hash: ipHash, unlocked: isUnlockedRequest(payload3) };
   }
   let mcpSessionId = payload3.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
@@ -96716,11 +96675,7 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
     if (useAntigravity && !payload3.plan?.is_edit) {
       const continuation2 = payload3.plan?.continuation;
       const ipHash = await getIpHash(payload3);
-      const suppliedValidCode = isUnlockedRequest(payload3);
-      if (suppliedValidCode && ipHash) {
-        await markIpUnlocked(ipHash);
-      }
-      const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
+      const unlocked = isUnlockedRequest(payload3);
       if (continuation2?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation2.ssmCommandId);
         if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, mcpSessionId: continuation2.jobId };

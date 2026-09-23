@@ -5,7 +5,7 @@ import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_ag
 import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
 import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
-import { getIpHash, hasUsedTrial, markTrialUsed, isUnlockedRequest, isIpUnlocked, markIpUnlocked, WAITLIST_URL } from "../_shared/trial_gate.ts";
+import { getIpHash, hasUsedTrial, markTrialUsed, isUnlockedRequest, WAITLIST_URL } from "../_shared/trial_gate.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -361,21 +361,15 @@ export async function handleBim(payload: any): Promise<any> {
   }
 
   // Lightweight identity lookup: no MCP session, no scene work. Lets the
-  // frontend learn (a) a hash of its own IP, used in place of the old
-  // per-browser localStorage device id so chat history and unlock status
-  // follow the visitor across browsers/devices on the same network, and
-  // (b) whether that IP is currently unlocked. Also doubles as the IP-based
-  // unlock endpoint itself: App.tsx calls this with the code straight off
-  // the ?unlock= link, so the IP is recorded as unlocked immediately rather
-  // than waiting for the visitor's first build.
+  // frontend learn a hash of its own IP, used in place of the old
+  // per-browser localStorage device id so CHAT HISTORY follows the visitor
+  // across browsers/devices on the same network (see useSessions.ts).
+  // `unlocked` here is just "did this specific call supply the correct
+  // code" - there is deliberately no persisted per-IP unlock state (see the
+  // `unlocked` check in the build_code handler below for why).
   if (payload.action === "identity") {
     const ipHash = await getIpHash(payload);
-    const suppliedValidCode = isUnlockedRequest(payload);
-    if (suppliedValidCode && ipHash) {
-      await markIpUnlocked(ipHash);
-    }
-    const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
-    return { status: "success", ip_hash: ipHash, unlocked };
+    return { status: "success", ip_hash: ipHash, unlocked: isUnlockedRequest(payload) };
   }
 
   let mcpSessionId = payload.mcpSessionId;
@@ -747,23 +741,20 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     // Takes priority over USE_OPENHANDS_ENGINE when both happen to be set.
     if (useAntigravity && !payload.plan?.is_edit) {
       const continuation = payload.plan?.continuation;
-
-      // Unified unlock check, computed once per request: a request is
-      // treated as unlocked (unlimited access, skips the trial gate
-      // entirely) if it supplies the correct access code right now, OR if
-      // this IP has ever supplied it before - recorded server-side in
-      // ip_unlocked_access (see trial_gate.ts) rather than trusted from a
-      // client-side flag, so the unlock is tied to the visitor's IP and
-      // follows them across browsers/devices instead of just the one
-      // browser that happened to visit the ?unlock= link. A request with no
-      // resolvable IP (e.g. a local/dev invocation) can never become
-      // "IP unlocked" - it must keep supplying the code every time.
       const ipHash = await getIpHash(payload);
-      const suppliedValidCode = isUnlockedRequest(payload);
-      if (suppliedValidCode && ipHash) {
-        await markIpUnlocked(ipHash);
-      }
-      const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
+
+      // Unlocked means: THIS request supplies the correct access code -
+      // nothing persisted per-IP or per-browser beyond that. Deliberately
+      // NOT "has this IP ever unlocked before": a visitor who used their one
+      // trial on plain /studios must stay gated on plain /studios even if
+      // they (or this same IP) unlocked at some point in the past - only
+      // actually going through https://www.infrastudio.app/studios?unlock=
+      // again grants access. The frontend re-supplies the code on every
+      // build_code call for the lifetime of that one browser tab (see
+      // useMultiAgentLoop.ts) so a single chat session doesn't need the link
+      // re-clicked between messages, but a fresh /studios visit with no
+      // ?unlock= in its history has nothing to send and is gated normally.
+      const unlocked = isUnlockedRequest(payload);
 
       if (continuation?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation.ssmCommandId);
@@ -818,9 +809,11 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       // fresh build is blocked. Keyed by IP (see trial_gate.ts) rather than
       // device id/session id, which a visitor can simply clear to "test"
       // again - that defeats the entire point of a one-test-per-visitor
-      // release. An unlocked IP (see the `unlocked` check above) skips this
-      // entirely - the owner and anyone they've shared the code with build
-      // without limit, from any browser, once their IP has unlocked once.
+      // release. Skipped for an unlocked request (see the `unlocked` check
+      // above) - but that only ever means "this request currently carries
+      // the access code", never a standing per-IP exemption, so a visitor
+      // who exhausted their trial on plain /studios stays gated there even
+      // if they (or this IP) unlocked at some earlier point.
       if (!unlocked) {
         if (await hasUsedTrial(ipHash)) {
           return {

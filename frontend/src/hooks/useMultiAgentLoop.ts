@@ -60,11 +60,13 @@ export async function runAntigravityBuild(
 
   pushStep("🤖 InfraStudio Engine build starting...");
 
-  // Owner/trusted-tester bypass for the public trial gate - only ever the
-  // value someone typed into the access-code prompt in App.tsx, checked
-  // against the real secret server-side (trial_gate.ts). Absent for every
-  // ordinary visitor, so this is a no-op for them.
-  const unlockCode = localStorage.getItem('infrastudio_unlock_code') || undefined;
+  // Owner/trusted-tester bypass for the public trial gate - only present if
+  // this browser tab actually visited .../studios?unlock=<code> (see
+  // App.tsx). sessionStorage, not localStorage, so it lasts for this tab's
+  // messages/polls but does NOT carry over to a plain, fresh /studios visit
+  // later - checked against the real secret server-side (trial_gate.ts).
+  // Absent for every ordinary visitor, so this is a no-op for them.
+  const unlockCode = sessionStorage.getItem('infrastudio_unlock_code') || undefined;
 
   try {
     let bimRes = await callEdge('agent-bim', {

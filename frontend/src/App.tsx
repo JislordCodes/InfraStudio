@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Download, Upload } from 'lucide-react';
 import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
-import { getIdentity } from './lib/identity';
 import './index.css';
 
 function App() {
@@ -44,24 +43,22 @@ function App() {
 
   useEffect(() => {
     // Owner/trusted-tester bypass for the public trial gate (see
-    // agent-bim/_shared/trial_gate.ts) - visiting (e.g. bookmarking)
+    // agent-bim/_shared/trial_gate.ts) - visiting
     // https://www.infrastudio.app/studios?unlock=<code> unlocks access.
     // The code itself is never in this bundle, only whatever was in the
-    // URL, checked server-side against a secret env var. Sent immediately
-    // via getIdentity() so the visitor's IP (not just this one browser) is
-    // recorded as unlocked server-side right away, rather than waiting for
-    // their first build - see identity.ts and trial_gate.ts markIpUnlocked.
-    // Also still cached in localStorage as a fallback so build_code calls
-    // keep working even if this identity call fails (e.g. offline).
-    // Stripped from the visible URL immediately after so it isn't left
-    // sitting in the address bar, browser history, or an accidentally-
-    // shared link.
+    // URL, checked server-side against a secret env var on every build call
+    // (see useMultiAgentLoop.ts). Deliberately sessionStorage, not
+    // localStorage: it needs to survive repeated messages/polls within THIS
+    // one browser tab so the link doesn't have to be re-clicked mid-chat,
+    // but must NOT survive a plain, fresh /studios visit in a new tab - a
+    // visitor who already used their one trial must stay gated there and
+    // only regain access by actually visiting this link again. Stripped
+    // from the visible URL immediately after so it isn't left sitting in
+    // the address bar, browser history, or an accidentally-shared link.
     const url = new URL(window.location.href);
     const unlock = url.searchParams.get('unlock');
     if (unlock) {
-      const code = unlock.trim();
-      localStorage.setItem('infrastudio_unlock_code', code);
-      getIdentity(code);
+      sessionStorage.setItem('infrastudio_unlock_code', unlock.trim());
       url.searchParams.delete('unlock');
       window.history.replaceState({}, '', url.toString());
     }
