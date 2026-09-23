@@ -86,6 +86,25 @@ export function useSessions() {
     try {
       const { ipHash } = await getIdentity();
       const deviceId = getDeviceId();
+
+      // One-time backfill: sessions created before the ip_hash column
+      // existed (or by a visitor whose IP couldn't be resolved at the time)
+      // are permanently invisible to another browser's IP-based lookup
+      // below, since they only ever match on device_id - confirmed this was
+      // actually happening (every session in the DB still had ip_hash:
+      // null, including ones created after the column was added, because
+      // an EXISTING session is only ever inserted once and never patched
+      // afterwards). Tag this device's own null-ip_hash sessions with its
+      // current ip_hash on every load so they become findable cross-browser
+      // going forward. Fire-and-forget - a failure here just means one more
+      // load without the backfill, not a broken session list.
+      if (ipHash) {
+        supabase.from('ifc_sessions').update({ ip_hash: ipHash }).eq('device_id', deviceId).is('ip_hash', null)
+          .then(({ error: backfillError }) => {
+            if (backfillError) console.warn('ip_hash backfill failed (non-fatal):', backfillError);
+          });
+      }
+
       // IP-based lookup (see lib/identity.ts) finds sessions from ANY
       // browser/device on this IP, not just this one - OR'd with the
       // legacy per-browser device_id filter so sessions created before
