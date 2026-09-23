@@ -158,6 +158,23 @@
   const waitlistParam = new URLSearchParams(window.location.search).get("waitlist");
   if (waitlistParam) openModal(waitlistParam);
 
+  // Owner/trusted-tester bypass for the public trial gate on /studios - a
+  // shorter form of the link (infrastudio.app/?unlock=<code>) than the
+  // original /studios?unlock=<code>. This landing page and /studios are
+  // proxied under the SAME origin (see vercel.json's rewrites), so writing
+  // sessionStorage here carries over once we send the visitor on to
+  // /studios in this same tab - the code itself never lives in this
+  // bundle, only whatever was in the URL, checked server-side against a
+  // secret env var on every build call (see trial_gate.ts). Deliberately
+  // sessionStorage, not localStorage: it needs to survive the redirect and
+  // that one /studios visit's messages, but must NOT make a later, separate
+  // /studios visit unlocked without going through this link again.
+  const unlockParam = new URLSearchParams(window.location.search).get("unlock");
+  if (unlockParam) {
+    sessionStorage.setItem("infrastudio_unlock_code", unlockParam.trim());
+    window.location.replace("/studios");
+  }
+
   if (form) {
     form.addEventListener("submit", (e) => {
       e.preventDefault();
