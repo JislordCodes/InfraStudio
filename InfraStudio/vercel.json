@@ -1,6 +1,12 @@
 {
-  "rewrites": [
-    { "source": "/studios", "destination": "https://infra-studio-z3xc.vercel.app/studios" },
-    { "source": "/studios/:path*", "destination": "https://infra-studio-z3xc.vercel.app/studios/:path*" }
+  "routes": [
+    {
+      "src": "/",
+      "has": [{ "type": "query", "key": "unlock" }],
+      "dest": "https://infra-studio-z3xc.vercel.app/studios"
+    },
+    { "handle": "filesystem" },
+    { "src": "/studios", "dest": "https://infra-studio-z3xc.vercel.app/studios" },
+    { "src": "/studios/(.*)", "dest": "https://infra-studio-z3xc.vercel.app/studios/$1" }
   ]
 }

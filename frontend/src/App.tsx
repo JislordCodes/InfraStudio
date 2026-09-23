@@ -41,13 +41,31 @@ function App() {
     }
   }, []);
 
-  // Owner/trusted-tester bypass for the public trial gate (see
-  // agent-bim/_shared/trial_gate.ts) is handled entirely on the landing
-  // page now (InfraStudio/js/main.js) - visiting
-  // https://www.infrastudio.app/?unlock=<code> stores the code in
-  // sessionStorage there and redirects straight into /studios in the same
-  // tab, same origin. /studios itself no longer reads a ?unlock= param -
-  // only the root link works, by request.
+  useEffect(() => {
+    // Owner/trusted-tester bypass for the public trial gate (see
+    // agent-bim/_shared/trial_gate.ts). infrastudio.app/?unlock=<code> is a
+    // deliberately SEPARATE entry point from /studios (see
+    // InfraStudio/vercel.json's rewrite): a "/" request carrying an
+    // ?unlock= query param is transparently served this exact app instead
+    // of the landing page, address bar staying on "/" - /studios itself
+    // never reads this param, so visiting it directly always stays on the
+    // normal 1-trial gate regardless of any code. The code itself is never
+    // in this bundle, only whatever was in the URL, checked server-side
+    // against a secret env var on every build call (see
+    // useMultiAgentLoop.ts). Deliberately sessionStorage, not localStorage:
+    // it needs to survive repeated messages/polls within THIS one browser
+    // tab, but must NOT survive a later, separate visit without the ?unlock=
+    // param again. Stripped from the visible URL immediately after so it
+    // isn't left sitting in the address bar, browser history, or an
+    // accidentally-shared link.
+    const url = new URL(window.location.href);
+    const unlock = url.searchParams.get('unlock');
+    if (unlock) {
+      sessionStorage.setItem('infrastudio_unlock_code', unlock.trim());
+      url.searchParams.delete('unlock');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, []);
 
   useEffect(() => {
     const lastRevision = { current: '' };

@@ -158,28 +158,14 @@
   const waitlistParam = new URLSearchParams(window.location.search).get("waitlist");
   if (waitlistParam) openModal(waitlistParam);
 
-  // Owner/trusted-tester bypass for the public trial gate on /studios -
-  // infrastudio.app/?unlock=<code>. Deliberately does NOT redirect to
-  // /studios - stores the code and leaves the visitor on the landing page,
-  // to go to /studios (e.g. via "Try Now") whenever they choose. This
-  // landing page and /studios are proxied under the SAME origin (see
-  // vercel.json's rewrites), so sessionStorage set here is already present
-  // once they do navigate there in this same tab - the code itself never
-  // lives in this bundle, only whatever was in the URL, checked server-side
-  // against a secret env var on every build call (see trial_gate.ts).
-  // Deliberately sessionStorage, not localStorage: it needs to survive
-  // that one /studios visit's messages, but must NOT make a later,
-  // separate /studios visit unlocked without going through this link again.
-  // Stripped from the visible URL immediately after so it isn't left
-  // sitting in the address bar, browser history, or an accidentally-shared
-  // link.
-  const unlockParam = new URLSearchParams(window.location.search).get("unlock");
-  if (unlockParam) {
-    sessionStorage.setItem("infrastudio_unlock_code", unlockParam.trim());
-    const url = new URL(window.location.href);
-    url.searchParams.delete("unlock");
-    window.history.replaceState({}, "", url.toString());
-  }
+  // Owner/trusted-tester bypass for the public trial gate:
+  // infrastudio.app/?unlock=<code> is now handled entirely server-side
+  // (see vercel.json's rewrite - a request to "/" carrying an ?unlock=
+  // query param, any value, is transparently served the actual studio app
+  // instead of this landing page, address bar unchanged). This file's own
+  // JS never even runs for that request, so there is nothing to do here -
+  // the studio app itself (frontend/src/App.tsx) reads the ?unlock= param
+  // once it's the one actually running.
 
   if (form) {
     form.addEventListener("submit", (e) => {
