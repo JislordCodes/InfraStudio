@@ -96779,7 +96779,7 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
         const inScope = jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul : void 0;
         const intent = jevIntake.intent.type === "choice" ? jevIntake.intent : void 0;
         console.log(`[jev] intake: in_scope=${inScope?.toFixed(2) ?? "?"} intent=${intent ? `${intent.choice} (${intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
-        const clearlyOffTopic = inScope !== void 0 && inScope < 0.15 && intent?.choice === "off_topic" && intent.confidence > 0.8;
+        const clearlyOffTopic = intent?.choice === "off_topic" && intent.confidence > 0.5 || inScope !== void 0 && inScope < 0.3;
         if (clearlyOffTopic) {
           console.log(`[jev] BLOCKED intake - not a construction/building request: "${userBrief.slice(0, 120)}"`);
           return {

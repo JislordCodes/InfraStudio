@@ -868,8 +868,19 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         const inScope = jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul : undefined;
         const intent = jevIntake.intent.type === "choice" ? jevIntake.intent : undefined;
         console.log(`[jev] intake: in_scope=${inScope?.toFixed(2) ?? "?"} intent=${intent ? `${intent.choice} (${intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
-        const clearlyOffTopic = inScope !== undefined && inScope < 0.15
-          && intent?.choice === "off_topic" && intent.confidence > 0.8;
+        // Previously required BOTH signals to clearly agree (in_scope < 0.15
+        // AND off_topic with confidence > 0.8) - too permissive in practice,
+        // confirmed to let genuinely off-topic requests (e.g. "build a
+        // shirt") through to a real, expensive build instead of being
+        // refused, because a non-building prompt doesn't always score both
+        // signals at their most extreme. EITHER signal alone clearing a
+        // lower bar is now enough to block - this deliberately accepts more
+        // false-positive refusals on genuinely ambiguous building requests
+        // in exchange for never inventing a building out of an unrelated
+        // request, which is the stricter behavior actually wanted here.
+        const clearlyOffTopic =
+          (intent?.choice === "off_topic" && intent.confidence > 0.5) ||
+          (inScope !== undefined && inScope < 0.3);
         if (clearlyOffTopic) {
           console.log(`[jev] BLOCKED intake - not a construction/building request: "${userBrief.slice(0, 120)}"`);
           return {
