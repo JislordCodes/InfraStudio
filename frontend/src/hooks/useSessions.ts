@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
+import { getScopedSupabase } from '../lib/supabase';
 import { getDeviceId } from '../lib/deviceId';
 import { getIdentity } from '../lib/identity';
 
@@ -58,26 +58,28 @@ export function useSessions() {
     let cancelled = false;
     setLoadingMessages(true);
 
-    supabase
-      .from('ifc_messages')
-      .select('*')
-      .eq('session_id', activeSessionId)
-      .order('created_at', { ascending: true })
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          console.warn('Error loading messages from DB:', error);
+    getScopedSupabase().then((supabase) =>
+      supabase
+        .from('ifc_messages')
+        .select('*')
+        .eq('session_id', activeSessionId)
+        .order('created_at', { ascending: true })
+        .then(({ data, error }) => {
+          if (cancelled) return;
+          if (error) {
+            console.warn('Error loading messages from DB:', error);
+            setMessages([]);
+          } else {
+            setMessages(data || []);
+          }
+          setLoadingMessages(false);
+        }, (err: unknown) => {
+          if (cancelled) return;
+          console.warn('DB load error (fallback empty messages):', err);
           setMessages([]);
-        } else {
-          setMessages(data || []);
-        }
-        setLoadingMessages(false);
-      }, (err: unknown) => {
-        if (cancelled) return;
-        console.warn('DB load error (fallback empty messages):', err);
-        setMessages([]);
-        setLoadingMessages(false);
-      });
+          setLoadingMessages(false);
+        })
+    );
 
     return () => { cancelled = true; };
   }, [activeSessionId]);
@@ -86,6 +88,7 @@ export function useSessions() {
     try {
       const { ipHash } = await getIdentity();
       const deviceId = getDeviceId();
+      const supabase = await getScopedSupabase();
 
       // One-time backfill: sessions created before the ip_hash column
       // existed (or by a visitor whose IP couldn't be resolved at the time)
@@ -109,7 +112,11 @@ export function useSessions() {
       // browser/device on this IP, not just this one - OR'd with the
       // legacy per-browser device_id filter so sessions created before
       // ip_hash existed (or from a visitor whose IP couldn't be resolved)
-      // still show up on the browser that made them.
+      // still show up on the browser that made them. Requires the scoped
+      // client (x-ip-hash header) - RLS enforces device_id/ip_hash
+      // visibility independent of this query's own filter, so the plain
+      // `supabase` client (x-device-id only) would silently return nothing
+      // for another browser's sessions even with this exact same query.
       let query = supabase.from('ifc_sessions').select('*');
       query = ipHash
         ? query.or(`ip_hash.eq.${ipHash},device_id.eq.${deviceId}`)
@@ -135,6 +142,7 @@ export function useSessions() {
   async function createSession(title: string = 'New Session'): Promise<ChatSession> {
     try {
       const { ipHash } = await getIdentity();
+      const supabase = await getScopedSupabase();
       const { data, error } = await supabase
         .from('ifc_sessions')
         .insert({ title, mcp_session_id: '', device_id: getDeviceId(), ip_hash: ipHash })
@@ -167,6 +175,7 @@ export function useSessions() {
 
   async function deleteSession(sessionId: string) {
     try {
+      const supabase = await getScopedSupabase();
       const { error } = await supabase
         .from('ifc_sessions')
         .delete()
@@ -186,6 +195,7 @@ export function useSessions() {
   const saveMessage = useCallback(async (sessionId: string, msg: ChatMessage) => {
     try {
       const { role, content, tool_calls, tool_call_id, reasoning_details } = msg;
+      const supabase = await getScopedSupabase();
       const { error } = await supabase.from('ifc_messages').insert({
         session_id: sessionId,
         role,
@@ -212,6 +222,7 @@ export function useSessions() {
     );
 
     try {
+      const supabase = await getScopedSupabase();
       const { error } = await supabase
         .from('ifc_sessions')
         .update(updates)
