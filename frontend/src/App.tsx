@@ -41,28 +41,13 @@ function App() {
     }
   }, []);
 
-  useEffect(() => {
-    // Owner/trusted-tester bypass for the public trial gate (see
-    // agent-bim/_shared/trial_gate.ts) - visiting
-    // https://www.infrastudio.app/studios?unlock=<code> unlocks access.
-    // The code itself is never in this bundle, only whatever was in the
-    // URL, checked server-side against a secret env var on every build call
-    // (see useMultiAgentLoop.ts). Deliberately sessionStorage, not
-    // localStorage: it needs to survive repeated messages/polls within THIS
-    // one browser tab so the link doesn't have to be re-clicked mid-chat,
-    // but must NOT survive a plain, fresh /studios visit in a new tab - a
-    // visitor who already used their one trial must stay gated there and
-    // only regain access by actually visiting this link again. Stripped
-    // from the visible URL immediately after so it isn't left sitting in
-    // the address bar, browser history, or an accidentally-shared link.
-    const url = new URL(window.location.href);
-    const unlock = url.searchParams.get('unlock');
-    if (unlock) {
-      sessionStorage.setItem('infrastudio_unlock_code', unlock.trim());
-      url.searchParams.delete('unlock');
-      window.history.replaceState({}, '', url.toString());
-    }
-  }, []);
+  // Owner/trusted-tester bypass for the public trial gate (see
+  // agent-bim/_shared/trial_gate.ts) is handled entirely on the landing
+  // page now (InfraStudio/js/main.js) - visiting
+  // https://www.infrastudio.app/?unlock=<code> stores the code in
+  // sessionStorage there and redirects straight into /studios in the same
+  // tab, same origin. /studios itself no longer reads a ?unlock= param -
+  // only the root link works, by request.
 
   useEffect(() => {
     const lastRevision = { current: '' };
