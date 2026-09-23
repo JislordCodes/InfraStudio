@@ -40,8 +40,9 @@ const fmtNumber = (n: number): string =>
   n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(3);
 
 /** IfcWallStandardCase -> "Wall Standard Case". Falls back to the raw string
- *  for anything that doesn't match the usual Ifc-prefixed PascalCase shape. */
-function humanizeCategory(category: string): string {
+ *  for anything that doesn't match the usual Ifc-prefixed PascalCase shape.
+ *  Exported so ModelSummaryPanel's category list reads the same way. */
+export function humanizeCategory(category: string): string {
   const stripped = category.replace(/^Ifc/, '');
   const spaced = stripped.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
   return spaced || category;

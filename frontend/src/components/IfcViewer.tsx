@@ -3,8 +3,9 @@ import * as OBC from '@thatopen/components';
 import * as FRAGS from '@thatopen/fragments';
 import * as THREE from 'three';
 import Stats from 'stats.js';
-import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon, SlidersHorizontal, X } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon, SlidersHorizontal, X, BarChart3 } from 'lucide-react';
 import { ElementInspector, type InspectedElement, type InspectedProperty, type InspectedPset } from './ElementInspector';
+import { ModelSummaryPanel, type ModelSummaryData, type CategoryCount } from './ModelSummaryPanel';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -388,6 +389,75 @@ async function inspectElement(
   return { category, name, guid, volume, dimensions, materials, psets, spatialPath };
 }
 
+/** Spatial containers group elements, they aren't built elements themselves -
+ *  counting them would inflate "how many things did we build" with locations. */
+const SPATIAL_CONTAINER_RE = /^IFC(PROJECT|SITE|BUILDING|BUILDINGSTOREY)$/i;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Tallies every real element by IFC class across all currently loaded models,
+ *  plus the total geometry-derived volume - the model-wide counterpart to
+ *  inspectElement's per-element quantities. */
+async function computeModelSummary(
+  models: FRAGS.FragmentsModel[],
+  bbox: THREE.Box3 | null,
+): Promise<ModelSummaryData> {
+  const categoryCounts = new Map<string, number>();
+  const perModelIds: { model: FRAGS.FragmentsModel; ids: number[] }[] = [];
+
+  for (const model of models) {
+    try {
+      const categories = await model.getCategories();
+      if (!categories.length) continue;
+      // Metadata categories (IFCMATERIAL, IFCSIUNIT, IFCUNITASSIGNMENT, ...) have no
+      // geometry and aren't "built" elements — restricting to items that actually have
+      // geometry is a more robust filter than trying to blocklist every non-element
+      // IFC class by name.
+      const geometryIds = new Set(await model.getItemsIdsWithGeometry());
+      const patterns = categories.map((c) => new RegExp(`^${escapeRegExp(c)}$`));
+      const grouped = await model.getItemsOfCategories(patterns);
+      const ids: number[] = [];
+      for (const [category, localIds] of Object.entries(grouped)) {
+        if (!localIds || !localIds.length || SPATIAL_CONTAINER_RE.test(category)) continue;
+        const withGeometry = localIds.filter((id) => geometryIds.has(id));
+        if (!withGeometry.length) continue;
+        categoryCounts.set(category, (categoryCounts.get(category) || 0) + withGeometry.length);
+        ids.push(...withGeometry);
+      }
+      if (ids.length) perModelIds.push({ model, ids });
+    } catch (e) {
+      console.warn('[summary] getCategories/getItemsOfCategories failed:', e);
+    }
+  }
+
+  let totalVolume: number | null = null;
+  for (const { model, ids } of perModelIds) {
+    try {
+      const v = await model.getItemsVolume(ids);
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) totalVolume = (totalVolume ?? 0) + v;
+    } catch (e) {
+      console.warn('[summary] getItemsVolume failed:', e);
+    }
+  }
+
+  const categories: CategoryCount[] = Array.from(categoryCounts.entries())
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count);
+  const totalElements = categories.reduce((sum, c) => sum + c.count, 0);
+
+  let footprint: { x: number; z: number } | null = null;
+  let height: number | null = null;
+  if (bbox && !bbox.isEmpty()) {
+    const size = bbox.getSize(new THREE.Vector3());
+    footprint = { x: size.x, z: size.z };
+    height = size.y;
+  }
+
+  return { totalElements, categories, totalVolume, footprint, height };
+}
+
 export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -405,6 +475,13 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const [inspected, setInspected] = useState<InspectedElement | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const selectedRef = useRef<{ modelId: string; localId: number } | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryData, setSummaryData] = useState<ModelSummaryData | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const summaryOpenRef = useRef(false);
+  // Full FragmentsModel instances (methods like getCategories/getItemsVolume) —
+  // modelsRef below only types the bbox-shaped subset the camera code needs.
+  const fragmentsModelsRef = useRef<FRAGS.FragmentsModel[]>([]);
   // Fragments render through their own streaming/LOD pipeline, so the THREE object
   // graph holds no measurable meshes — THREE.Box3().setFromObject() returns EMPTY.
   // The model itself exposes the real bounds, so keep the models and ask them.
@@ -429,6 +506,22 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     const b = currentModelBbox();
     return b ? b.getSize(new THREE.Vector3()).length() || 60 : 60;
   };
+
+  const refreshSummary = async () => {
+    setSummaryLoading(true);
+    try {
+      const data = await computeModelSummary(fragmentsModelsRef.current, currentModelBbox());
+      setSummaryData(data);
+    } catch (e) {
+      console.warn('[summary] compute failed:', e);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    summaryOpenRef.current = summaryOpen;
+  }, [summaryOpen]);
 
   // The scene background is transparent, so the theme is the container colour plus the
   // grid line colour. Persisted per device; storage can throw in private windows.
@@ -566,6 +659,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         if (isMounted) {
           setInspecting(true);
           setInspected(null);
+          setSummaryOpen(false); // picking an element hands the right panel back to the inspector
         }
 
         await fragments.resetHighlight();
@@ -614,6 +708,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         model.useCamera(world.camera!.three);
         world.scene!.three.add(model.object);
         if (!modelsRef.current.includes(model)) modelsRef.current.push(model);
+        if (!fragmentsModelsRef.current.includes(model)) fragmentsModelsRef.current.push(model);
+        // A model that streams in while the summary panel is already open should
+        // update the tally rather than leave it showing the previous model's counts.
+        if (summaryOpenRef.current) void refreshSummary();
         // By default distant items are culled/LOD'd by screen size, which leaves a
         // city-scale model looking empty when you pull back far enough to see it all.
         try {
@@ -696,6 +794,16 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     fragments?.resetHighlight();
   };
 
+  const toggleSummary = () => {
+    if (summaryOpen) {
+      setSummaryOpen(false);
+      return;
+    }
+    closeInspector(); // the right panel is shared — inspecting an element closes this, and vice versa
+    setSummaryOpen(true);
+    void refreshSummary();
+  };
+
   useImperativeHandle(ref, () => ({
     loadIfc: async (file: File) => {
       if (!ifcLoaderRef.current) return;
@@ -754,6 +862,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     },
   }));
 
+  const rightPanelOpen = Boolean(inspected || inspecting || summaryOpen);
+
   return (
     <div
       className="relative w-full h-full overflow-hidden transition-colors duration-300"
@@ -789,8 +899,11 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       )}
 
       {/* Action Toolbar - Vertical, right side. Collapses to one button; the toggle
-          is always the first item so it stays in the same place open or closed. */}
-      <div className={`absolute top-1/3 sm:top-1/2 right-2 sm:right-3 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 backdrop-blur-xl rounded-xl sm:rounded-2xl border shadow-lg pointer-events-auto transition-all duration-200 ${THEMES[theme].panel}`}>
+          is always the first item so it stays in the same place open or closed.
+          The inspector/summary flyout is full-height and sits ON TOP of this (z-30
+          > z-20), so whichever is open would otherwise cover the toolbar underneath
+          and make it unclickable — shift left by the panel's width instead. */}
+      <div className={`absolute top-1/3 sm:top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-2 sm:py-2.5 backdrop-blur-xl rounded-xl sm:rounded-2xl border shadow-lg pointer-events-auto transition-all duration-200 ${rightPanelOpen ? 'right-[332px] sm:right-[372px]' : 'right-2 sm:right-3'} ${THEMES[theme].panel}`}>
         <button
           onClick={() => setControlsOpen(v => !v)}
           className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${THEMES[theme].btn}`}
@@ -888,10 +1001,23 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         >
           {theme === 'dark' ? <Sun size={18} strokeWidth={2.5} /> : <Moon size={18} strokeWidth={2.5} />}
         </button>
+
+        <div className={`h-px w-6 my-0.5 rounded-full ${THEMES[theme].divider}`} />
+
+        <button
+          onClick={toggleSummary}
+          className={`p-2 hover:bg-blue-600 rounded-xl transition-all flex items-center justify-center active:scale-90 ${summaryOpen ? 'bg-blue-600 text-white' : THEMES[theme].btn}`}
+          title={summaryOpen ? 'Hide model summary' : 'Model summary (element counts & quantities)'}
+        >
+          <BarChart3 size={18} strokeWidth={2.5} />
+        </button>
         </div>
       </div>
 
       <ElementInspector data={inspected} loading={inspecting} theme={theme} onClose={closeInspector} />
+      {summaryOpen && (
+        <ModelSummaryPanel data={summaryData} loading={summaryLoading} theme={theme} onClose={() => setSummaryOpen(false)} />
+      )}
     </div>
   );
 });
