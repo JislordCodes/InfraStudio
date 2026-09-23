@@ -17,6 +17,12 @@ export interface ChatMessage {
   tool_calls?: any;
   tool_call_id?: string;
   reasoning_details?: string;
+  /** Client-only, not persisted (saveMessage only writes the fields above) -
+   *  an optional call-to-action rendered under this one message, e.g. the
+   *  "Join the Waitlist" link shown when the public trial gate blocks a
+   *  build. Reloading the page loses the button but keeps the message text,
+   *  which already explains the situation on its own. */
+  cta?: { label: string; url: string };
 }
 
 const ACTIVE_SESSION_KEY = 'infrastudio_active_session';

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Upload } from 'lucide-react';
+import { Download, Upload, Lock } from 'lucide-react';
 import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
 import './index.css';
@@ -12,6 +12,27 @@ function App() {
   // regardless of how the model got loaded - a chat build, a local upload, or
   // the ?ifc_url= / codex-bridge paths below, none of which are "a session".
   const [currentIfcUrl, setCurrentIfcUrl] = useState<string | null>(null);
+  // Owner/trusted-tester bypass for the public trial gate (see
+  // agent-bim/_shared/trial_gate.ts) - the code itself is never in this
+  // bundle, only whatever the person typed into the prompt, checked
+  // server-side against a secret env var on every build call. Deliberately
+  // a plain browser prompt rather than a built modal - this stays a small,
+  // easy-to-miss affordance, not a feature to advertise.
+  const [hasUnlockCode, setHasUnlockCode] = useState(
+    () => !!localStorage.getItem('infrastudio_unlock_code')
+  );
+  const handleUnlockClick = () => {
+    const entered = window.prompt(hasUnlockCode ? 'Update access code (leave blank to clear):' : 'Access code:');
+    if (entered === null) return; // cancelled
+    const trimmed = entered.trim();
+    if (trimmed) {
+      localStorage.setItem('infrastudio_unlock_code', trimmed);
+      setHasUnlockCode(true);
+    } else {
+      localStorage.removeItem('infrastudio_unlock_code');
+      setHasUnlockCode(false);
+    }
+  };
 
   const handleFileUpload = (file: File) => {
     viewerRef.current?.loadIfc(file);
@@ -110,6 +131,15 @@ function App() {
             title="Load a local IFC file"
           >
             <Upload size={15} strokeWidth={2.5} />
+          </button>
+          <button
+            onClick={handleUnlockClick}
+            className={`p-1.5 rounded-full active:scale-90 transition-all ${
+              hasUnlockCode ? 'text-blue-400 hover:text-blue-300' : 'text-neutral-600 hover:text-neutral-400'
+            }`}
+            title=" "
+          >
+            <Lock size={13} strokeWidth={2.5} />
           </button>
         </div>
       </div>

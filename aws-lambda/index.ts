@@ -90,6 +90,12 @@ export const handler = async (event: any, context: any) => {
     }
   }
 
+  // Set (overwriting anything the client itself sent under this key) AFTER
+  // parsing the client's JSON body, so a visitor cannot spoof their own IP
+  // through the request payload - this is what the trial gate in
+  // agent-bim/_shared/trial_gate.ts keys the one-free-build-per-IP limit on.
+  payload._clientIp = event.requestContext?.http?.sourceIp || "";
+
   // Route requests by path
   try {
     await loadQwenSecret();

@@ -7,6 +7,8 @@ export interface MultiAgentResult {
   ifc_url?: string;
   steps: string[];
   mcp_session_id?: string;
+  trialUsed?: boolean;
+  waitlistUrl?: string;
 }
 
 export interface ReferenceImageInput {
@@ -58,10 +60,16 @@ export async function runAntigravityBuild(
 
   pushStep("🤖 InfraStudio Engine build starting...");
 
+  // Owner/trusted-tester bypass for the public trial gate - only ever the
+  // value someone typed into the access-code prompt in App.tsx, checked
+  // against the real secret server-side (trial_gate.ts). Absent for every
+  // ordinary visitor, so this is a no-op for them.
+  const unlockCode = localStorage.getItem('infrastudio_unlock_code') || undefined;
+
   try {
     let bimRes = await callEdge('agent-bim', {
       action: 'build_code',
-      plan: { client_requirements: userMessage, images },
+      plan: { client_requirements: userMessage, images, unlockCode },
       mcpSessionId: clientSessionId,
     });
     let sessionId = bimRes.mcpSessionId || clientSessionId;
@@ -86,6 +94,20 @@ export async function runAntigravityBuild(
     if (bimRes.status === 'continue') {
       pushStep(`⚠️ Build still running after ${maxContinuePasses} checks - it may finish later; re-open this chat to check back.`);
       return { reply: "Build is still running in the background.", steps, mcp_session_id: sessionId };
+    }
+    // Public trial gate (see agent-bim/_shared/trial_gate.ts): this is a
+    // real, expected outcome for a repeat visitor, not a failure - handled
+    // distinctly here so the UI can offer the waitlist instead of showing a
+    // generic error bubble.
+    if (bimRes.status === 'trial_used') {
+      pushStep("🔒 Free trial already used on this connection.");
+      return {
+        reply: bimRes.error || "You've already used your free trial build. Join the waitlist to get full access.",
+        steps,
+        mcp_session_id: sessionId,
+        trialUsed: true,
+        waitlistUrl: bimRes.waitlist_url,
+      };
     }
     if (bimRes.status === 'error') {
       throw new Error(bimRes.error || 'Build failed.');

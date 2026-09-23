@@ -5,6 +5,7 @@ import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_ag
 import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
 import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
+import { getIpHash, hasUsedTrial, markTrialUsed, isUnlockedRequest, WAITLIST_URL } from "../_shared/trial_gate.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -762,8 +763,42 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         // frontend to ignore. If a repair pass just ran (fixAttempted), this
         // is its result - the corrected model, or the same clashes again if
         // the fix didn't fully resolve them (not retried further, see above).
+        // Trial gate: only now, on a genuine success, spend this IP's one
+        // free build - a request that errored out shouldn't cost the
+        // visitor their real try. Recomputed fresh from THIS request's
+        // server-authoritative _clientIp rather than trusting a copy carried
+        // in `continuation` (which round-trips through the client, and so
+        // could otherwise be edited client-side to dodge ever being marked
+        // used). Skipped entirely for an unlocked (owner/trusted-tester)
+        // request - never records a used-up trial for them.
+        if (!isUnlockedRequest(payload)) {
+          await markTrialUsed(await getIpHash(payload), continuation.jobId);
+        }
         return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
       }
+
+      // Public-landing-page trial gate: this IP already completed one build.
+      // Checked here (new-build start only, not continuation polls above, so
+      // an in-progress build the visitor already legitimately started is
+      // never interrupted) and not per-edit, so exploring/iterating on the
+      // one model they did build is unaffected - only starting a SEPARATE
+      // fresh build is blocked. Keyed by IP (see trial_gate.ts) rather than
+      // device id/session id, which a visitor can simply clear to "test"
+      // again - that defeats the entire point of a one-test-per-visitor
+      // release. A request carrying the correct access code (see
+      // isUnlockedRequest) skips this check entirely - the owner and anyone
+      // they've shared the code with build without limit.
+      if (!isUnlockedRequest(payload)) {
+        const ipHash = await getIpHash(payload);
+        if (await hasUsedTrial(ipHash)) {
+          return {
+            status: "trial_used",
+            error: "You've already used your free trial build. Join the waitlist to get full access.",
+            waitlist_url: WAITLIST_URL,
+          };
+        }
+      }
+
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
 
       // Jev prompt-intake gate: a fast, cheap sanity check before committing to a

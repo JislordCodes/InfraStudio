@@ -152,6 +152,12 @@
     if (e.key === "Escape" && overlay.classList.contains("open")) closeModal();
   });
 
+  // Visitors redirected here after using their one free /studios trial
+  // arrive at ?waitlist=<type> - open the modal immediately instead of
+  // making them find the button themselves.
+  const waitlistParam = new URLSearchParams(window.location.search).get("waitlist");
+  if (waitlistParam) openModal(waitlistParam);
+
   if (form) {
     form.addEventListener("submit", (e) => {
       e.preventDefault();
