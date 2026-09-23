@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import * as OBC from '@thatopen/components';
+import * as FRAGS from '@thatopen/fragments';
 import * as THREE from 'three';
 import Stats from 'stats.js';
 import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon, SlidersHorizontal, X } from 'lucide-react';
+import { ElementInspector, type InspectedElement, type InspectedProperty, type InspectedPset } from './ElementInspector';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -204,6 +206,188 @@ function loadTheme(): SceneTheme {
   }
 }
 
+/** An ItemData attribute's value is often wrapped once ({value}) or, for some
+ *  IFC types (e.g. IfcLabel-typed NominalValue), twice ({value: {value}}).
+ *  Unwraps either shape down to a displayable string. */
+function attrValue(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === 'object' && v !== null && 'value' in (v as any)) {
+    return attrValue((v as any).value);
+  }
+  return String(v);
+}
+
+function itemName(entry: FRAGS.ItemData | undefined | null): string | null {
+  if (!entry) return null;
+  return attrValue((entry as any).Name);
+}
+
+function itemCategory(entry: FRAGS.ItemData | undefined | null): string | null {
+  if (!entry) return null;
+  return attrValue((entry as any)._category);
+}
+
+/** Reads material names straight off the item's HasAssociations relation.
+ *  Confirmed live: HasAssociations gives each associated IFCMATERIAL
+ *  directly (its own Name), NOT a relationship wrapper needing another
+ *  level of unwrapping - but each of those material entries ALSO carries
+ *  its own inverse "AssociatedTo" array back to every OTHER element that
+ *  shares it (dozens of unrelated beam/column names), so this deliberately
+ *  reads only each direct entry's own Name and never recurses into it. */
+function extractMaterialNames(hasAssociations: FRAGS.ItemData[] | undefined): string[] {
+  if (!hasAssociations) return [];
+  const names: string[] = [];
+  for (const entry of hasAssociations) {
+    const category = itemCategory(entry) || '';
+    const name = itemName(entry);
+    if (name && (category.includes('MATERIAL') || !category) && !names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Flattens a property set's nested property items (whatever the relation is
+ *  actually called - IfcPropertySet's HasProperties, or similar) into plain
+ *  name/value pairs, skipping the pset's own Name/Description. */
+function flattenProperties(entry: FRAGS.ItemData): InspectedProperty[] {
+  const props: InspectedProperty[] = [];
+  for (const [key, val] of Object.entries(entry)) {
+    if (key === 'Name' || key === 'Description' || key.startsWith('_')) continue;
+    if (!Array.isArray(val)) continue;
+    for (const nested of val) {
+      const n = nested as FRAGS.ItemData;
+      const name = itemName(n) || key;
+      const nominal = (n as any).NominalValue ?? (n as any).Value ?? (n as any).LengthValue ?? (n as any).AreaValue ?? (n as any).VolumeValue;
+      let value = attrValue(nominal);
+      if (value === null) {
+        const firstScalar = Object.entries(n).find(([k, v]) => k !== 'Name' && v && typeof v === 'object' && !Array.isArray(v) && 'value' in (v as any));
+        value = firstScalar ? attrValue(firstScalar[1]) : null;
+      }
+      if (value !== null) props.push({ name, value });
+    }
+  }
+  return props;
+}
+
+/** Turns a raw IsDefinedBy relation array into readable Psets. Each top-level
+ *  entry may itself already be the pset (a Name plus property relations), or
+ *  a thin relationship wrapper around one - handles both by falling through
+ *  to the first nested array if the entry has no Name of its own. */
+function extractPsets(isDefinedBy: FRAGS.ItemData[] | undefined): InspectedPset[] {
+  if (!isDefinedBy) return [];
+  const psets: InspectedPset[] = [];
+  for (const entry of isDefinedBy) {
+    let psetEntry = entry;
+    if (!itemName(entry)) {
+      const nestedArray = Object.values(entry).find((v) => Array.isArray(v) && v.length > 0) as FRAGS.ItemData[] | undefined;
+      if (nestedArray?.[0]) psetEntry = nestedArray[0];
+    }
+    const name = itemName(psetEntry);
+    const properties = flattenProperties(psetEntry);
+    if (name && properties.length > 0) psets.push({ name, properties });
+  }
+  return psets;
+}
+
+/** Depth-first search for localId's ancestor chain in the model's spatial
+ *  tree, root first (e.g. Site -> Building -> Storey), excluding the item
+ *  itself. */
+function findSpatialAncestors(node: FRAGS.SpatialTreeItem, localId: number, path: FRAGS.SpatialTreeItem[] = []): FRAGS.SpatialTreeItem[] | null {
+  if (node.localId === localId) return path;
+  for (const child of node.children || []) {
+    const found = findSpatialAncestors(child, localId, [...path, node]);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function inspectElement(
+  fragments: OBC.FragmentsManager,
+  model: FRAGS.FragmentsModel,
+  localId: number,
+): Promise<InspectedElement> {
+  let category: string | null = null;
+  let guid: string | null = null;
+  let name: string | null = null;
+  let psets: InspectedPset[] = [];
+  let materials: string[] = [];
+  try {
+    // attributesDefault already includes _category/_guid/_localId directly
+    // on the item, so no separate getItemsOfCategories/getGuidsByLocalIds
+    // round trip is needed - confirmed live against a real model.
+    const [itemData] = await model.getItemsData([localId], {
+      attributesDefault: true,
+      relations: {
+        IsDefinedBy: { attributes: true, relations: true },
+        HasAssociations: { attributes: true, relations: false },
+      },
+    });
+    category = itemCategory(itemData);
+    guid = attrValue((itemData as any)?._guid);
+    name = itemName(itemData);
+    psets = extractPsets((itemData as any)?.IsDefinedBy);
+    materials = extractMaterialNames((itemData as any)?.HasAssociations);
+  } catch (e) {
+    console.warn('[inspect] getItemsData failed:', e);
+  }
+
+  let volume: number | null = null;
+  try {
+    const v = await model.getItemsVolume([localId]);
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) volume = v;
+  } catch (e) {
+    console.warn('getItemsVolume failed:', e);
+  }
+
+  let dimensions: { x: number; y: number; z: number } | null = null;
+  try {
+    const [box] = await fragments.getBBoxes({ [model.modelId]: new Set([localId]) });
+    if (box && !box.isEmpty()) {
+      const size = box.getSize(new THREE.Vector3());
+      dimensions = { x: size.x, y: size.y, z: size.z };
+    }
+  } catch (e) {
+    console.warn('getBBoxes failed:', e);
+  }
+
+  let spatialPath: string[] = [];
+  try {
+    const tree = await model.getSpatialStructure();
+    // Excludes the project root (one level above Site) and the item itself -
+    // "Site > Building > Level 01" per the spec, not the whole tree.
+    // The tree alternates a category-grouping wrapper node (category set,
+    // localId null - e.g. "every IFCBEAM under this storey") with the actual
+    // entity node it groups (localId set, category null) - confirmed live.
+    // Keep only the real entity nodes, and drop the project root so the
+    // breadcrumb starts at Site, matching "Site > Building > Level 01".
+    const ancestors = (findSpatialAncestors(tree, localId) || [])
+      .filter((a) => a.localId !== null)
+      .slice(1);
+    const ancestorIds = ancestors.map((a) => a.localId).filter((id): id is number => id !== null);
+    if (ancestorIds.length) {
+      const ancestorData = await model.getItemsData(ancestorIds, { attributesDefault: true });
+      // getItemsData's output order is NOT guaranteed to match the input ids
+      // (confirmed live: assuming positional correspondence produced a
+      // scrambled breadcrumb, e.g. the clicked item's own category showing
+      // up as a "location") - look each one up by its own returned _localId.
+      const byLocalId = new Map<number, FRAGS.ItemData>();
+      for (const d of ancestorData) {
+        const id = (d as any)?._localId?.value;
+        if (typeof id === 'number') byLocalId.set(id, d);
+      }
+      spatialPath = ancestors.map((a) => {
+        const data = a.localId !== null ? byLocalId.get(a.localId) : null;
+        return itemName(data) || a.category || 'Unnamed';
+      });
+    }
+  } catch (e) {
+    console.warn('getSpatialStructure failed:', e);
+  }
+
+  return { category, name, guid, volume, dimensions, materials, psets, spatialPath };
+}
+
 export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -218,6 +402,9 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const groundYRef = useRef<number | null>(null);
   const modelBboxRef = useRef<THREE.Box3 | null>(null);
   const cameraRef = useRef<OBC.OrthoPerspectiveCamera | null>(null);
+  const [inspected, setInspected] = useState<InspectedElement | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const selectedRef = useRef<{ modelId: string; localId: number } | null>(null);
   // Fragments render through their own streaming/LOD pipeline, so the THREE object
   // graph holds no measurable meshes — THREE.Box3().setFromObject() returns EMPTY.
   // The model itself exposes the real bounds, so keep the models and ask them.
@@ -341,6 +528,66 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     const ifcLoader = components.get(OBC.IfcLoader);
     ifcLoaderRef.current = ifcLoader;
 
+    // ── 6b. Click-to-inspect ──────────────────────────────────────────────
+    // A plain 'click' listener would also fire right after an orbit-drag
+    // ends near where it started (camera-controls doesn't suppress it), so
+    // track actual pointer movement between down and up and only treat it
+    // as a pick when it barely moved.
+    let pointerDownPos: { x: number; y: number } | null = null;
+    const onPointerDown = (e: PointerEvent) => {
+      pointerDownPos = { x: e.clientX, y: e.clientY };
+    };
+    const onPointerUp = async (e: PointerEvent) => {
+      const down = pointerDownPos;
+      pointerDownPos = null;
+      if (!down || !isMounted || !world.camera || !world.renderer || !fragments.initialized) return;
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return; // drag/orbit, not a click
+
+      const rect = container.getBoundingClientRect();
+      const mouse = new THREE.Vector2(e.clientX - rect.left, e.clientY - rect.top);
+
+      try {
+        const result = await fragments.raycast({
+          camera: world.camera.three,
+          mouse,
+          dom: world.renderer.three.domElement,
+        });
+
+        if (!result) {
+          if (selectedRef.current) await fragments.resetHighlight();
+          selectedRef.current = null;
+          if (isMounted) setInspected(null);
+          return;
+        }
+
+        const modelId = result.fragments.modelId;
+        const localId = result.localId;
+        selectedRef.current = { modelId, localId };
+        if (isMounted) {
+          setInspecting(true);
+          setInspected(null);
+        }
+
+        await fragments.resetHighlight();
+        await fragments.highlight(
+          { color: new THREE.Color('#3b82f6'), renderedFaces: FRAGS.RenderedFaces.TWO, opacity: 1, transparent: false },
+          { [modelId]: new Set([localId]) },
+        );
+
+        const data = await inspectElement(fragments, result.fragments, localId);
+        const stillSelected = selectedRef.current?.modelId === modelId && selectedRef.current?.localId === localId;
+        if (isMounted && stillSelected) {
+          setInspected(data);
+          setInspecting(false);
+        }
+      } catch (err) {
+        console.warn('Element inspect failed:', err);
+        if (isMounted) setInspecting(false);
+      }
+    };
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointerup', onPointerUp);
+
     const initAsync = async () => {
       // Point directly to the Fragments Web Worker script placed into our Vite public/ folder
       fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
@@ -434,10 +681,20 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       isMounted = false;
       gridRef.current = null;
       resizeObserver.disconnect();
+      container.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('pointerup', onPointerUp);
       components.dispose();
       stats.dom.remove();
     };
   }, []);
+
+  const closeInspector = () => {
+    setInspected(null);
+    setInspecting(false);
+    selectedRef.current = null;
+    const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
+    fragments?.resetHighlight();
+  };
 
   useImperativeHandle(ref, () => ({
     loadIfc: async (file: File) => {
@@ -633,6 +890,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         </button>
         </div>
       </div>
+
+      <ElementInspector data={inspected} loading={inspecting} theme={theme} onClose={closeInspector} />
     </div>
   );
 });
