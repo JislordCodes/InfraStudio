@@ -96727,13 +96727,24 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
               off_topic: "Not a building/structure request at all",
               ambiguous: "Too vague or short to act on even with reasonable invention"
             }
+          },
+          scope: {
+            type: "choice",
+            instructions: "Is this a request for a single, individual structural/architectural element, or for a whole structure made of a collection of elements?",
+            criteria: {
+              single_element: "Asks for exactly one (or a small explicit number of) individual element(s) - a wall, column, beam, door, window, slab, stair, roof, railing, footing, or similar single component - not an entire building or structure",
+              full_structure: "Asks for a whole building, house, bridge, tower, or other structure/infrastructure asset made up of many elements together"
+            }
           }
         }
       );
+      let isSingleElement = false;
       if (jevIntake) {
         const inScope = jevIntake.in_scope.type === "noul" ? jevIntake.in_scope.noul : void 0;
         const intent = jevIntake.intent.type === "choice" ? jevIntake.intent : void 0;
-        console.log(`[jev] intake: in_scope=${inScope?.toFixed(2) ?? "?"} intent=${intent ? `${intent.choice} (${intent.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+        const scope = jevIntake.scope.type === "choice" ? jevIntake.scope : void 0;
+        console.log(`[jev] intake: in_scope=${inScope?.toFixed(2) ?? "?"} intent=${intent ? `${intent.choice} (${intent.confidence.toFixed(2)})` : "?"} scope=${scope ? `${scope.choice} (${scope.confidence.toFixed(2)})` : "?"} prompt="${userBrief.slice(0, 80)}"`);
+        isSingleElement = scope?.choice === "single_element" && scope.confidence > 0.5;
         const clearlyOffTopic = intent?.choice === "off_topic" && intent.confidence > 0.5 || inScope !== void 0 && inScope < 0.3;
         if (clearlyOffTopic) {
           console.log(`[jev] BLOCKED intake - not a construction/building request: "${userBrief.slice(0, 120)}"`);
@@ -96750,7 +96761,20 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
 IMPORTANT reference images provided (read each one with your file-reading tool BEFORE designing anything - they are ground truth for whatever they depict, not loose inspiration):
 ${images.map((img, i9) => `- ${refImagePath(jobId, i9, img.url)} \u2014 ${img.caption?.trim() || "reference image: inspect its layout/form/style and use it to inform the design"}`).join("\n")}
 If an image is a floor plan or schematic, replicate its actual room layout, wall positions, and proportions rather than inventing a different layout. If it is a sketch, aerial view, or elevation, match the massing, style, and site orientation it shows.` : "";
-      const brief = `You are acting as the complete pipeline for this build, not just an executor: interpreter (figure out what is really being asked), architect (invent every spec that isn't given), executor (build it via real tool calls), and reviewer (check your own result before exporting). No other agent will look at this before export - own every decision yourself.
+      const singleElementBrief = `You are building exactly ONE simple request via direct MCP tool calls (create_wall, create_slab, create_door, create_window, create_roof, create_stairs, create_trimesh_ifc, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. - call these as native tool calls, never via bash/curl).
+
+IMPORTANT scope rule (non-negotiable): this is a request for a single element (or the small explicit number of elements asked for), NOT a whole building or structure. Build EXACTLY what is asked - do not invent a surrounding building, room, site, or any additional unrelated elements, and do not pad the model with extra geometry to hit some size target. There is no minimum element count here - one correctly modeled, properly styled element is a complete and correct answer.
+
+IMPORTANT strict-intent rule: anything the request states explicitly - a material, color, dimension, or count - is a hard constraint. Where a dimension isn't given, use a real-world-plausible size for this element type (e.g. a typical structural column, a standard-height wall) rather than an arbitrary or tiny placeholder size.
+
+IMPORTANT quality bar: apply a real, appropriate material/surface style (via create_surface_style/apply_style_to_object) before exporting - this one element should not be left unstyled.
+
+First, call initialize_project to reset the MCP scene to a fresh IFC4 state. Then build the following:
+
+${userBrief}${imageSection}
+
+When finished, call export_ifc directly - skip any clash check or complexity review, there is nothing to check on a single element.`;
+      const fullStructureBrief = `You are acting as the complete pipeline for this build, not just an executor: interpreter (figure out what is really being asked), architect (invent every spec that isn't given), executor (build it via real tool calls), and reviewer (check your own result before exporting). No other agent will look at this before export - own every decision yourself.
 
 IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
 
@@ -96779,6 +96803,7 @@ First, call initialize_project to reset the MCP scene to a fresh IFC4 state. The
 ${userBrief}${imageSection}
 
 When finished: call get_scene_info to confirm the total element count, run the clash check above, then call export_ifc.`;
+      const brief = isSingleElement ? singleElementBrief : fullStructureBrief;
       const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
       return { status: "continue", continuation: newContinuation, progress: "Build started...", mcpSessionId: jobId };
