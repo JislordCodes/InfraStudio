@@ -96017,9 +96017,24 @@ function getEnv(name) {
 function supabaseConfigured() {
   return !!(getEnv("SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY"));
 }
+function normalizeIp(ip) {
+  if (!ip.includes(":")) return ip;
+  const clean = ip.split("%")[0];
+  const doubleColonIdx = clean.indexOf("::");
+  let groups;
+  if (doubleColonIdx === -1) {
+    groups = clean.split(":");
+  } else {
+    const head = clean.slice(0, doubleColonIdx).split(":").filter((g9) => g9 !== "");
+    const tail = clean.slice(doubleColonIdx + 2).split(":").filter((g9) => g9 !== "");
+    const missing = 8 - head.length - tail.length;
+    groups = [...head, ...Array(Math.max(missing, 0)).fill("0"), ...tail];
+  }
+  return groups.slice(0, 4).join(":");
+}
 async function hashIp(ip) {
   const salt = getEnv("IP_HASH_SALT") || "";
-  const data = new TextEncoder().encode(`${salt}:${ip}`);
+  const data = new TextEncoder().encode(`${salt}:${normalizeIp(ip)}`);
   const digest3 = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(digest3)).map((b9) => b9.toString(16).padStart(2, "0")).join("");
 }
