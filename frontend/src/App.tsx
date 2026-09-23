@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Upload, Lock } from 'lucide-react';
+import { Download, Upload } from 'lucide-react';
 import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
 import './index.css';
@@ -12,36 +12,6 @@ function App() {
   // regardless of how the model got loaded - a chat build, a local upload, or
   // the ?ifc_url= / codex-bridge paths below, none of which are "a session".
   const [currentIfcUrl, setCurrentIfcUrl] = useState<string | null>(null);
-  // Owner/trusted-tester bypass for the public trial gate (see
-  // agent-bim/_shared/trial_gate.ts) - the code itself is never in this
-  // bundle, only whatever the person typed into the prompt, checked
-  // server-side against a secret env var on every build call. Deliberately
-  // a plain browser prompt rather than a built modal - this stays a small,
-  // easy-to-miss affordance, not a feature to advertise.
-  const [hasUnlockCode, setHasUnlockCode] = useState(
-    () => !!localStorage.getItem('infrastudio_unlock_code')
-  );
-  const applyUnlockCode = (trimmed: string) => {
-    if (trimmed) {
-      localStorage.setItem('infrastudio_unlock_code', trimmed);
-      setHasUnlockCode(true);
-      // The button itself gives no visual confirmation on purpose - without
-      // this, entering the code "does nothing" as far as anyone can see
-      // unless they happen to already be gated, which is confusing even for
-      // the owner. The code is still only actually checked server-side on
-      // the next build.
-      window.alert('Access code saved on this browser. It will be used automatically on your next build.');
-    } else {
-      localStorage.removeItem('infrastudio_unlock_code');
-      setHasUnlockCode(false);
-      window.alert('Access code cleared from this browser.');
-    }
-  };
-  const handleUnlockClick = () => {
-    const entered = window.prompt(hasUnlockCode ? 'Update access code (leave blank to clear):' : 'Access code:');
-    if (entered === null) return; // cancelled
-    applyUnlockCode(entered.trim());
-  };
 
   const handleFileUpload = (file: File) => {
     viewerRef.current?.loadIfc(file);
@@ -72,17 +42,18 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // A more reliable path to the same unlock than hunting for the
-    // deliberately near-invisible padlock button (see handleUnlockClick) -
-    // for the owner's own use, e.g. bookmarking
-    // https://www.infrastudio.app/studios?unlock=<code>. Strips the param
-    // from the visible URL immediately after so it isn't left sitting in
-    // the address bar, browser history, or an accidentally-shared link.
+    // Owner/trusted-tester bypass for the public trial gate (see
+    // agent-bim/_shared/trial_gate.ts) - visiting (e.g. bookmarking)
+    // https://www.infrastudio.app/studios?unlock=<code> stores it here.
+    // The code itself is never in this bundle, only whatever was in the
+    // URL, checked server-side against a secret env var on every build
+    // call. Stripped from the visible URL immediately after so it isn't
+    // left sitting in the address bar, browser history, or an
+    // accidentally-shared link.
     const url = new URL(window.location.href);
     const unlock = url.searchParams.get('unlock');
     if (unlock) {
       localStorage.setItem('infrastudio_unlock_code', unlock.trim());
-      setHasUnlockCode(true);
       url.searchParams.delete('unlock');
       window.history.replaceState({}, '', url.toString());
     }
@@ -160,19 +131,6 @@ function App() {
           </button>
         </div>
       </div>
-
-      {/* Owner/trusted-tester unlock - deliberately bare (no pill, no border,
-          no shadow) and flush with the very bottom edge, away from every
-          other control, so it reads as empty space rather than a button. */}
-      <button
-        onClick={handleUnlockClick}
-        className={`absolute bottom-0 right-1.5 z-20 p-2 pointer-events-auto active:scale-90 transition-all ${
-          hasUnlockCode ? 'text-blue-500/50 hover:text-blue-400' : 'text-neutral-900 hover:text-neutral-700'
-        }`}
-        title=" "
-      >
-        <Lock size={11} strokeWidth={2.5} />
-      </button>
 
       {/* Download - the one CTA that should never be easy to miss once a model exists. */}
       {currentIfcUrl && (
