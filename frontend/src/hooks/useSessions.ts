@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { getDeviceId } from '../lib/deviceId';
+import { getIdentity } from '../lib/identity';
 
 export interface ChatSession {
   id: string;
@@ -83,11 +84,18 @@ export function useSessions() {
 
   async function loadSessions() {
     try {
-      const { data, error } = await supabase
-        .from('ifc_sessions')
-        .select('*')
-        .eq('device_id', getDeviceId())
-        .order('created_at', { ascending: false });
+      const { ipHash } = await getIdentity();
+      const deviceId = getDeviceId();
+      // IP-based lookup (see lib/identity.ts) finds sessions from ANY
+      // browser/device on this IP, not just this one - OR'd with the
+      // legacy per-browser device_id filter so sessions created before
+      // ip_hash existed (or from a visitor whose IP couldn't be resolved)
+      // still show up on the browser that made them.
+      let query = supabase.from('ifc_sessions').select('*');
+      query = ipHash
+        ? query.or(`ip_hash.eq.${ipHash},device_id.eq.${deviceId}`)
+        : query.eq('device_id', deviceId);
+      const { data, error } = await query.order('created_at', { ascending: false });
 
       if (error) {
         console.warn('Error loading sessions:', error);
@@ -107,9 +115,10 @@ export function useSessions() {
 
   async function createSession(title: string = 'New Session'): Promise<ChatSession> {
     try {
+      const { ipHash } = await getIdentity();
       const { data, error } = await supabase
         .from('ifc_sessions')
-        .insert({ title, mcp_session_id: '', device_id: getDeviceId() })
+        .insert({ title, mcp_session_id: '', device_id: getDeviceId(), ip_hash: ipHash })
         .select()
         .single();
 

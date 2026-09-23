@@ -96009,6 +96009,105 @@ async function pollAntigravityBuild(commandId) {
   }
 }
 
+// ../supabase/functions/_shared/trial_gate.ts
+function getEnv(name) {
+  const v = typeof Deno !== "undefined" ? Deno.env.get(name) : process.env[name];
+  return v?.trim() || void 0;
+}
+function supabaseConfigured() {
+  return !!(getEnv("SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY"));
+}
+async function hashIp(ip) {
+  const salt = getEnv("IP_HASH_SALT") || "";
+  const data = new TextEncoder().encode(`${salt}:${ip}`);
+  const digest3 = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest3)).map((b9) => b9.toString(16).padStart(2, "0")).join("");
+}
+async function getIpHash(payload3) {
+  const ip = typeof payload3?._clientIp === "string" ? payload3._clientIp.trim() : "";
+  if (!ip) return null;
+  return hashIp(ip);
+}
+async function hasUsedTrial(ipHash) {
+  if (!ipHash || !supabaseConfigured()) return false;
+  try {
+    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_trial_usage?ip_hash=eq.${ipHash}&select=ip_hash&limit=1`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`
+      }
+    });
+    if (!res.ok) return false;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (e9) {
+    console.warn("[trial_gate] hasUsedTrial check failed, allowing request:", e9);
+    return false;
+  }
+}
+async function markTrialUsed(ipHash, jobId) {
+  if (!ipHash || !supabaseConfigured()) return;
+  try {
+    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_trial_usage`;
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates"
+      },
+      body: JSON.stringify({ ip_hash: ipHash, job_id: jobId })
+    });
+  } catch (e9) {
+    console.warn("[trial_gate] markTrialUsed failed (non-fatal):", e9);
+  }
+}
+var WAITLIST_URL = "https://www.infrastudio.app/?waitlist=early-access";
+function isUnlockedRequest(payload3) {
+  const expected = getEnv("UNLIMITED_ACCESS_PASSWORD");
+  if (!expected) return false;
+  const provided = typeof payload3?.plan?.unlockCode === "string" ? payload3.plan.unlockCode.trim() : "";
+  return !!provided && provided === expected;
+}
+async function isIpUnlocked(ipHash) {
+  if (!ipHash || !supabaseConfigured()) return false;
+  try {
+    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_unlocked_access?ip_hash=eq.${ipHash}&select=ip_hash&limit=1`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`
+      }
+    });
+    if (!res.ok) return false;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (e9) {
+    console.warn("[trial_gate] isIpUnlocked check failed, denying unlock:", e9);
+    return false;
+  }
+}
+async function markIpUnlocked(ipHash) {
+  if (!ipHash || !supabaseConfigured()) return;
+  try {
+    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_unlocked_access`;
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
+        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates"
+      },
+      body: JSON.stringify({ ip_hash: ipHash })
+    });
+  } catch (e9) {
+    console.warn("[trial_gate] markIpUnlocked failed (non-fatal):", e9);
+  }
+}
+
 // ../supabase/functions/agent-bim/index.ts
 var MUTATION_TOOLS = /* @__PURE__ */ new Set([
   "build_room",
@@ -96285,6 +96384,15 @@ async function handleBim(payload3) {
     } catch (err) {
       return { status: "error", model, ms: Date.now() - t0, error: err?.message || String(err) };
     }
+  }
+  if (payload3.action === "identity") {
+    const ipHash = await getIpHash(payload3);
+    const suppliedValidCode = isUnlockedRequest(payload3);
+    if (suppliedValidCode && ipHash) {
+      await markIpUnlocked(ipHash);
+    }
+    const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
+    return { status: "success", ip_hash: ipHash, unlocked };
   }
   let mcpSessionId = payload3.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
@@ -96602,11 +96710,17 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
   if (payload3.action === "build_code" || payload3.action === "build_freeform") {
     const continuation = payload3.plan?.continuation;
     const executedTools = [];
-    const getEnv = (name) => typeof Deno !== "undefined" ? Deno.env.get(name) : process.env[name];
-    const useAntigravity = getEnv("USE_ANTIGRAVITY_ENGINE") === "true";
-    const useOpenHands = getEnv("USE_OPENHANDS_ENGINE") === "true";
+    const getEnv2 = (name) => typeof Deno !== "undefined" ? Deno.env.get(name) : process.env[name];
+    const useAntigravity = getEnv2("USE_ANTIGRAVITY_ENGINE") === "true";
+    const useOpenHands = getEnv2("USE_OPENHANDS_ENGINE") === "true";
     if (useAntigravity && !payload3.plan?.is_edit) {
       const continuation2 = payload3.plan?.continuation;
+      const ipHash = await getIpHash(payload3);
+      const suppliedValidCode = isUnlockedRequest(payload3);
+      if (suppliedValidCode && ipHash) {
+        await markIpUnlocked(ipHash);
+      }
+      const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
       if (continuation2?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation2.ssmCommandId);
         if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, mcpSessionId: continuation2.jobId };
@@ -96626,7 +96740,19 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
             console.warn(`[jev] failed to start repair pass, returning original build instead: ${fixErr?.message || fixErr}`);
           }
         }
+        if (!unlocked) {
+          await markTrialUsed(ipHash, continuation2.jobId);
+        }
         return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation2.fixAttempted };
+      }
+      if (!unlocked) {
+        if (await hasUsedTrial(ipHash)) {
+          return {
+            status: "trial_used",
+            error: "You've already used your free trial build. Join the waitlist to get full access.",
+            waitlist_url: WAITLIST_URL
+          };
+        }
       }
       const userBrief = payload3.plan?.client_requirements || payload3.plan?.prompt || payload3.plan?.structure_name || "";
       const jevIntake = await jevSafe(
@@ -96675,7 +96801,9 @@ IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions 
 
 IMPORTANT architect rule: if the request below is vague or incomplete (missing dimensions, materials, style, room program, structural system, etc.), do NOT ask the user for clarification and do NOT build a minimal placeholder while you wait - you have no way to ask, so invent complete, coherent, real-world-plausible specs yourself, exactly as a senior architect/engineer would when only given a one-line client brief. Decide the site/footprint, floor count and heights, full room program, structural system, facade materials, roof form, and styling direction before writing any geometry code, and commit to that decision. A short prompt is not permission to build something small or generic - it just means more of the design responsibility is yours.
 
-IMPORTANT quality bar: every element you build must have a real, appropriate material/surface style applied (via create_surface_style/apply_style_to_object or equivalent) before you export - realistic colors/finishes matching what each element actually is (concrete, steel, timber, glass, etc.), not bare unstyled geometry. This applies even if the user's request doesn't explicitly mention materials. No element should be left unstyled.
+IMPORTANT strict-intent rule (overrides your own default choices wherever it applies, non-negotiable): the architect rule above only licenses you to invent specs the user did NOT specify. Anything the request below states explicitly - a material or its appearance (e.g. "transparent glass I can see through"), a color, a count or list of required features (e.g. "has elevators"), a dimension, a style direction - is a hard constraint, not a suggestion, and your own generic/default choice for that attribute is wrong if it doesn't match. Before calling export_ifc, re-read the request below line by line and verify each explicit requirement was actually realized in the model, not just conceptually addressed - e.g. a request for glass you can see through is NOT satisfied by any material literally named "glass": it requires a surface style with a genuinely high transparency value (transparency >= 0.75 on create_surface_style/create_pbr_style, roughly clear-toned rather than a deep tinted color) actually applied to those elements - a low/default transparency that still reads as solid or strongly blue-tinted fails the request even though "glass" was technically used. If a named feature (elevators, a specific room, a stair type, etc.) is required, confirm the corresponding real elements exist in the scene, not just implied by the massing.
+
+IMPORTANT quality bar: every element you build must have a real, appropriate material/surface style applied (via create_surface_style/apply_style_to_object or equivalent) before you export - realistic colors/finishes matching what each element actually is (concrete, steel, timber, glass, etc.), not bare unstyled geometry. This applies even if the user's request doesn't explicitly mention materials. No element should be left unstyled. Where the strict-intent rule above and this default quality bar conflict (e.g. the user wants glass unusually clear, or an unconventional color), the user's explicit request always wins.
 
 IMPORTANT complexity bar (non-negotiable, applies to every build regardless of how the request was phrased): the final model must be genuinely complex and sophisticated - target at least 1,000+ real elements and an exported IFC file size in the multiple-megabyte range. Achieve this honestly, through real architectural/structural detail (individual structural members, window/door openings with frames, railings, stairs, roof detail, facade articulation, secondary structure) - never by padding with meaningless duplicate or degenerate geometry. If a request is small or vague, that is exactly when you should be adding the MOST design detail yourself, not less.
 
@@ -96683,7 +96811,7 @@ IMPORTANT design-accuracy rule: you have no memory of this project and no prior 
 
 IMPORTANT execution constraint: if you use execute_ifc_code_tool, each call has a hard 60-second server-side execution timeout - split large builds into multiple calls (e.g. one per structural section/chunk of a few hundred elements) rather than one giant call. When assigning elements to the building storey, do NOT call spatial.assign_container once per element (this is O(n^2) and will time out as element count grows) - collect all new elements created within a single call into a list and call spatial.assign_container ONCE with the full list at the end of that call.
 
-IMPORTANT reviewer rule (before export): once the shell/structure is built, call get_scene_info yourself and check it against the two bars above - is every element styled, and does the element count/complexity actually meet the 1,000+ element / multi-MB target? If not, go back and add the missing detail (more structural members, facade articulation, interior detail, materials) before exporting. Only call export_ifc once you would sign off on the result as genuinely complex and fully styled.
+IMPORTANT reviewer rule (before export): once the shell/structure is built, call get_scene_info yourself and check it against the three bars above - does every explicit requirement from the request check out (see strict-intent rule), is every element styled, and does the element count/complexity actually meet the 1,000+ element / multi-MB target? If not, go back and add the missing detail or fix the mismatched requirement (more structural members, facade articulation, interior detail, materials, corrected transparency/color/features) before exporting. Only call export_ifc once you would sign off on the result as genuinely complex, fully styled, and a literal match for what was actually asked.
 
 IMPORTANT clash check (before export, after the reviewer rule above): call execute_ifc_code_tool ONE more time with exactly this code, unmodified, as its own call:
 
@@ -96711,6 +96839,8 @@ When finished: call get_scene_info to confirm the total element count, run the c
       const brief = `IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
 
 IMPORTANT quality bar: every element you build must have a real, appropriate material/surface style applied (via create_surface_style/apply_style_to_object or equivalent) before you export - realistic colors/finishes matching what each element actually is (concrete, steel, timber, glass, etc.), not bare unstyled geometry. This applies even if the user's request doesn't explicitly mention materials.
+
+IMPORTANT strict-intent rule (overrides your own default choices wherever it applies, non-negotiable): anything the request below states explicitly - a material or its appearance (e.g. "transparent glass I can see through"), a color, a count or list of required features (e.g. "has elevators"), a dimension, a style direction - is a hard constraint, not a suggestion, and your own generic/default choice for that attribute is wrong if it doesn't match. Before calling export_ifc, re-read the request below line by line and verify each explicit requirement was actually realized in the model - e.g. a request for glass you can see through is NOT satisfied by any material literally named "glass": it requires a surface style with a genuinely high transparency value (transparency >= 0.75 on create_surface_style/create_pbr_style, roughly clear-toned rather than a deep tinted color) actually applied to those elements. If a named feature (elevators, a specific room, a stair type, etc.) is required, confirm the corresponding real elements exist in the scene, not just implied by the massing.
 
 IMPORTANT design-accuracy rule: you have no memory of this project and no prior context beyond this message - do not default to a generic or approximate shape just because a request is short. Before building, identify the REAL engineering/architectural form of whatever is being asked for (use search_ifc_knowledge and your own domain knowledge), and commit to specific, correct structural details before writing any geometry code. For example: a cofferdam is NOT a bucket, tub, or smooth rounded vessel - it is a temporary watertight enclosure built from sheet-pile walls (or a braced double-wall cellular structure) forming a barrier around a work area, with corner bracing and a base/footing. If a brief names a specific structure type, treat getting that type's real form right as more important than speed.
 
@@ -97188,6 +97318,7 @@ var handler = async (event, context) => {
       };
     }
   }
+  payload3._clientIp = event.requestContext?.http?.sourceIp || "";
   try {
     await loadQwenSecret();
     await loadExplabsSecret();

@@ -5,7 +5,7 @@ import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_ag
 import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
 import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
-import { getIpHash, hasUsedTrial, markTrialUsed, isUnlockedRequest, WAITLIST_URL } from "../_shared/trial_gate.ts";
+import { getIpHash, hasUsedTrial, markTrialUsed, isUnlockedRequest, isIpUnlocked, markIpUnlocked, WAITLIST_URL } from "../_shared/trial_gate.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -358,6 +358,24 @@ export async function handleBim(payload: any): Promise<any> {
     } catch (err: any) {
       return { status: "error", model, ms: Date.now() - t0, error: err?.message || String(err) };
     }
+  }
+
+  // Lightweight identity lookup: no MCP session, no scene work. Lets the
+  // frontend learn (a) a hash of its own IP, used in place of the old
+  // per-browser localStorage device id so chat history and unlock status
+  // follow the visitor across browsers/devices on the same network, and
+  // (b) whether that IP is currently unlocked. Also doubles as the IP-based
+  // unlock endpoint itself: App.tsx calls this with the code straight off
+  // the ?unlock= link, so the IP is recorded as unlocked immediately rather
+  // than waiting for the visitor's first build.
+  if (payload.action === "identity") {
+    const ipHash = await getIpHash(payload);
+    const suppliedValidCode = isUnlockedRequest(payload);
+    if (suppliedValidCode && ipHash) {
+      await markIpUnlocked(ipHash);
+    }
+    const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
+    return { status: "success", ip_hash: ipHash, unlocked };
   }
 
   let mcpSessionId = payload.mcpSessionId;
@@ -729,6 +747,24 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     // Takes priority over USE_OPENHANDS_ENGINE when both happen to be set.
     if (useAntigravity && !payload.plan?.is_edit) {
       const continuation = payload.plan?.continuation;
+
+      // Unified unlock check, computed once per request: a request is
+      // treated as unlocked (unlimited access, skips the trial gate
+      // entirely) if it supplies the correct access code right now, OR if
+      // this IP has ever supplied it before - recorded server-side in
+      // ip_unlocked_access (see trial_gate.ts) rather than trusted from a
+      // client-side flag, so the unlock is tied to the visitor's IP and
+      // follows them across browsers/devices instead of just the one
+      // browser that happened to visit the ?unlock= link. A request with no
+      // resolvable IP (e.g. a local/dev invocation) can never become
+      // "IP unlocked" - it must keep supplying the code every time.
+      const ipHash = await getIpHash(payload);
+      const suppliedValidCode = isUnlockedRequest(payload);
+      if (suppliedValidCode && ipHash) {
+        await markIpUnlocked(ipHash);
+      }
+      const unlocked = suppliedValidCode || (ipHash ? await isIpUnlocked(ipHash) : false);
+
       if (continuation?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation.ssmCommandId);
         if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, mcpSessionId: continuation.jobId };
@@ -765,14 +801,11 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         // the fix didn't fully resolve them (not retried further, see above).
         // Trial gate: only now, on a genuine success, spend this IP's one
         // free build - a request that errored out shouldn't cost the
-        // visitor their real try. Recomputed fresh from THIS request's
-        // server-authoritative _clientIp rather than trusting a copy carried
-        // in `continuation` (which round-trips through the client, and so
-        // could otherwise be edited client-side to dodge ever being marked
-        // used). Skipped entirely for an unlocked (owner/trusted-tester)
-        // request - never records a used-up trial for them.
-        if (!isUnlockedRequest(payload)) {
-          await markTrialUsed(await getIpHash(payload), continuation.jobId);
+        // visitor their real try. Skipped entirely for an unlocked
+        // (IP-unlocked or owner/trusted-tester) request - never records a
+        // used-up trial for them.
+        if (!unlocked) {
+          await markTrialUsed(ipHash, continuation.jobId);
         }
         return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
       }
@@ -785,11 +818,10 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       // fresh build is blocked. Keyed by IP (see trial_gate.ts) rather than
       // device id/session id, which a visitor can simply clear to "test"
       // again - that defeats the entire point of a one-test-per-visitor
-      // release. A request carrying the correct access code (see
-      // isUnlockedRequest) skips this check entirely - the owner and anyone
-      // they've shared the code with build without limit.
-      if (!isUnlockedRequest(payload)) {
-        const ipHash = await getIpHash(payload);
+      // release. An unlocked IP (see the `unlocked` check above) skips this
+      // entirely - the owner and anyone they've shared the code with build
+      // without limit, from any browser, once their IP has unlocked once.
+      if (!unlocked) {
         if (await hasUsedTrial(ipHash)) {
           return {
             status: "trial_used",

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download, Upload } from 'lucide-react';
 import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
+import { getIdentity } from './lib/identity';
 import './index.css';
 
 function App() {
@@ -44,16 +45,23 @@ function App() {
   useEffect(() => {
     // Owner/trusted-tester bypass for the public trial gate (see
     // agent-bim/_shared/trial_gate.ts) - visiting (e.g. bookmarking)
-    // https://www.infrastudio.app/studios?unlock=<code> stores it here.
+    // https://www.infrastudio.app/studios?unlock=<code> unlocks access.
     // The code itself is never in this bundle, only whatever was in the
-    // URL, checked server-side against a secret env var on every build
-    // call. Stripped from the visible URL immediately after so it isn't
-    // left sitting in the address bar, browser history, or an
-    // accidentally-shared link.
+    // URL, checked server-side against a secret env var. Sent immediately
+    // via getIdentity() so the visitor's IP (not just this one browser) is
+    // recorded as unlocked server-side right away, rather than waiting for
+    // their first build - see identity.ts and trial_gate.ts markIpUnlocked.
+    // Also still cached in localStorage as a fallback so build_code calls
+    // keep working even if this identity call fails (e.g. offline).
+    // Stripped from the visible URL immediately after so it isn't left
+    // sitting in the address bar, browser history, or an accidentally-
+    // shared link.
     const url = new URL(window.location.href);
     const unlock = url.searchParams.get('unlock');
     if (unlock) {
-      localStorage.setItem('infrastudio_unlock_code', unlock.trim());
+      const code = unlock.trim();
+      localStorage.setItem('infrastudio_unlock_code', code);
+      getIdentity(code);
       url.searchParams.delete('unlock');
       window.history.replaceState({}, '', url.toString());
     }

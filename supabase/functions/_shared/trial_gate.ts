@@ -91,13 +91,68 @@ export async function markTrialUsed(ipHash: string | null, jobId: string): Promi
 
 export const WAITLIST_URL = "https://www.infrastudio.app/?waitlist=early-access";
 
-/** Owner/trusted-tester bypass: true only if the code the visitor typed into
- *  the access-code prompt (App.tsx's small padlock button) matches the real
- *  secret, which lives only in this env var - never in the frontend bundle.
- *  No-ops (always false) if the env var isn't set. */
+/** Owner/trusted-tester bypass: true only if the code the visitor's browser
+ *  sent (from https://www.infrastudio.app/studios?unlock=<code>, see
+ *  App.tsx) matches the real secret, which lives only in this env var -
+ *  never in the frontend bundle. No-ops (always false) if the env var isn't
+ *  set. This is just "was the correct code supplied on THIS request" - see
+ *  isIpUnlocked/markIpUnlocked below for the persistent, IP-scoped version
+ *  that lets the unlock survive across browsers/devices once granted. */
 export function isUnlockedRequest(payload: any): boolean {
   const expected = getEnv("UNLIMITED_ACCESS_PASSWORD");
   if (!expected) return false;
   const provided = typeof payload?.plan?.unlockCode === "string" ? payload.plan.unlockCode.trim() : "";
   return !!provided && provided === expected;
+}
+
+/** True if this IP has ever supplied the correct unlock code (see
+ *  markIpUnlocked). Checked on EVERY request - not just ones carrying the
+ *  code - so an already-unlocked IP gets unlimited access through the plain
+ *  /studios URL too, not only through the ?unlock= link itself; the link's
+ *  only job is to record the IP here once. Fails open (false = "not
+ *  unlocked") on any Supabase error or missing config, same reasoning as
+ *  hasUsedTrial - a DB outage degrades to "gate enforced", not "gate broken
+ *  open". */
+export async function isIpUnlocked(ipHash: string | null): Promise<boolean> {
+  if (!ipHash || !supabaseConfigured()) return false;
+  try {
+    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_unlocked_access?ip_hash=eq.${ipHash}&select=ip_hash&limit=1`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY")!,
+        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+      },
+    });
+    if (!res.ok) return false;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (e) {
+    console.warn("[trial_gate] isIpUnlocked check failed, denying unlock:", e);
+    return false;
+  }
+}
+
+/** Records this IP as permanently unlocked - called the first (and every,
+ *  harmlessly idempotent via merge-duplicates) time it supplies the correct
+ *  access code. This is what makes the unlock IP-based rather than
+ *  per-browser: once recorded, every future request from this IP is
+ *  unlocked regardless of which browser/device it comes from or whether
+ *  that request still carries the code. */
+export async function markIpUnlocked(ipHash: string | null): Promise<void> {
+  if (!ipHash || !supabaseConfigured()) return;
+  try {
+    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_unlocked_access`;
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY")!,
+        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      },
+      body: JSON.stringify({ ip_hash: ipHash }),
+    });
+  } catch (e) {
+    console.warn("[trial_gate] markIpUnlocked failed (non-fatal):", e);
+  }
 }
