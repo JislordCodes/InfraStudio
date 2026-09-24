@@ -6,6 +6,8 @@ import Stats from 'stats.js';
 import { ZoomIn, ZoomOut, Maximize, RotateCcw, Box, Sun, Moon, SlidersHorizontal, X, BarChart3 } from 'lucide-react';
 import { ElementInspector, type InspectedElement, type InspectedProperty, type InspectedPset } from './ElementInspector';
 import { ModelSummaryPanel, type ModelSummaryData, type CategoryCount } from './ModelSummaryPanel';
+import { DisciplineLayerBar } from './DisciplineLayerBar';
+import { computeDisciplineGroups, type DisciplineBucket, type DisciplineGroup } from '../lib/discipline';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -177,6 +179,10 @@ function updateDynamicClip(camera: OBC.OrthoPerspectiveCamera, span: number) {
   persp.far = far;
   persp.updateProjectionMatrix();
 }
+
+/** How transparent an x-rayed discipline becomes - low enough to read as
+ *  "faded out of the way" while still hinting the geometry is there. */
+const XRAY_OPACITY = 0.08;
 
 type SceneTheme = 'dark' | 'light';
 const THEME_KEY = 'infrastudio_scene_theme';
@@ -479,6 +485,10 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const [summaryData, setSummaryData] = useState<ModelSummaryData | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryOpenRef = useRef(false);
+  const [disciplineGroups, setDisciplineGroups] = useState<Partial<Record<DisciplineBucket, DisciplineGroup[]>>>({});
+  const disciplineGroupsRef = useRef<Partial<Record<DisciplineBucket, DisciplineGroup[]>>>({});
+  const [dimmedDisciplines, setDimmedDisciplines] = useState<Set<DisciplineBucket>>(new Set());
+  const dimmedDisciplinesRef = useRef<Set<DisciplineBucket>>(new Set());
   // Full FragmentsModel instances (methods like getCategories/getItemsVolume) —
   // modelsRef below only types the bbox-shaped subset the camera code needs.
   const fragmentsModelsRef = useRef<FRAGS.FragmentsModel[]>([]);
@@ -522,6 +532,55 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   useEffect(() => {
     summaryOpenRef.current = summaryOpen;
   }, [summaryOpen]);
+
+  useEffect(() => {
+    dimmedDisciplinesRef.current = dimmedDisciplines;
+  }, [dimmedDisciplines]);
+
+  /** Re-buckets every loaded model's elements by discipline. Called once a
+   *  newly streamed-in model's geometry is actually ready, and reapplies
+   *  whatever disciplines are currently x-rayed to that model too - so
+   *  loading a second model doesn't silently reset it back to fully opaque. */
+  const refreshDisciplineGroups = async () => {
+    try {
+      const groups = await computeDisciplineGroups(fragmentsModelsRef.current);
+      disciplineGroupsRef.current = groups;
+      setDisciplineGroups(groups);
+      for (const bucket of dimmedDisciplinesRef.current) {
+        for (const { model, ids } of groups[bucket] || []) {
+          try {
+            await model.setOpacity(ids, XRAY_OPACITY);
+          } catch (e) {
+            console.warn('[discipline] reapply opacity failed:', e);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[discipline] refresh failed:', e);
+    }
+  };
+
+  const toggleDiscipline = async (bucket: DisciplineBucket) => {
+    const wasDimmed = dimmedDisciplinesRef.current.has(bucket);
+    const next = new Set(dimmedDisciplinesRef.current);
+    if (wasDimmed) next.delete(bucket);
+    else next.add(bucket);
+    dimmedDisciplinesRef.current = next;
+    setDimmedDisciplines(next);
+
+    for (const { model, ids } of disciplineGroupsRef.current[bucket] || []) {
+      try {
+        if (wasDimmed) await model.resetOpacity(ids);
+        else await model.setOpacity(ids, XRAY_OPACITY);
+      } catch (e) {
+        console.warn('[discipline] toggle failed:', e);
+      }
+    }
+    // The render loop only re-draws on camera movement — force one so the
+    // opacity change shows up immediately even if the camera stayed still.
+    const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
+    fragments?.core.update(true);
+  };
 
   // The scene background is transparent, so the theme is the container colour plus the
   // grid line colour. Persisted per device; storage can throw in private windows.
@@ -751,6 +810,9 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
           // a refresh once the move has settled or the site renders empty.
           window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, 700);
           window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, 1800);
+          // Bounds are non-empty here, so geometry has actually streamed in —
+          // a safe point to (re)bucket every loaded model by discipline.
+          if (isMounted) void refreshDisciplineGroups();
         };
         frameModel();
       });
@@ -1013,6 +1075,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         </button>
         </div>
       </div>
+
+      <DisciplineLayerBar groups={disciplineGroups} dimmed={dimmedDisciplines} theme={theme} onToggle={toggleDiscipline} />
 
       <ElementInspector data={inspected} loading={inspecting} theme={theme} onClose={closeInspector} />
       {summaryOpen && (
