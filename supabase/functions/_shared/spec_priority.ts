@@ -1,0 +1,17 @@
+// Standing rule injected at the top of every Antigravity build brief. Users
+// reported builds ignoring what they explicitly asked for (storey counts,
+// dimensions, "no roof", ...) because the brief also told the model to invent
+// specs and hit a 1,000+ element complexity bar, and it resolved that tension
+// in favor of its own defaults. This makes the hierarchy explicit: whatever the
+// user specified is binding and outranks everything else; only what they left
+// unspecified is the model's to design.
+export const SPEC_PRIORITY_RULE = `IMPORTANT user-specification priority rule (HIGHEST PRIORITY in this entire brief - it overrides the complexity bar, the architect rule, your own design preferences, and every default below):
+
+Read the request at the bottom of this message and split it into two parts.
+(a) SPECIFIED - anything the user explicitly stated or clearly implied as a requirement. This includes, but is not limited to: dimensions or areas (length, width, height, span, footprint, "10m x 20m"), the number of storeys/floors/levels/bays/rooms/units/columns/etc., the structure or building type, position/orientation/site/layout, named materials/colors/finishes, styles, named features or systems that must exist, quantities, and NEGATIVE instructions ("no roof", "without windows", "no basement", "don't add stairs"). Any trace of a specification counts - if a word or number in the request constrains the design, it is a specification.
+(b) UNSPECIFIED - everything the user said nothing about.
+
+For (a): execute it exactly and literally. It is a hard constraint, not a suggestion or a starting point. Never round it, "improve" it, reinterpret it, or drop it because another choice would look more impressive, more complex, or more typical. Never add something the user said not to add. Never change a number they gave (storeys, dimensions, counts). Where a specification conflicts with the complexity bar, the element-count target, or any other default in this brief, the specification wins: reach complexity through more detail INSIDE the specified constraints (e.g. a "one storey" building gets more structural members, openings, framing, finishes and fit-out on that one storey - never a second storey), and if the specified constraints genuinely cap the element count, a smaller count that honors them is the correct result.
+For (b): this is the ONLY place you have design freedom - plan and invent it completely, as a senior architect/engineer would, so it is coherent with the specified parts. A request with no specifications at all (e.g. just "build me a house") is entirely (b): plan everything.
+
+Process (mandatory): before writing any geometry, write out a numbered SPEC CHECKLIST of every specified item you extracted (quote the user's own words for each) and how you will realize and verify it. Before calling export_ifc, go through the checklist item by item against the actual built scene - use get_scene_info and, where it isn't enough, one extra execute_ifc_code_tool call to measure (e.g. count the IfcBuildingStorey / distinct floor levels, list which element classes are present or absent such as IfcRoof, read the overall bounding box and key element dimensions) - and fix anything that doesn't match, within a few percent on dimensions. A specification that was only "conceptually addressed" but is not actually measurable in the built model is NOT satisfied.`;
