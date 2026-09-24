@@ -8,6 +8,7 @@ import { ElementInspector, type InspectedElement, type InspectedProperty, type I
 import { ModelSummaryPanel, type ModelSummaryData, type CategoryCount } from './ModelSummaryPanel';
 import { DisciplineLayerBar } from './DisciplineLayerBar';
 import { computeDisciplineGroups, type DisciplineBucket, type DisciplineGroup } from '../lib/discipline';
+import { applyExplode, resetExplode } from '../lib/explode';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -489,6 +490,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   const disciplineGroupsRef = useRef<Partial<Record<DisciplineBucket, DisciplineGroup[]>>>({});
   const [dimmedDisciplines, setDimmedDisciplines] = useState<Set<DisciplineBucket>>(new Set());
   const dimmedDisciplinesRef = useRef<Set<DisciplineBucket>>(new Set());
+  const [exploded, setExploded] = useState(false);
+  const [exploding, setExploding] = useState(false);
   // Full FragmentsModel instances (methods like getCategories/getItemsVolume) —
   // modelsRef below only types the bbox-shaped subset the camera code needs.
   const fragmentsModelsRef = useRef<FRAGS.FragmentsModel[]>([]);
@@ -580,6 +583,32 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     // opacity change shows up immediately even if the camera stayed still.
     const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
     fragments?.core.update(true);
+  };
+
+  const toggleExplode = async () => {
+    if (exploding) return;
+    const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
+    if (!fragments) return;
+    setExploding(true);
+    try {
+      if (exploded) {
+        await resetExplode(fragments, fragmentsModelsRef.current);
+        setExploded(false);
+      } else {
+        const bbox = currentModelBbox();
+        const size = bbox ? bbox.getSize(new THREE.Vector3()) : null;
+        // Scale the layer gap to the model's own height so a house and a
+        // city both explode into a readable, proportionate stack.
+        const step = Math.max(2, (size?.y || 10) * 0.6);
+        await applyExplode(fragments, disciplineGroupsRef.current, step);
+        setExploded(true);
+      }
+      fragments.core.update(true);
+    } catch (e) {
+      console.warn('[explode] toggle failed:', e);
+    } finally {
+      setExploding(false);
+    }
   };
 
   // The scene background is transparent, so the theme is the container colour plus the
@@ -766,7 +795,21 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         console.log('FragmentsModel received in onItemSet, adding to scene...');
         model.useCamera(world.camera!.three);
         world.scene!.three.add(model.object);
-        if (!modelsRef.current.includes(model)) modelsRef.current.push(model);
+        fragments.core.update(true);
+
+        // editor.edit() (explode) doesn't mutate the model in place — it creates a
+        // separate "delta" overlay model and fires this SAME event for it, confirmed
+        // live (model.isDeltaModel === true, parentModelId pointing back at the
+        // original). It still needs the scene.add/useCamera/update calls above so the
+        // edit actually renders, but tracking it as a real model below double-counted
+        // its geometry on top of the original's every time computeDisciplineGroups /
+        // computeModelSummary summed across all tracked models (observed live:
+        // Structure count climbing from 1501 to 2029 after a single explode).
+        if (model.isDeltaModel) return;
+
+        const isNewModel = !modelsRef.current.includes(model);
+        if (!isNewModel) return;
+        modelsRef.current.push(model);
         if (!fragmentsModelsRef.current.includes(model)) fragmentsModelsRef.current.push(model);
         // A model that streams in while the summary panel is already open should
         // update the tally rather than leave it showing the previous model's counts.
@@ -779,7 +822,6 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         } catch (e) {
           console.warn('Could not raise LOD mode:', e);
         }
-        fragments.core.update(true);
         console.log('FragmentsModel added to scene and updated core.');
 
         // --- Frame the model once its geometry has actually streamed in ---
@@ -1076,7 +1118,15 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         </div>
       </div>
 
-      <DisciplineLayerBar groups={disciplineGroups} dimmed={dimmedDisciplines} theme={theme} onToggle={toggleDiscipline} />
+      <DisciplineLayerBar
+        groups={disciplineGroups}
+        dimmed={dimmedDisciplines}
+        theme={theme}
+        onToggle={toggleDiscipline}
+        exploded={exploded}
+        exploding={exploding}
+        onToggleExplode={toggleExplode}
+      />
 
       <ElementInspector data={inspected} loading={inspecting} theme={theme} onClose={closeInspector} />
       {summaryOpen && (
