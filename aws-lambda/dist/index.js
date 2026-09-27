@@ -95765,6 +95765,7 @@ async function jevSafe(state3, questions, timeoutMs = 5e3) {
 var INSTANCE_ID2 = "i-006cf1785c4abbb6d";
 var REGION2 = "us-east-1";
 var AGY_MODEL = "gemini-3.8-flash-high";
+var STATUS_BUCKET = "infrastudio-ifc-models-us-east-1";
 var ssmClient2 = new import_client_ssm2.SSMClient({ region: REGION2 });
 function b642(s3) {
   return typeof Buffer !== "undefined" ? Buffer.from(s3, "utf-8").toString("base64") : btoa(s3);
@@ -95803,42 +95804,94 @@ function buildScript2(brief, jobId, images = []) {
 export HOME=/root
 export PATH="$HOME/.local/bin:$PATH"
 source /root/dbus_env.sh
-mkdir -p /root/agy_jobs
+mkdir -p /root/agy_jobs /root/agy_jobs/queue
+
+# Single status channel the Lambda poller reads over plain HTTPS (it cannot
+# reach this box's private ports, and SSM's own stdout never streams mid-
+# command - confirmed: StandardOutputContent stays empty until Success). Every
+# phase of this build (queued/building/done/error) is pushed here so the
+# poller has one place to check regardless of which slot ends up running it.
+STATUS_KEY="builds/${safeId}/status.json"
+write_status() {
+  echo "$1" > /tmp/status_${safeId}.json
+  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region us-east-1 --content-type application/json >/dev/null 2>&1
+}
+write_status '{"status":"queued","position":1}'
 
 ${imageFetch}
 
 echo "${briefB64}" | base64 -d > /root/agy_jobs/task_${safeId}.txt
 BRIEF=$(cat /root/agy_jobs/task_${safeId}.txt)
 
-# The MCP/Blender server behind every build holds exactly ONE global in-memory
-# IFC scene (IfcStore) - there is no per-session isolation on that side at
-# all. Killing whatever build was previously running (the old behavior here)
-# could interrupt it mid tool-call, leaving its partial geometry in the scene
-# for the NEXT build's initialize_project to (sometimes) fail to fully clear -
-# this is what produced real reports of one session's model bleeding into
-# another session's freshly-generated export. flock makes every build wait
-# for the previous one to finish cleanly instead of interrupting it, so the
-# shared scene only ever has one build's geometry in it at a time. The wait
-# is bounded well past agy's own 30m print-timeout so a genuinely wedged
-# build can't block every future request forever.
-exec 200>/root/agy_jobs/build.lock
-flock -w 2100 200 || { echo "BUILD_ERROR:Timed out waiting for another build already in progress to finish - the system is under heavy load, please try again shortly."; exit 1; }
+# \u2500\u2500 3-slot queue \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# The box runs 3 fully separate MCP containers (own Blender, own IFC scene -
+# see ec2/setup_mcp_slots.sh), one per slot. A build takes whichever slot's
+# lock it can grab; if all 3 are held it waits its turn in arrival order. This
+# replaces the old single global flock, which made every build wait no matter
+# how much spare capacity the box actually had.
+exec 209>>/root/agy_jobs/ticket.lock
+flock 209
+TICKET=$(( $(cat /root/agy_jobs/ticket_counter 2>/dev/null || echo 0) + 1 ))
+echo $TICKET > /root/agy_jobs/ticket_counter
+flock -u 209
+touch "/root/agy_jobs/queue/${safeId}.$TICKET"
 
-setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+exec 211>/root/agy_jobs/slot1.lock
+exec 212>/root/agy_jobs/slot2.lock
+exec 213>/root/agy_jobs/slot3.lock
+
+SLOT=0
+while [ "$SLOT" -eq 0 ]; do
+  if flock -n 211; then SLOT=1
+  elif flock -n 212; then SLOT=2
+  elif flock -n 213; then SLOT=3
+  else
+    AHEAD=$(ls /root/agy_jobs/queue 2>/dev/null | awk -F. -v t="$TICKET" '{n=$NF; if ((n+0) < (t+0)) c++} END{print c+0}')
+    write_status "{\\"status\\":\\"queued\\",\\"position\\":$((AHEAD+1))}"
+    sleep 4
+  fi
+done
+rm -f "/root/agy_jobs/queue/${safeId}.$TICKET"
+
+case $SLOT in
+  1) AGY_HOME=/root ;;
+  2) AGY_HOME=/root/slots/home2 ;;
+  3) AGY_HOME=/root/slots/home3 ;;
+esac
+SLOT_PORT=$((7999 + SLOT))
+write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":0}"
+
+# Heartbeat: reads the live element count from THIS slot's own MCP server
+# (127.0.0.1 only, never crosses slots) and republishes it to S3 every ~6s so
+# the poller can show live progress. Killed once agy itself finishes.
+(
+  while true; do
+    CNT=$(curl -s -m 4 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}' 2>/dev/null | grep -o '"count"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*$' | head -1)
+    if [ -n "$CNT" ]; then write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":$CNT}"; fi
+    sleep 6
+  done
+) &
+HEARTBEAT_PID=$!
+
+setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
-
-# Nothing needs to run alongside agy here - live progress is read by the
-# caller straight from the MCP server's public endpoint (see
-# pollAntigravityBuild), not from this script's own output, because SSM does
-# not surface a running command's stdout until it reaches a terminal state
-# (confirmed directly: StandardOutputContent stays empty the whole time a
-# command is InProgress, then appears all at once on Success) - a heartbeat
-# echoing progress here would never actually reach the poller before the
-# build was already done anyway.
 wait $AGY_PID
+kill $HEARTBEAT_PID 2>/dev/null
 
 cat > /root/agy_jobs/parse_${safeId}.py <<'PYEOF'
 import json, re, subprocess, time
+STATUS_BUCKET = "${STATUS_BUCKET}"
+STATUS_KEY = "builds/${safeId}/status.json"
+
+def push_status(obj):
+    try:
+        subprocess.run(
+            ["aws", "s3", "cp", "-", f"s3://{STATUS_BUCKET}/{STATUS_KEY}", "--region", "us-east-1", "--content-type", "application/json"],
+            input=json.dumps(obj).encode(), capture_output=True,
+        )
+    except Exception:
+        pass
+
 with open('/root/agy_jobs/${safeId}.log') as f:
     content = f.read()
 try:
@@ -95870,12 +95923,13 @@ if clash_json is not None:
     print(f'CLASH_REPORT:{json.dumps(clash_json)}')
 if url_match:
     url = url_match.group(0).rstrip(').,"\\'')
-    # The MCP server exports every build to ONE shared S3 key (its path is
-    # md5 of a constant session id), so a saved link would show whichever
-    # build exported last - one user's model replacing another's. Copy this
-    # build's file to a key unique to this job while still holding the build
-    # lock (nobody else can have exported in between), and hand back that
-    # link instead. Falls back to the shared link only if the copy fails.
+    # The MCP server exports every build to ONE shared S3 key per slot (its
+    # path is md5 of a constant session id, or a fixed slot key for slots
+    # 2/3), so a saved link would show whichever build in that slot exported
+    # last. Copy this build's file to a key unique to this job while still
+    # holding the slot lock (nobody else can have exported in this slot in
+    # between), and hand back that link instead. Falls back to the shared
+    # link only if the copy fails.
     final_url = url
     m = re.match(r'https://([^.]+)\\.s3[.\\w-]*\\.amazonaws\\.com/([^?]+)', url)
     if m:
@@ -95889,8 +95943,17 @@ if url_match:
         print(f'FILE_SIZE:{size_match.group(1).replace(",", "")}')
     if count_match:
         print(f'ELEMENT_COUNT:{count_match.group(1).replace(",", "")}')
+    push_status({
+        "status": "done",
+        "ifcUrl": final_url,
+        "fileSize": int(size_match.group(1).replace(",", "")) if size_match else None,
+        "elementCount": int(count_match.group(1).replace(",", "")) if count_match else None,
+        "clashReport": clash_json,
+    })
 else:
-    print(f'BUILD_ERROR:{resp[-500:]}')
+    err = resp[-500:]
+    print(f'BUILD_ERROR:{err}')
+    push_status({"status": "error", "error": err})
 PYEOF
 python3 /root/agy_jobs/parse_${safeId}.py
 `;
@@ -95928,6 +95991,17 @@ async function fetchLiveElementCount() {
     return void 0;
   }
 }
+async function fetchBuildStatus(jobId) {
+  try {
+    const safeId = safeJobId(jobId);
+    const url = `https://${STATUS_BUCKET}.s3.us-east-1.amazonaws.com/builds/${safeId}/status.json?t=${Date.now()}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4e3) });
+    if (!res.ok) return void 0;
+    return await res.json();
+  } catch {
+    return void 0;
+  }
+}
 async function triageClashReport(report) {
   if (report.clashes_found === 0) return void 0;
   const state3 = {
@@ -95960,7 +96034,40 @@ async function triageClashReport(report) {
   const a9 = answers.verdict;
   return { action: a9.choice, confidence: a9.confidence };
 }
-async function pollAntigravityBuild(commandId) {
+async function pollAntigravityBuild(commandId, jobId) {
+  if (jobId) {
+    const s3Status = await fetchBuildStatus(jobId);
+    if (s3Status?.status === "queued") {
+      const position = s3Status.position ?? 1;
+      return {
+        done: false,
+        queuePosition: position,
+        progressMessage: `\u{1F552} High demand \u2014 you're #${position} in line. Your build starts automatically; feel free to close this tab and check back later.`
+      };
+    }
+    if (s3Status?.status === "building") {
+      const count = s3Status.elementCount;
+      return {
+        done: false,
+        elementCount: count,
+        progressMessage: count ? `Building... ${count.toLocaleString()} elements created so far` : "Build starting..."
+      };
+    }
+    if (s3Status?.status === "done" && s3Status.ifcUrl) {
+      const clashVerdict = s3Status.clashReport ? await triageClashReport(s3Status.clashReport) : void 0;
+      return {
+        done: true,
+        ifcUrl: s3Status.ifcUrl,
+        fileSize: s3Status.fileSize,
+        elementCount: s3Status.elementCount,
+        clashReport: s3Status.clashReport,
+        clashVerdict
+      };
+    }
+    if (s3Status?.status === "error") {
+      return { done: true, error: (s3Status.error || "Build failed.").slice(0, 500) };
+    }
+  }
   try {
     const res = await ssmClient2.send(new import_client_ssm2.GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID2 }));
     const status = res.Status;
@@ -96704,8 +96811,8 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
       const ipHash = await getIpHash(payload3);
       const unlocked = isUnlockedRequest(payload3);
       if (continuation2?.kind === "antigravity") {
-        const result = await pollAntigravityBuild(continuation2.ssmCommandId);
-        if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, mcpSessionId: continuation2.jobId };
+        const result = await pollAntigravityBuild(continuation2.ssmCommandId, continuation2.jobId);
+        if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, queuePosition: result.queuePosition, mcpSessionId: continuation2.jobId };
         if (result.error) return { status: "error", error: result.error, mcpSessionId: continuation2.jobId };
         if (result.clashVerdict?.action === "MAJOR_REGENERATE" && !continuation2.fixAttempted && result.clashReport) {
           try {

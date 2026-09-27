@@ -16,6 +16,16 @@ export interface ReferenceImageInput {
   caption?: string;
 }
 
+/** Enough to resume an in-flight build from a fresh page load - everything
+ *  the next `build_code` poll needs, plus what's needed to re-show the chat
+ *  bubble it belongs to. Persisted to localStorage (see App-level usage) so a
+ *  visitor who closes the tab while queued/building can come back later and
+ *  pick up exactly where they left off, instead of losing the build. */
+export interface ActiveBuildState {
+  continuation: any;
+  sessionId: string;
+}
+
 /**
  * Direct build path for the Antigravity engine (USE_ANTIGRAVITY_ENGINE=true
  * on the Lambda): sends the user's raw message straight to agent-bim's
@@ -36,6 +46,15 @@ export async function runAntigravityBuild(
   onStep: (step: string) => void,
   onAssistantMessage?: (msg: any) => void,
   images: ReferenceImageInput[] = [],
+  /** Resume an already-started build instead of starting a new one - the
+   *  initial build_code call is skipped entirely and polling picks up from
+   *  this saved continuation. */
+  resume?: ActiveBuildState,
+  /** Fired after every poll that comes back `continue` (queued or building),
+   *  with what's needed to resume - and with `null` once the build reaches a
+   *  terminal state (success, error, or trial_used). The caller persists
+   *  this to localStorage; see resume above. */
+  onPersist?: (state: ActiveBuildState | null) => void,
 ): Promise<MultiAgentResult> {
   const steps: string[] = [];
   const pushStep = (msg: string) => {
@@ -69,19 +88,35 @@ export async function runAntigravityBuild(
   const unlockCode = sessionStorage.getItem('infrastudio_unlock_code') || undefined;
 
   try {
-    let bimRes = await callEdge('agent-bim', {
-      action: 'build_code',
-      plan: { client_requirements: userMessage, images, unlockCode },
-      mcpSessionId: clientSessionId,
-    });
-    let sessionId = bimRes.mcpSessionId || clientSessionId;
+    let bimRes: any;
+    let sessionId: string;
+    if (resume) {
+      // Skip straight to polling - the build itself was already started (and
+      // may already be finished) by an earlier page load. mcpSessionId here
+      // is just the opaque job id (see build_code's antigravity branch), not
+      // a real MCP session, so nothing needs re-initializing.
+      pushStep("🔄 Reconnecting to your build...");
+      bimRes = { status: 'continue', continuation: resume.continuation };
+      sessionId = resume.sessionId;
+    } else {
+      bimRes = await callEdge('agent-bim', {
+        action: 'build_code',
+        plan: { client_requirements: userMessage, images, unlockCode },
+        mcpSessionId: clientSessionId,
+      });
+      sessionId = bimRes.mcpSessionId || clientSessionId;
+      if (bimRes.status === 'continue') onPersist?.({ continuation: bimRes.continuation, sessionId });
+    }
 
-    // Each poll paces itself server-side (~8s) and returns fast, so this can
-    // afford a much larger pass budget than the old OpenHands loop (which
-    // blocked internally for most of a Lambda invocation per pass) - 200
-    // passes at ~8-10s each covers roughly agy's own 30-minute print-timeout.
+    // Each poll paces itself server-side (~4-8s) and returns fast, so this
+    // can afford a large pass budget - it now also covers time spent waiting
+    // in the 3-slot queue (see antigravity_agent.ts), not just the build
+    // itself, since a busy period can mean a real wait before a slot frees
+    // up. Closing the tab doesn't lose the build either way: the on-box
+    // script keeps running regardless, and onPersist lets a later page load
+    // resume polling from here (see resume above).
     let continuePasses = 0;
-    const maxContinuePasses = 200;
+    const maxContinuePasses = 800;
     while (bimRes.status === 'continue' && continuePasses < maxContinuePasses) {
       continuePasses++;
       if (bimRes.progress) pushStep(bimRes.progress);
@@ -97,12 +132,14 @@ export async function runAntigravityBuild(
         mcpSessionId: sessionId,
       });
       sessionId = bimRes.mcpSessionId || sessionId;
+      if (bimRes.status === 'continue') onPersist?.({ continuation: bimRes.continuation, sessionId });
     }
 
     if (bimRes.status === 'continue') {
       pushStep(`⚠️ Build still running after ${maxContinuePasses} checks - it may finish later; re-open this chat to check back.`);
       return { reply: "Build is still running in the background.", steps, mcp_session_id: sessionId };
     }
+    onPersist?.(null);
     // Public trial gate (see agent-bim/_shared/trial_gate.ts): this is a
     // real, expected outcome for a repeat visitor, not a failure - handled
     // distinctly here so the UI can offer the waitlist instead of showing a
@@ -126,6 +163,12 @@ export async function runAntigravityBuild(
     if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: reply });
     return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId };
   } catch (err: any) {
+    // Deliberately NOT clearing the persisted state here: this catch also
+    // fires on a plain transient network error from one poll (a wifi blip,
+    // Lambda cold start) - the on-box build keeps running either way, and
+    // clearing state would strand it with no way to resume. Only an explicit
+    // {status:'error'} from the server above (a real build failure) throws
+    // after already having cleared it.
     pushStep(`💥 Build error: ${err.message}`);
     throw err;
   }

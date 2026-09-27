@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon } from 'lucide-react';
-import { runAntigravityBuild } from '../hooks/useMultiAgentLoop';
+import { runAntigravityBuild, type ActiveBuildState } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 import { supabase } from '../lib/supabase';
 
@@ -9,6 +9,52 @@ interface AttachedImage {
   file: File;
   previewUrl: string;
   caption: string;
+}
+
+// ── Resumable build persistence ──────────────────────────────────────────
+// A build keeps running on the box regardless of whether this tab is open
+// (see ec2/setup_mcp_slots.sh + antigravity_agent.ts's 3-slot queue) - saving
+// everything needed to resume polling means closing the tab (as the queue
+// banner explicitly invites people to do) never loses the build. localStorage
+// on purpose, not sessionStorage: it must survive the tab actually closing.
+const ACTIVE_BUILD_KEY = 'infrastudio_active_build';
+// Anything older than this is treated as abandoned (box replaced, or the job
+// errored before ever writing a status) so a stale entry can't resurrect
+// itself forever - comfortably past the 800-pass/~3hr poll ceiling.
+const ACTIVE_BUILD_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+
+interface PersistedActiveBuild {
+  sid: string;
+  userContent: string;
+  continuation: any;
+  sessionId: string;
+  ts: number;
+}
+
+function loadActiveBuild(): PersistedActiveBuild | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_BUILD_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedActiveBuild;
+    if (!parsed?.continuation || !parsed.sid) return null;
+    if (Date.now() - (parsed.ts || 0) > ACTIVE_BUILD_MAX_AGE_MS) {
+      localStorage.removeItem(ACTIVE_BUILD_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveBuild(record: Omit<PersistedActiveBuild, 'ts'>) {
+  try {
+    localStorage.setItem(ACTIVE_BUILD_KEY, JSON.stringify({ ...record, ts: Date.now() }));
+  } catch { /* storage full/unavailable - just no resume, not fatal */ }
+}
+
+function clearActiveBuild() {
+  try { localStorage.removeItem(ACTIVE_BUILD_KEY); } catch { /* ignore */ }
 }
 
 interface AIChatProps {
@@ -156,6 +202,101 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     }
   };
 
+  // ── Shared build result handling (used by both a fresh send and a resumed
+  //    build picked back up after the tab was closed and reopened) ──
+
+  const applyBuildResult = async (result: Awaited<ReturnType<typeof runAntigravityBuild>>, sid: string) => {
+    if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
+
+    // Public trial gate: a real, expected outcome for a repeat visitor
+    // (see agent-bim/_shared/trial_gate.ts), not a build failure - show
+    // the waitlist CTA and stop here rather than treating it as a
+    // completed (or failed) build.
+    if (result.trialUsed) {
+      const waitlistUrl = result.waitlistUrl || 'https://www.infrastudio.app/?waitlist=early-access';
+      const gateReply: ChatMessage = {
+        role: 'assistant',
+        content: result.reply || "You've already used your free trial build. Join the waitlist to get full access.",
+        cta: { label: 'Join the Waitlist', url: waitlistUrl },
+      };
+      setMessages(prev => [...prev, gateReply]);
+      await saveMessage(sid, { role: gateReply.role, content: gateReply.content });
+      setCurrentSteps([]);
+      return;
+    }
+
+    const reply: ChatMessage = { role: 'assistant', content: result.reply || 'Done.' };
+    setMessages(prev => [...prev, reply]);
+    await saveMessage(sid, reply);
+
+    const activeMcpId = result.mcp_session_id;
+    if (activeMcpId) {
+      localStorage.setItem(`infrastudio_mcp_${sid}`, activeMcpId);
+    }
+    if (activeMcpId || result.ifc_url) {
+      await updateSessionData(sid, activeMcpId, result.ifc_url);
+    }
+
+    if (result.ifc_url && onLoadIfcUrl) {
+      onLoadIfcUrl(result.ifc_url);
+    }
+    if (result.ifc_url) {
+      onActiveIfcUrlChange?.(result.ifc_url);
+    }
+
+    setCurrentSteps([]);
+  };
+
+  // Auto-resume a build that was still queued or running when this browser
+  // last closed the tab (see the queue banner's "close this tab" message) -
+  // runs once on mount, before the user does anything. The build itself never
+  // stopped on the box; this just reconnects the polling loop to it.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current) return;
+    resumedRef.current = true;
+    const saved = loadActiveBuild();
+    if (!saved) return;
+
+    if (saved.sid !== activeSessionId) setActiveSessionId(saved.sid);
+    setExpanded(true);
+    setIsLoading(true);
+    setCurrentSteps(['🔄 Reconnecting to your build...']);
+
+    (async () => {
+      try {
+        const result = await runAntigravityBuild(
+          saved.userContent,
+          '',
+          (step) => setCurrentSteps(prev => [...prev.slice(-12), step]),
+          async (assistantObj: any) => {
+            await saveMessage(saved.sid, {
+              role: 'assistant',
+              content: assistantObj.content || '',
+              tool_calls: assistantObj.tool_calls,
+            });
+          },
+          [],
+          { continuation: saved.continuation, sessionId: saved.sessionId },
+          (state: ActiveBuildState | null) => {
+            if (state) saveActiveBuild({ sid: saved.sid, userContent: saved.userContent, continuation: state.continuation, sessionId: state.sessionId });
+            else clearActiveBuild();
+          },
+        );
+        await applyBuildResult(result, saved.sid);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        const errMsg: ChatMessage = { role: 'assistant', content: `⚠️ Agent failed: ${detail.slice(0, 300)}` };
+        setMessages(prev => [...prev, errMsg]);
+        await saveMessage(saved.sid, errMsg);
+        setCurrentSteps([]);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Send ──
 
   const handleSend = async (e: React.FormEvent) => {
@@ -222,6 +363,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       const sessionObj = sessions.find(s => s.id === sid);
       const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
 
+      const sidForPersist = sid;
       const result = await runAntigravityBuild(
         userContent,
         clientMcpId,
@@ -234,47 +376,14 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
           });
         },
         uploadedImages,
+        undefined,
+        (state: ActiveBuildState | null) => {
+          if (state) saveActiveBuild({ sid: sidForPersist, userContent, continuation: state.continuation, sessionId: state.sessionId });
+          else clearActiveBuild();
+        },
       );
 
-      if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
-
-      // Public trial gate: a real, expected outcome for a repeat visitor
-      // (see agent-bim/_shared/trial_gate.ts), not a build failure - show
-      // the waitlist CTA and stop here rather than treating it as a
-      // completed (or failed) build.
-      if (result.trialUsed) {
-        const waitlistUrl = result.waitlistUrl || 'https://www.infrastudio.app/?waitlist=early-access';
-        const gateReply: ChatMessage = {
-          role: 'assistant',
-          content: result.reply || "You've already used your free trial build. Join the waitlist to get full access.",
-          cta: { label: 'Join the Waitlist', url: waitlistUrl },
-        };
-        setMessages(prev => [...prev, gateReply]);
-        await saveMessage(sid, { role: gateReply.role, content: gateReply.content });
-        setCurrentSteps([]);
-        return;
-      }
-
-      const reply: ChatMessage = { role: 'assistant', content: result.reply || 'Done.' };
-      setMessages(prev => [...prev, reply]);
-      await saveMessage(sid, reply);
-
-      const activeMcpId = result.mcp_session_id || clientMcpId;
-      if (activeMcpId) {
-        localStorage.setItem(`infrastudio_mcp_${sid}`, activeMcpId);
-      }
-      if (activeMcpId || result.ifc_url) {
-        await updateSessionData(sid, activeMcpId, result.ifc_url);
-      }
-
-      if (result.ifc_url && onLoadIfcUrl) {
-        onLoadIfcUrl(result.ifc_url);
-      }
-      if (result.ifc_url) {
-        onActiveIfcUrlChange?.(result.ifc_url);
-      }
-
-      setCurrentSteps([]);
+      await applyBuildResult(result, sid);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const errMsg: ChatMessage = { role: 'assistant', content: `⚠️ Agent failed: ${detail.slice(0, 300)}` };
@@ -506,19 +615,41 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
                 ))
               )}
 
-              {isLoading && (
-                <div className="flex justify-start items-end gap-2">
-                  <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0 mb-0.5">
-                    <Bot className="w-3 h-3 text-white" />
+              {isLoading && (() => {
+                const latestStep = currentSteps[currentSteps.length - 1] || '';
+                // Queue messages come from the backend prefixed with 🕒 (see
+                // antigravity_agent.ts's pollAntigravityBuild) - shown as a
+                // distinct highlighted banner instead of the usual scrolling
+                // build-progress lines, since "we're full, come back later"
+                // is a different kind of message than normal build chatter.
+                const isQueued = latestStep.startsWith('🕒');
+                if (isQueued) {
+                  return (
+                    <div className="flex justify-start items-end gap-2">
+                      <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0 mb-0.5">
+                        <Bot className="w-3 h-3 text-white" />
+                      </div>
+                      <div className="bg-amber-500/10 border border-amber-400/30 rounded-2xl rounded-bl-xs px-4 py-3 flex flex-col gap-1 max-w-[85%] sm:max-w-[78%] select-text cursor-text">
+                        <div className="text-xs font-semibold text-amber-300">We're at capacity right now</div>
+                        <div className="text-xs text-amber-100/90 leading-snug select-text">{latestStep.replace(/^🕒\s*/, '')}</div>
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="flex justify-start items-end gap-2">
+                    <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0 mb-0.5">
+                      <Bot className="w-3 h-3 text-white" />
+                    </div>
+                    <div className="bg-white/10 rounded-2xl rounded-bl-xs px-3.5 py-2.5 flex flex-col gap-1.5 max-w-[85%] sm:max-w-[78%] border border-white/5 select-text cursor-text">
+                      {currentSteps.slice(-4).map((line, i) => (
+                        <div key={i} className="text-xs text-neutral-200 font-mono leading-tight select-text">{line}</div>
+                      ))}
+                      <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin mt-1" />
+                    </div>
                   </div>
-                  <div className="bg-white/10 rounded-2xl rounded-bl-xs px-3.5 py-2.5 flex flex-col gap-1.5 max-w-[85%] sm:max-w-[78%] border border-white/5 select-text cursor-text">
-                    {currentSteps.slice(-4).map((line, i) => (
-                      <div key={i} className="text-xs text-neutral-200 font-mono leading-tight select-text">{line}</div>
-                    ))}
-                    <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin mt-1" />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
               <div ref={messagesEndRef} />
             </div>
           </div>

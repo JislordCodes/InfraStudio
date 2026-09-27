@@ -28,6 +28,13 @@ const INSTANCE_ID = "i-006cf1785c4abbb6d";
 const REGION = "us-east-1";
 const AGY_MODEL = "gemini-3.8-flash-high";
 
+// The box runs 3 fully isolated build slots (own Blender/MCP container each,
+// see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
+// touching each other's IFC scene. A 4th+ concurrent build waits in a FIFO
+// queue on the box itself (see buildScript's ticket/slot-lock logic) instead
+// of every build serializing behind one global lock like before.
+const STATUS_BUCKET = "infrastudio-ifc-models-us-east-1";
+
 const ssmClient = new SSMClient({ region: REGION });
 
 function b64(s: string): string {
@@ -106,42 +113,94 @@ function buildScript(brief: string, jobId: string, images: ReferenceImage[] = []
 export HOME=/root
 export PATH="$HOME/.local/bin:$PATH"
 source /root/dbus_env.sh
-mkdir -p /root/agy_jobs
+mkdir -p /root/agy_jobs /root/agy_jobs/queue
+
+# Single status channel the Lambda poller reads over plain HTTPS (it cannot
+# reach this box's private ports, and SSM's own stdout never streams mid-
+# command - confirmed: StandardOutputContent stays empty until Success). Every
+# phase of this build (queued/building/done/error) is pushed here so the
+# poller has one place to check regardless of which slot ends up running it.
+STATUS_KEY="builds/${safeId}/status.json"
+write_status() {
+  echo "$1" > /tmp/status_${safeId}.json
+  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region us-east-1 --content-type application/json >/dev/null 2>&1
+}
+write_status '{"status":"queued","position":1}'
 
 ${imageFetch}
 
 echo "${briefB64}" | base64 -d > /root/agy_jobs/task_${safeId}.txt
 BRIEF=$(cat /root/agy_jobs/task_${safeId}.txt)
 
-# The MCP/Blender server behind every build holds exactly ONE global in-memory
-# IFC scene (IfcStore) - there is no per-session isolation on that side at
-# all. Killing whatever build was previously running (the old behavior here)
-# could interrupt it mid tool-call, leaving its partial geometry in the scene
-# for the NEXT build's initialize_project to (sometimes) fail to fully clear -
-# this is what produced real reports of one session's model bleeding into
-# another session's freshly-generated export. flock makes every build wait
-# for the previous one to finish cleanly instead of interrupting it, so the
-# shared scene only ever has one build's geometry in it at a time. The wait
-# is bounded well past agy's own 30m print-timeout so a genuinely wedged
-# build can't block every future request forever.
-exec 200>/root/agy_jobs/build.lock
-flock -w 2100 200 || { echo "BUILD_ERROR:Timed out waiting for another build already in progress to finish - the system is under heavy load, please try again shortly."; exit 1; }
+# ── 3-slot queue ────────────────────────────────────────────────────────────
+# The box runs 3 fully separate MCP containers (own Blender, own IFC scene -
+# see ec2/setup_mcp_slots.sh), one per slot. A build takes whichever slot's
+# lock it can grab; if all 3 are held it waits its turn in arrival order. This
+# replaces the old single global flock, which made every build wait no matter
+# how much spare capacity the box actually had.
+exec 209>>/root/agy_jobs/ticket.lock
+flock 209
+TICKET=$(( $(cat /root/agy_jobs/ticket_counter 2>/dev/null || echo 0) + 1 ))
+echo $TICKET > /root/agy_jobs/ticket_counter
+flock -u 209
+touch "/root/agy_jobs/queue/${safeId}.$TICKET"
 
-setsid nohup agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+exec 211>/root/agy_jobs/slot1.lock
+exec 212>/root/agy_jobs/slot2.lock
+exec 213>/root/agy_jobs/slot3.lock
+
+SLOT=0
+while [ "$SLOT" -eq 0 ]; do
+  if flock -n 211; then SLOT=1
+  elif flock -n 212; then SLOT=2
+  elif flock -n 213; then SLOT=3
+  else
+    AHEAD=$(ls /root/agy_jobs/queue 2>/dev/null | awk -F. -v t="$TICKET" '{n=$NF; if ((n+0) < (t+0)) c++} END{print c+0}')
+    write_status "{\\"status\\":\\"queued\\",\\"position\\":$((AHEAD+1))}"
+    sleep 4
+  fi
+done
+rm -f "/root/agy_jobs/queue/${safeId}.$TICKET"
+
+case $SLOT in
+  1) AGY_HOME=/root ;;
+  2) AGY_HOME=/root/slots/home2 ;;
+  3) AGY_HOME=/root/slots/home3 ;;
+esac
+SLOT_PORT=$((7999 + SLOT))
+write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":0}"
+
+# Heartbeat: reads the live element count from THIS slot's own MCP server
+# (127.0.0.1 only, never crosses slots) and republishes it to S3 every ~6s so
+# the poller can show live progress. Killed once agy itself finishes.
+(
+  while true; do
+    CNT=$(curl -s -m 4 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}' 2>/dev/null | grep -o '"count"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*$' | head -1)
+    if [ -n "$CNT" ]; then write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":$CNT}"; fi
+    sleep 6
+  done
+) &
+HEARTBEAT_PID=$!
+
+setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
-
-# Nothing needs to run alongside agy here - live progress is read by the
-# caller straight from the MCP server's public endpoint (see
-# pollAntigravityBuild), not from this script's own output, because SSM does
-# not surface a running command's stdout until it reaches a terminal state
-# (confirmed directly: StandardOutputContent stays empty the whole time a
-# command is InProgress, then appears all at once on Success) - a heartbeat
-# echoing progress here would never actually reach the poller before the
-# build was already done anyway.
 wait $AGY_PID
+kill $HEARTBEAT_PID 2>/dev/null
 
 cat > /root/agy_jobs/parse_${safeId}.py <<'PYEOF'
 import json, re, subprocess, time
+STATUS_BUCKET = "${STATUS_BUCKET}"
+STATUS_KEY = "builds/${safeId}/status.json"
+
+def push_status(obj):
+    try:
+        subprocess.run(
+            ["aws", "s3", "cp", "-", f"s3://{STATUS_BUCKET}/{STATUS_KEY}", "--region", "us-east-1", "--content-type", "application/json"],
+            input=json.dumps(obj).encode(), capture_output=True,
+        )
+    except Exception:
+        pass
+
 with open('/root/agy_jobs/${safeId}.log') as f:
     content = f.read()
 try:
@@ -173,12 +232,13 @@ if clash_json is not None:
     print(f'CLASH_REPORT:{json.dumps(clash_json)}')
 if url_match:
     url = url_match.group(0).rstrip(').,"\\'')
-    # The MCP server exports every build to ONE shared S3 key (its path is
-    # md5 of a constant session id), so a saved link would show whichever
-    # build exported last - one user's model replacing another's. Copy this
-    # build's file to a key unique to this job while still holding the build
-    # lock (nobody else can have exported in between), and hand back that
-    # link instead. Falls back to the shared link only if the copy fails.
+    # The MCP server exports every build to ONE shared S3 key per slot (its
+    # path is md5 of a constant session id, or a fixed slot key for slots
+    # 2/3), so a saved link would show whichever build in that slot exported
+    # last. Copy this build's file to a key unique to this job while still
+    # holding the slot lock (nobody else can have exported in this slot in
+    # between), and hand back that link instead. Falls back to the shared
+    # link only if the copy fails.
     final_url = url
     m = re.match(r'https://([^.]+)\\.s3[.\\w-]*\\.amazonaws\\.com/([^?]+)', url)
     if m:
@@ -192,8 +252,17 @@ if url_match:
         print(f'FILE_SIZE:{size_match.group(1).replace(",", "")}')
     if count_match:
         print(f'ELEMENT_COUNT:{count_match.group(1).replace(",", "")}')
+    push_status({
+        "status": "done",
+        "ifcUrl": final_url,
+        "fileSize": int(size_match.group(1).replace(",", "")) if size_match else None,
+        "elementCount": int(count_match.group(1).replace(",", "")) if count_match else None,
+        "clashReport": clash_json,
+    })
 else:
-    print(f'BUILD_ERROR:{resp[-500:]}')
+    err = resp[-500:]
+    print(f'BUILD_ERROR:{err}')
+    push_status({"status": "error", "error": err})
 PYEOF
 python3 /root/agy_jobs/parse_${safeId}.py
 `;
@@ -217,10 +286,12 @@ export async function startAntigravityBuild(brief: string, jobId: string, images
 
 /**
  * Live element count straight from the MCP server, bypassing SSM entirely -
- * this is what actually makes progress "stream" during a build, since the
- * SSM command itself reveals nothing until it finishes. Any failure (server
- * still booting, transient network blip) just yields "no count this round",
- * not a thrown error - this is a best-effort progress hint, not a critical path.
+ * kept as a fallback for slot 1 only (the one build slot whose MCP port is
+ * actually public). Slots 2/3 bind to 127.0.0.1 on the box on purpose (see
+ * ec2/setup_mcp_slots.sh), so their progress comes from the S3 status channel
+ * (see fetchBuildStatus) instead - this function can no longer see them. Any
+ * failure (server still booting, transient network blip) just yields "no
+ * count this round", not a thrown error - a best-effort hint, not a critical path.
  */
 async function fetchLiveElementCount(): Promise<number | undefined> {
   try {
@@ -240,6 +311,37 @@ async function fetchLiveElementCount(): Promise<number | undefined> {
   }
 }
 
+interface BuildStatus {
+  status?: "queued" | "building" | "done" | "error";
+  position?: number;
+  slot?: number;
+  elementCount?: number;
+  ifcUrl?: string;
+  fileSize?: number;
+  clashReport?: ClashReport;
+  error?: string;
+}
+
+/**
+ * Reads this build's own status.json off S3 - the one channel that works
+ * regardless of which of the 3 slots ends up running it, and regardless of
+ * whether the build is still queued (see buildScript's write_status calls).
+ * Public bucket, so a plain fetch works from Lambda with no AWS credentials;
+ * 404 just means the on-box script hasn't written anything yet (command still
+ * propagating to the instance), not an error.
+ */
+async function fetchBuildStatus(jobId: string): Promise<BuildStatus | undefined> {
+  try {
+    const safeId = safeJobId(jobId);
+    const url = `https://${STATUS_BUCKET}.s3.us-east-1.amazonaws.com/builds/${safeId}/status.json?t=${Date.now()}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return undefined;
+    return await res.json();
+  } catch {
+    return undefined;
+  }
+}
+
 export interface AntigravityPollResult {
   done: boolean;
   ifcUrl?: string;
@@ -247,6 +349,11 @@ export interface AntigravityPollResult {
   elementCount?: number;
   error?: string;
   progressMessage?: string;
+  /** Position in the on-box queue (1 = next up) while every slot is busy.
+   *  Undefined once the build has actually started (status moves to
+   *  "building"). The frontend uses this to show a "you can close this tab"
+   *  banner instead of the usual build-progress text. */
+  queuePosition?: number;
   /** Raw geometric clash report Antigravity printed before exporting, if the
    *  brief asked it to run one (see clash_check.ts). Undefined if it never
    *  ran or printed nothing parseable - never treated as a failure either way. */
@@ -300,8 +407,53 @@ async function triageClashReport(report: ClashReport): Promise<{ action: string;
  * own continuation loop, or a short server-side delay before returning) so
  * progress can be surfaced on every round-trip rather than only once per
  * multi-minute Lambda invocation.
+ *
+ * Primary source is this build's own S3 status.json (see fetchBuildStatus) -
+ * the only channel that works while the build is still queued (SSM hasn't
+ * even acquired a slot yet) and regardless of which of the 3 slots it lands
+ * in (only slot 1's MCP port is public). Falls through to the original
+ * SSM-invocation/marker-parsing logic only when status.json hasn't appeared
+ * yet or the on-box script crashed before ever writing to it - so a genuinely
+ * wedged build still surfaces a real error instead of polling forever.
  */
-export async function pollAntigravityBuild(commandId: string): Promise<AntigravityPollResult> {
+export async function pollAntigravityBuild(commandId: string, jobId?: string): Promise<AntigravityPollResult> {
+  if (jobId) {
+    const s3Status = await fetchBuildStatus(jobId);
+    if (s3Status?.status === "queued") {
+      const position = s3Status.position ?? 1;
+      return {
+        done: false,
+        queuePosition: position,
+        progressMessage: `🕒 High demand — you're #${position} in line. Your build starts automatically; feel free to close this tab and check back later.`,
+      };
+    }
+    if (s3Status?.status === "building") {
+      const count = s3Status.elementCount;
+      return {
+        done: false,
+        elementCount: count,
+        progressMessage: count ? `Building... ${count.toLocaleString()} elements created so far` : "Build starting...",
+      };
+    }
+    if (s3Status?.status === "done" && s3Status.ifcUrl) {
+      const clashVerdict = s3Status.clashReport ? await triageClashReport(s3Status.clashReport) : undefined;
+      return {
+        done: true,
+        ifcUrl: s3Status.ifcUrl,
+        fileSize: s3Status.fileSize,
+        elementCount: s3Status.elementCount,
+        clashReport: s3Status.clashReport,
+        clashVerdict,
+      };
+    }
+    if (s3Status?.status === "error") {
+      return { done: true, error: (s3Status.error || "Build failed.").slice(0, 500) };
+    }
+    // No status.json yet - command may still be propagating to the instance,
+    // or (rarely) this is an older continuation from before this channel
+    // existed. Fall through to the SSM-based check below.
+  }
+
   try {
     const res = await ssmClient.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID }));
     const status = res.Status;

@@ -758,8 +758,8 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       const unlocked = isUnlockedRequest(payload);
 
       if (continuation?.kind === "antigravity") {
-        const result = await pollAntigravityBuild(continuation.ssmCommandId);
-        if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, mcpSessionId: continuation.jobId };
+        const result = await pollAntigravityBuild(continuation.ssmCommandId, continuation.jobId);
+        if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, queuePosition: result.queuePosition, mcpSessionId: continuation.jobId };
         if (result.error) return { status: "error", error: result.error, mcpSessionId: continuation.jobId };
 
         // Act on a MAJOR_REGENERATE verdict with ONE targeted repair pass,
