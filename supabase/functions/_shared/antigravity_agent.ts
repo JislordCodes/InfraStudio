@@ -468,6 +468,15 @@ export async function pollAntigravityBuild(commandId: string, jobId?: string): P
     const s3Status = await fetchBuildStatus(jobId);
     if (s3Status?.status === "queued") {
       const position = s3Status.position ?? 1;
+      // Same ~8s pacing the old SSM-fallback path always had - status.json
+      // reads are fast (a plain HTTPS GET, no SSM round trip), so without
+      // this delay the frontend's poll loop races through its whole pass
+      // budget in well under a minute instead of the ~30min+ it's sized
+      // for, and gives up on a build that's still perfectly healthy
+      // (confirmed live: a real user's build finished successfully on the
+      // box, but the frontend had already reported "still running in the
+      // background" and stopped polling before that happened).
+      await new Promise((r) => setTimeout(r, 8000));
       return {
         done: false,
         queuePosition: position,
@@ -480,6 +489,7 @@ export async function pollAntigravityBuild(commandId: string, jobId?: string): P
       // is running, just hasn't created anything yet) must still say
       // "Building...", not fall back to "Build starting..." as if no slot
       // had been claimed at all.
+      await new Promise((r) => setTimeout(r, 8000));
       return {
         done: false,
         elementCount: count,

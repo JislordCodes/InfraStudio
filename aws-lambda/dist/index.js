@@ -96086,6 +96086,7 @@ async function pollAntigravityBuild(commandId, jobId) {
     const s3Status = await fetchBuildStatus(jobId);
     if (s3Status?.status === "queued") {
       const position = s3Status.position ?? 1;
+      await new Promise((r9) => setTimeout(r9, 8e3));
       return {
         done: false,
         queuePosition: position,
@@ -96094,6 +96095,7 @@ async function pollAntigravityBuild(commandId, jobId) {
     }
     if (s3Status?.status === "building") {
       const count = s3Status.elementCount;
+      await new Promise((r9) => setTimeout(r9, 8e3));
       return {
         done: false,
         elementCount: count,
