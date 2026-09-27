@@ -95859,6 +95859,7 @@ case $SLOT in
   3) AGY_HOME=/root/slots/home3 ;;
 esac
 SLOT_PORT=$((7999 + SLOT))
+export SLOT_PORT
 write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":0}"
 
 # Heartbeat: reads the live element count from THIS slot's own MCP server
@@ -95879,7 +95880,8 @@ wait $AGY_PID
 kill $HEARTBEAT_PID 2>/dev/null
 
 cat > /root/agy_jobs/parse_${safeId}.py <<'PYEOF'
-import json, re, subprocess, time
+import json, os, re, subprocess, time
+import urllib.request as _ur
 STATUS_BUCKET = "${STATUS_BUCKET}"
 STATUS_KEY = "builds/${safeId}/status.json"
 
@@ -95891,6 +95893,43 @@ def push_status(obj):
         )
     except Exception:
         pass
+
+# Authoritative element count, straight from this slot's own MCP server (same
+# call the heartbeat used during the build) - a real number regardless of how
+# agy happened to phrase its own text summary. Preferred over the regex below,
+# which only exists as a fallback for when this call fails.
+def final_element_count():
+    port = os.environ.get("SLOT_PORT")
+    if not port:
+        return None
+    try:
+        req = _ur.Request(
+            f"http://127.0.0.1:{port}/mcp",
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_info", "arguments": {}}}).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+        )
+        with _ur.urlopen(req, timeout=8) as resp:
+            body = json.loads(resp.read().decode())
+        for item in body.get("result", {}).get("content", []) or []:
+            if isinstance(item, dict) and "text" in item:
+                parsed = json.loads(item["text"])
+                if isinstance(parsed.get("count"), int):
+                    return parsed["count"]
+    except Exception:
+        pass
+    return None
+
+# Authoritative file size, straight off the object actually sitting in S3 -
+# real bytes, not agy's own text description of them. Only callable once the
+# unique-key copy below has succeeded.
+def s3_object_size(bucket, key):
+    try:
+        r = subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", "us-east-1"], capture_output=True, text=True)
+        if r.returncode == 0:
+            return json.loads(r.stdout).get("ContentLength")
+    except Exception:
+        pass
+    return None
 
 with open('/root/agy_jobs/${safeId}.log') as f:
     content = f.read()
@@ -95931,6 +95970,7 @@ if url_match:
     # between), and hand back that link instead. Falls back to the shared
     # link only if the copy fails.
     final_url = url
+    authoritative_size = None
     m = re.match(r'https://([^.]+)\\.s3[.\\w-]*\\.amazonaws\\.com/([^?]+)', url)
     if m:
         bucket, shared_key = m.group(1), m.group(2)
@@ -95938,16 +95978,23 @@ if url_match:
         r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', 'us-east-1'], capture_output=True, text=True)
         if r.returncode == 0:
             final_url = f'https://{bucket}.s3.us-east-1.amazonaws.com/{unique_key}?t={int(time.time())}'
+            authoritative_size = s3_object_size(bucket, unique_key)
+    final_count = final_element_count()
+    if final_count is None and count_match:
+        final_count = int(count_match.group(1).replace(",", ""))
+    final_size = authoritative_size
+    if final_size is None and size_match:
+        final_size = int(size_match.group(1).replace(",", ""))
     print(f'IFC_URL:{final_url}')
-    if size_match:
-        print(f'FILE_SIZE:{size_match.group(1).replace(",", "")}')
-    if count_match:
-        print(f'ELEMENT_COUNT:{count_match.group(1).replace(",", "")}')
+    if final_size is not None:
+        print(f'FILE_SIZE:{final_size}')
+    if final_count is not None:
+        print(f'ELEMENT_COUNT:{final_count}')
     push_status({
         "status": "done",
         "ifcUrl": final_url,
-        "fileSize": int(size_match.group(1).replace(",", "")) if size_match else None,
-        "elementCount": int(count_match.group(1).replace(",", "")) if count_match else None,
+        "fileSize": final_size,
+        "elementCount": final_count,
         "clashReport": clash_json,
     })
 else:
@@ -96050,7 +96097,7 @@ async function pollAntigravityBuild(commandId, jobId) {
       return {
         done: false,
         elementCount: count,
-        progressMessage: count ? `Building... ${count.toLocaleString()} elements created so far` : "Build starting..."
+        progressMessage: typeof count === "number" ? `Building... ${count.toLocaleString()} elements created so far` : "Build starting..."
       };
     }
     if (s3Status?.status === "done" && s3Status.ifcUrl) {
