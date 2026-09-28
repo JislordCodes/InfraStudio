@@ -71,3 +71,24 @@ addresses once people start signing up — don't commit it.
   `https://infra-studio-z3xc.vercel.app`.
 - No fabricated metrics, logos, testimonials, or traction claims are used,
   per the product's current working-prototype stage.
+
+## Waitlist backend + dashboard (production)
+
+On Vercel the waitlist runs as serverless functions in `api/`:
+
+- `POST /api/waitlist` stores the signup in the Supabase table `waitlist_signups`
+  (migration: `supabase/migrations/20260928100000_create_waitlist_signups.sql`) and emails the owner.
+- `GET /api/dashboard-data` feeds the private dashboard at **`/dashboard<token>`** (default token `omoSAL6`,
+  so `/dashboardomoSAL6`). The token in the URL is the password. `?format=csv` downloads everything as CSV.
+
+Set these in the Vercel project (Settings -> Environment Variables), then redeploy:
+
+| Variable | Purpose |
+|---|---|
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | server-only key (Supabase -> Project Settings -> API). Never expose it in the browser. |
+| `RESEND_API_KEY` | sends the "someone joined" email (resend.com) |
+| `NOTIFY_EMAIL` | address that receives it. Without a verified domain, Resend only delivers to the email the Resend account was created with. |
+| `DASHBOARD_TOKEN` | optional; change it AND the `/dashboard...` route in `vercel.json` together |
+
+`server.js` still writes `data/waitlist.csv` for local development only.

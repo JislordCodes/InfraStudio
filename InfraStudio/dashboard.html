@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Waitlist dashboard</title>
+<link rel="icon" href="/favicon.ico" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #faf9f7; --panel: #ffffff; --text: #0b0c0e; --muted: #68675f; --line: #e2e0da;
+    --accent: #2f6fed; --accent-soft: rgba(47,111,237,.1); --ok: #1f9d6b; --bad: #c0392b;
+    --row-hover: #f6f5f1; --new: rgba(31,157,107,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0c0e; --panel: #131417; --text: #f2f1ed; --muted: #9a9a94; --line: #23242a;
+      --accent: #5b8def; --accent-soft: rgba(91,141,239,.14); --ok: #3ec592; --bad: #ff6b5c;
+      --row-hover: #191a1e; --new: rgba(62,197,146,.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Inter, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  button, .btn { font: inherit; font-weight: 600; font-size: 14px; padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; text-decoration: none; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .stat b { display: block; font-size: 26px; letter-spacing: -.02em; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  .tools { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  input[type=search], select { font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  input[type=search] { flex: 1; min-width: 200px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 820px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--row-hover); }
+  tr.new { background: var(--new); }
+  td.when { white-space: nowrap; color: var(--muted); font-size: 13px; }
+  td.notes { max-width: 320px; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .tag.dp { background: rgba(155,89,182,.15); color: #9b59b6; }
+  .empty, .msg { padding: 44px 16px; text-align: center; color: var(--muted); }
+  .msg.err { color: var(--bad); }
+  .foot { margin-top: 12px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Waitlist dashboard</h1>
+      <div class="sub"><span class="dot"></span>Live &mdash; refreshes every 30s</div>
+    </div>
+    <div class="actions">
+      <button id="refresh">Refresh</button>
+      <button id="export" class="primary">Export CSV</button>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b id="sTotal">–</b><span>Total signups</span></div>
+    <div class="stat"><b id="sToday">–</b><span>Last 24 hours</span></div>
+    <div class="stat"><b id="sWeek">–</b><span>Last 7 days</span></div>
+    <div class="stat"><b id="sPartner">–</b><span>Design partners</span></div>
+  </div>
+
+  <div class="tools">
+    <input type="search" id="q" placeholder="Search name, email, profession, company&hellip;" aria-label="Search" />
+    <select id="type" aria-label="Filter by type">
+      <option value="">All types</option>
+      <option value="early-access">Early access</option>
+      <option value="design-partner">Design partner</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Signed up</th><th>Type</th><th>Name</th><th>Email</th><th>Profession</th><th>Company</th><th>Notes</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div id="status" class="msg">Loading&hellip;</div>
+  </div>
+  <div class="foot"><span id="updated"></span><span id="shown"></span></div>
+</div>
+
+<script>
+(function () {
+  // The secret is the URL itself: /dashboard<token>. It's sent to the API as a header.
+  var token = decodeURIComponent(location.pathname).replace(/^\/dashboard/i, "").replace(/\/+$/, "");
+  var all = [];
+  var seenIds = null;         // ids from the previous load, to highlight rows that just arrived
+  var loadedOnce = false;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function fmt(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return "";
+    return d.toLocaleString(undefined, { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  function td(text, cls) {
+    var el = document.createElement("td");
+    if (cls) el.className = cls;
+    el.textContent = text == null ? "" : String(text);
+    return el;
+  }
+
+  function render() {
+    var q = $("q").value.trim().toLowerCase();
+    var type = $("type").value;
+    var list = all.filter(function (r) {
+      if (type && r.type !== type) return false;
+      if (!q) return true;
+      return [r.name, r.email, r.profession, r.company, r.notes].join(" ").toLowerCase().indexOf(q) !== -1;
+    });
+
+    var body = $("rows");
+    body.textContent = "";
+    list.forEach(function (r) {
+      var tr = document.createElement("tr");
+      if (seenIds && !seenIds[r.id]) tr.className = "new";
+      tr.appendChild(td(fmt(r.created_at), "when"));
+      var typeCell = document.createElement("td");
+      var tag = document.createElement("span");
+      tag.className = "tag" + (r.type === "design-partner" ? " dp" : "");
+      tag.textContent = r.type === "design-partner" ? "Design partner" : "Early access";
+      typeCell.appendChild(tag);
+      tr.appendChild(typeCell);
+      tr.appendChild(td(r.name));
+      var mail = document.createElement("td");
+      var a = document.createElement("a");
+      a.textContent = r.email;
+      a.href = "mailto:" + encodeURIComponent(r.email).replace(/%40/g, "@");
+      mail.appendChild(a);
+      tr.appendChild(mail);
+      tr.appendChild(td(r.profession));
+      tr.appendChild(td(r.company));
+      tr.appendChild(td(r.notes, "notes"));
+      body.appendChild(tr);
+    });
+
+    var status = $("status");
+    if (!all.length) { status.className = "empty"; status.textContent = "No signups yet. They'll appear here the moment someone joins."; status.hidden = false; }
+    else if (!list.length) { status.className = "empty"; status.textContent = "No signups match your filter."; status.hidden = false; }
+    else status.hidden = true;
+    $("shown").textContent = list.length === all.length ? all.length + " shown" : list.length + " of " + all.length + " shown";
+  }
+
+  function stats() {
+    var now = Date.now();
+    var day = all.filter(function (r) { return now - new Date(r.created_at) < 864e5; }).length;
+    var week = all.filter(function (r) { return now - new Date(r.created_at) < 6048e5; }).length;
+    $("sTotal").textContent = all.length;
+    $("sToday").textContent = day;
+    $("sWeek").textContent = week;
+    $("sPartner").textContent = all.filter(function (r) { return r.type === "design-partner"; }).length;
+  }
+
+  function fail(text) {
+    var status = $("status");
+    status.className = "msg err";
+    status.textContent = text;
+    status.hidden = false;
+  }
+
+  function load() {
+    $("refresh").disabled = true;
+    return fetch("/api/dashboard-data", { headers: { "x-dashboard-token": token }, cache: "no-store" })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Access denied - check the dashboard URL.");
+        if (!res.ok) throw new Error("Could not load signups (" + res.status + "). Is the database configured?");
+        return res.json();
+      })
+      .then(function (data) {
+        var prev = {};
+        all.forEach(function (r) { prev[r.id] = true; });
+        seenIds = loadedOnce ? prev : null;   // first load: nothing is "new"
+        loadedOnce = true;
+        all = data.rows || [];
+        stats();
+        render();
+        $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+      })
+      .catch(function (err) { all = []; stats(); $("rows").textContent = ""; fail(err.message); })
+      .then(function () { $("refresh").disabled = false; });
+  }
+
+  $("refresh").addEventListener("click", load);
+  $("q").addEventListener("input", render);
+  $("type").addEventListener("change", render);
+  $("export").addEventListener("click", function () {
+    $("export").disabled = true;
+    fetch("/api/dashboard-data?format=csv", { headers: { "x-dashboard-token": token }, cache: "no-store" })
+      .then(function (res) { if (!res.ok) throw new Error("Export failed (" + res.status + ")"); return res.blob(); })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url; a.download = "infrastudio-waitlist.csv";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      })
+      .catch(function (err) { alert(err.message); })
+      .then(function () { $("export").disabled = false; });
+  });
+
+  load();
+  setInterval(function () { if (!document.hidden) load(); }, 30000);
+})();
+</script>
+</body>
+</html>

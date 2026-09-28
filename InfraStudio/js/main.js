@@ -195,29 +195,40 @@
         form.querySelectorAll(".touched").forEach((el) => el.classList.remove("touched"));
       };
 
-      // Primary path: append the submission to data/waitlist.csv via the small
-      // local Node server (see server.js) — this is the stopgap before a real
-      // backend exists. Falls back to localStorage if that server isn't running
-      // (e.g. the page was opened from a plain static file host).
+      // POST to /api/waitlist (a Vercel function that stores the signup in Supabase
+      // and emails the owner; server.js does the same into a CSV for local dev).
+      // The success screen is shown ONLY when that call really succeeded - this
+      // used to swallow failures into localStorage and claim success anyway, which
+      // silently lost every signup once the site moved to static hosting.
+      const errorEl = document.getElementById("waitlistError");
+      const submitBtn = submitLabel;
+      const idleText = submitBtn.textContent;
+      errorEl.hidden = true;
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Sending…";
+
       fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(entry),
       })
-        .then((res) => {
-          if (!res.ok) throw new Error("waitlist endpoint responded with " + res.status);
-          showSuccess();
-        })
-        .catch(() => {
-          try {
-            const key = "infrastudio_waitlist";
-            const existing = JSON.parse(localStorage.getItem(key) || "[]");
-            existing.push(entry);
-            localStorage.setItem(key, JSON.stringify(existing));
-          } catch (err) {
-            /* localStorage unavailable — fail silently, still show success */
+        .then(async (res) => {
+          if (!res.ok) {
+            let message = "";
+            try { message = (await res.json()).error || ""; } catch (err) { /* non-JSON error page */ }
+            throw new Error(message || "Something went wrong.");
           }
           showSuccess();
+        })
+        .catch((err) => {
+          errorEl.textContent =
+            (err && err.message && err.message !== "Failed to fetch" ? err.message + " " : "We couldn't save your signup. ") +
+            "Please try again, or email jislorda@gmail.com.";
+          errorEl.hidden = false;
+        })
+        .finally(() => {
+          submitBtn.disabled = false;
+          submitBtn.textContent = idleText;
         });
     });
   }
