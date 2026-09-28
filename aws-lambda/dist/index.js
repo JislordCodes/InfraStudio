@@ -95816,7 +95816,11 @@ write_status() {
   echo "$1" > /tmp/status_${safeId}.json
   aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region us-east-1 --content-type application/json >/dev/null 2>&1
 }
-write_status '{"status":"queued","position":1}'
+# "starting", NOT "queued": this write happens before the build has even tried to
+# grab a slot, so calling it queued told visitors "high demand - you're #1 in line"
+# for the first second or two of EVERY build, even with all 3 slots idle (reported
+# live). Only the slot-wait loop below writes a real queued status.
+write_status '{"status":"starting"}'
 
 ${imageFetch}
 
