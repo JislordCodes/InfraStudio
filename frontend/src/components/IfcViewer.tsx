@@ -833,9 +833,16 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
           if (!bbox || bbox.isEmpty()) {
             if (attempt < 20) {
               setTimeout(() => frameModel(attempt + 1), 250);
-            } else if (world.camera) {
-              console.warn('Model bounds unavailable — using fallback camera position');
-              world.camera.controls.setLookAt(30, 30, 30, 0, 0, 0, true);
+            } else {
+              // Give the fixed near camera once so something is on screen, but keep
+              // polling: on a slow device/connection the extent can take well over 5s
+              // to arrive, and a small model (a 1-2 m element) is invisible from the
+              // fallback position - previously this gave up here and left a blank grid.
+              if (attempt === 20) {
+                console.warn('Model bounds unavailable — using fallback camera position, will keep retrying');
+                world.camera.controls.setLookAt(30, 30, 30, 0, 0, 0, true);
+              }
+              if (attempt < 140) setTimeout(() => frameModel(attempt + 1), 500);
             }
             return;
           }
@@ -847,11 +854,21 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
             if (isMounted) fitGridToModel(gridRef.current, bbox, groundY);
             console.log(`Ground level (IFC elevation 0) at y = ${groundY.toFixed(2)}`);
           });
-          frameBox(world.camera, bbox, true);
+          // Snap (no transition) on first framing: the animated fly-in from the default
+          // camera took ~20s to arrive in testing, and a small model (a 1-2 m element)
+          // is invisible until then - reads as "generated but rendered nothing".
+          frameBox(world.camera, bbox, false);
           // A large camera jump outruns the streamer's incremental updates, so force
           // a refresh once the move has settled or the site renders empty.
           window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, 700);
           window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, 1800);
+          // Small models (a 1-2 m element) can stay culled well past those two refreshes
+          // - confirmed live: bounds/camera were correct but the geometry only drew
+          // ~15s later, which reads as "generated but rendered nothing". Keep nudging
+          // the streamer once a second for the first 25s so it draws promptly.
+          for (let s = 3; s <= 25; s++) {
+            window.setTimeout(() => { if (isMounted) fragments.core.update(true); }, s * 1000);
+          }
           // Bounds are non-empty here, so geometry has actually streamed in —
           // a safe point to (re)bucket every loaded model by discipline.
           if (isMounted) void refreshDisciplineGroups();
