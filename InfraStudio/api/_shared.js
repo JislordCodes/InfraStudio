@@ -5,9 +5,11 @@
 //   SUPABASE_URL                e.g. https://<ref>.supabase.co
 //   SUPABASE_SERVICE_ROLE_KEY   server-only key; the table has RLS on with no policies,
 //                               so nothing else can read or write it
-//   RESEND_API_KEY              for the "someone joined" email (optional - signups still
-//                               save without it, you just won't be emailed)
-//   NOTIFY_EMAIL                where that email goes (optional, same as above)
+//   (alerts - set at least one channel, see notifyOwner below)
+//   SMTP_USER + SMTP_PASS       Gmail address + Google App password  -> free email alert
+//   NOTIFY_EMAIL                inbox that receives it (defaults to SMTP_USER)
+//   NTFY_TOPIC                  free phone push via the ntfy app
+//   RESEND_API_KEY              optional alternative to Gmail
 // Optional:
 //   DASHBOARD_TOKEN             defaults to "omoSAL6" - must match the /dashboard<token> URL
 //   NOTIFY_FROM                 defaults to Resend's shared sender "InfraStudio <onboarding@resend.dev>"
@@ -69,14 +71,12 @@ async function listSignups(limit) {
   return res.json();
 }
 
-// Best-effort: a failed email must never fail (or lose) the signup itself.
+// Best-effort: a failed alert must never fail (or lose) the signup itself. Every
+// channel that's configured is tried; none configured just logs a warning.
+//   Gmail (free):  SMTP_USER + SMTP_PASS (a Google "App password") [+ NOTIFY_EMAIL, default SMTP_USER]
+//   Resend:        RESEND_API_KEY + NOTIFY_EMAIL
+//   Phone push:    NTFY_TOPIC (free, no account - install the ntfy app and subscribe to that topic)
 async function notifyOwner(entry) {
-  const apiKey = process.env.RESEND_API_KEY;
-  const to = process.env.NOTIFY_EMAIL;
-  if (!apiKey || !to) {
-    console.warn("[waitlist] RESEND_API_KEY / NOTIFY_EMAIL not set - skipping notification email");
-    return false;
-  }
   const link = process.env.DASHBOARD_URL || `https://www.infrastudio.app/dashboard${dashboardToken()}`;
   const label = entry.type === "design-partner" ? "design partner" : "early-access";
   const lines = [
@@ -88,23 +88,70 @@ async function notifyOwner(entry) {
     "",
     `See everyone on the dashboard: ${link}`,
   ].filter((l) => l !== null);
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: process.env.NOTIFY_FROM || "InfraStudio <onboarding@resend.dev>",
-        to: [to],
-        subject: `New waitlist signup: ${entry.name}`,
-        text: lines.join("\n"),
-      }),
-    });
-    if (!res.ok) console.error("[waitlist] notification email failed", res.status, (await res.text()).slice(0, 200));
-    return res.ok;
-  } catch (err) {
-    console.error("[waitlist] notification email error", err && err.message);
+  const text = lines.join("\n");
+  const subject = `New waitlist signup: ${entry.name}`;
+  const jobs = [];
+
+  if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+    jobs.push(
+      (async () => {
+        const nodemailer = require("nodemailer");
+        const transport = nodemailer.createTransport({
+          host: process.env.SMTP_HOST || "smtp.gmail.com",
+          port: Number(process.env.SMTP_PORT || 465),
+          secure: Number(process.env.SMTP_PORT || 465) === 465,
+          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        });
+        await transport.sendMail({
+          from: `InfraStudio Alerts <${process.env.SMTP_USER}>`,
+          to: process.env.NOTIFY_EMAIL || process.env.SMTP_USER,
+          subject,
+          text,
+        });
+      })().then(() => "smtp")
+    );
+  }
+
+  if (process.env.RESEND_API_KEY && process.env.NOTIFY_EMAIL) {
+    jobs.push(
+      fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: process.env.NOTIFY_FROM || "InfraStudio <onboarding@resend.dev>",
+          to: [process.env.NOTIFY_EMAIL],
+          subject,
+          text,
+        }),
+      }).then(async (res) => {
+        if (!res.ok) throw new Error(`resend ${res.status} ${(await res.text()).slice(0, 200)}`);
+        return "resend";
+      })
+    );
+  }
+
+  if (process.env.NTFY_TOPIC) {
+    jobs.push(
+      fetch(`https://ntfy.sh/${encodeURIComponent(process.env.NTFY_TOPIC)}`, {
+        method: "POST",
+        headers: { Title: "New waitlist signup", Click: link, Tags: "tada" },
+        body: text,
+      }).then((res) => {
+        if (!res.ok) throw new Error(`ntfy ${res.status}`);
+        return "ntfy";
+      })
+    );
+  }
+
+  if (!jobs.length) {
+    console.warn("[waitlist] no alert channel configured (SMTP_USER/SMTP_PASS, RESEND_API_KEY, or NTFY_TOPIC) - skipping alert");
     return false;
   }
+  const results = await Promise.allSettled(jobs);
+  results.forEach((r) => {
+    if (r.status === "rejected") console.error("[waitlist] alert failed:", r.reason && r.reason.message);
+  });
+  return results.some((r) => r.status === "fulfilled");
 }
 
 module.exports = { insertSignup, listSignups, notifyOwner, tokensMatch, dashboardToken, config };

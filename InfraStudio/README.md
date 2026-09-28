@@ -87,8 +87,10 @@ Set these in the Vercel project (Settings -> Environment Variables), then redepl
 |---|---|
 | `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | server-only key (Supabase -> Project Settings -> API). Never expose it in the browser. |
-| `RESEND_API_KEY` | sends the "someone joined" email (resend.com) |
-| `NOTIFY_EMAIL` | address that receives it. Without a verified domain, Resend only delivers to the email the Resend account was created with. |
+| `SMTP_USER` + `SMTP_PASS` | free email alert through Gmail: your Gmail address + a Google **App password** (Google Account -> Security -> 2-Step Verification -> App passwords) |
+| `NOTIFY_EMAIL` | inbox that gets the alert (defaults to `SMTP_USER`) |
+| `NTFY_TOPIC` | optional free phone push: install the ntfy app and subscribe to this (unguessable) topic |
+| `RESEND_API_KEY` | optional alternative to Gmail (needs `NOTIFY_EMAIL`) |
 | `DASHBOARD_TOKEN` | optional; change it AND the `/dashboard...` route in `vercel.json` together |
 
 `server.js` still writes `data/waitlist.csv` for local development only.

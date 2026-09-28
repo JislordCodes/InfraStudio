@@ -5,5 +5,8 @@
   "description": "InfraStudio landing page — static site with a small local dev server for waitlist submissions.",
   "scripts": {
     "start": "node server.js"
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.12"
   }
 }
