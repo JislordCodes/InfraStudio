@@ -131,11 +131,15 @@ async function notifyOwner(entry) {
   }
 
   if (process.env.NTFY_TOPIC) {
+    // ntfy topics are public-by-name: anyone who knows or guesses the topic can read it.
+    // So the push carries NO personal details and NO dashboard link (the link contains
+    // the dashboard password) - just a nudge to go look. Name, profession and the link
+    // only go in the email alert.
     jobs.push(
       fetch(`https://ntfy.sh/${encodeURIComponent(process.env.NTFY_TOPIC)}`, {
         method: "POST",
-        headers: { Title: "New waitlist signup", Click: link, Tags: "tada" },
-        body: text,
+        headers: { Title: "New waitlist signup", Tags: "tada" },
+        body: `Someone just joined the InfraStudio waitlist (${label}). Open your dashboard to see who.`,
       }).then((res) => {
         if (!res.ok) throw new Error(`ntfy ${res.status}`);
         return "ntfy";
