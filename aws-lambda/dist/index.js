@@ -95878,7 +95878,7 @@ write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":0
 ) &
 HEARTBEAT_PID=$!
 
-setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort high --mode plan -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
 wait $AGY_PID
 kill $HEARTBEAT_PID 2>/dev/null
