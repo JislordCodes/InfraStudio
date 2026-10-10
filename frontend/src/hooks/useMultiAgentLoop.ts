@@ -7,8 +7,6 @@ export interface MultiAgentResult {
   ifc_url?: string;
   steps: string[];
   mcp_session_id?: string;
-  trialUsed?: boolean;
-  waitlistUrl?: string;
 }
 
 export interface ReferenceImageInput {
@@ -79,14 +77,6 @@ export async function runAntigravityBuild(
 
   pushStep("🤖 InfraStudio Engine build starting...");
 
-  // Owner/trusted-tester bypass for the public trial gate - only present if
-  // this browser tab actually visited .../studios?unlock=<code> (see
-  // App.tsx). sessionStorage, not localStorage, so it lasts for this tab's
-  // messages/polls but does NOT carry over to a plain, fresh /studios visit
-  // later - checked against the real secret server-side (trial_gate.ts).
-  // Absent for every ordinary visitor, so this is a no-op for them.
-  const unlockCode = sessionStorage.getItem('infrastudio_unlock_code') || undefined;
-
   try {
     let bimRes: any;
     let sessionId: string;
@@ -101,7 +91,7 @@ export async function runAntigravityBuild(
     } else {
       bimRes = await callEdge('agent-bim', {
         action: 'build_code',
-        plan: { client_requirements: userMessage, images, unlockCode },
+        plan: { client_requirements: userMessage, images },
         mcpSessionId: clientSessionId,
       });
       sessionId = bimRes.mcpSessionId || clientSessionId;
@@ -122,13 +112,7 @@ export async function runAntigravityBuild(
       if (bimRes.progress) pushStep(bimRes.progress);
       bimRes = await callEdge('agent-bim', {
         action: 'build_code',
-        // unlockCode travels on every poll, not just the first call: the
-        // backend re-checks it on the SAME call that finally returns
-        // success (see agent-bim/index.ts) to decide whether to record this
-        // IP as having used its trial - without it here, an unlocked
-        // build's own completion call would look unlocked-less and get the
-        // owner's IP marked used anyway.
-        plan: { client_requirements: userMessage, continuation: bimRes.continuation, unlockCode },
+        plan: { client_requirements: userMessage, continuation: bimRes.continuation },
         mcpSessionId: sessionId,
       });
       sessionId = bimRes.mcpSessionId || sessionId;
@@ -140,20 +124,6 @@ export async function runAntigravityBuild(
       return { reply: "Build is still running in the background.", steps, mcp_session_id: sessionId };
     }
     onPersist?.(null);
-    // Public trial gate (see agent-bim/_shared/trial_gate.ts): this is a
-    // real, expected outcome for a repeat visitor, not a failure - handled
-    // distinctly here so the UI can offer the waitlist instead of showing a
-    // generic error bubble.
-    if (bimRes.status === 'trial_used') {
-      pushStep("🔒 Free trial already used on this connection.");
-      return {
-        reply: bimRes.error || "You've already used your free trial build. Join the waitlist to get full access.",
-        steps,
-        mcp_session_id: sessionId,
-        trialUsed: true,
-        waitlistUrl: bimRes.waitlist_url,
-      };
-    }
     if (bimRes.status === 'error') {
       throw new Error(bimRes.error || 'Build failed.');
     }

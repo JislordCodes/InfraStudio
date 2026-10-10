@@ -158,15 +158,6 @@
   const waitlistParam = new URLSearchParams(window.location.search).get("waitlist");
   if (waitlistParam) openModal(waitlistParam);
 
-  // Owner/trusted-tester bypass for the public trial gate:
-  // infrastudio.app/?unlock=<code> is now handled entirely server-side
-  // (see vercel.json's rewrite - a request to "/" carrying an ?unlock=
-  // query param, any value, is transparently served the actual studio app
-  // instead of this landing page, address bar unchanged). This file's own
-  // JS never even runs for that request, so there is nothing to do here -
-  // the studio app itself (frontend/src/App.tsx) reads the ?unlock= param
-  // once it's the one actually running.
-
   if (form) {
     form.addEventListener("submit", (e) => {
       e.preventDefault();

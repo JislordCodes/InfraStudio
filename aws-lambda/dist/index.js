@@ -96186,9 +96186,6 @@ function getEnv(name) {
   const v = typeof Deno !== "undefined" ? Deno.env.get(name) : process.env[name];
   return v?.trim() || void 0;
 }
-function supabaseConfigured() {
-  return !!(getEnv("SUPABASE_URL") && getEnv("SUPABASE_SERVICE_ROLE_KEY"));
-}
 function normalizeIp(ip) {
   if (!ip.includes(":")) return ip;
   const clean = ip.split("%")[0];
@@ -96214,49 +96211,6 @@ async function getIpHash(payload3) {
   const ip = typeof payload3?._clientIp === "string" ? payload3._clientIp.trim() : "";
   if (!ip) return null;
   return hashIp(ip);
-}
-async function hasUsedTrial(ipHash) {
-  if (!ipHash || !supabaseConfigured()) return false;
-  try {
-    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_trial_usage?ip_hash=eq.${ipHash}&select=ip_hash&limit=1`;
-    const res = await fetch(url, {
-      headers: {
-        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
-        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`
-      }
-    });
-    if (!res.ok) return false;
-    const rows = await res.json();
-    return Array.isArray(rows) && rows.length > 0;
-  } catch (e9) {
-    console.warn("[trial_gate] hasUsedTrial check failed, allowing request:", e9);
-    return false;
-  }
-}
-async function markTrialUsed(ipHash, jobId) {
-  if (!ipHash || !supabaseConfigured()) return;
-  try {
-    const url = `${getEnv("SUPABASE_URL")}/rest/v1/ip_trial_usage`;
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        apikey: getEnv("SUPABASE_SERVICE_ROLE_KEY"),
-        Authorization: `Bearer ${getEnv("SUPABASE_SERVICE_ROLE_KEY")}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates"
-      },
-      body: JSON.stringify({ ip_hash: ipHash, job_id: jobId })
-    });
-  } catch (e9) {
-    console.warn("[trial_gate] markTrialUsed failed (non-fatal):", e9);
-  }
-}
-var WAITLIST_URL = "https://www.infrastudio.app/?waitlist=early-access";
-function isUnlockedRequest(payload3) {
-  const expected = getEnv("UNLIMITED_ACCESS_PASSWORD");
-  if (!expected) return false;
-  const provided = typeof payload3?.plan?.unlockCode === "string" ? payload3.plan.unlockCode.trim() : "";
-  return !!provided && provided === expected;
 }
 
 // ../supabase/functions/agent-bim/index.ts
@@ -96538,7 +96492,7 @@ async function handleBim(payload3) {
   }
   if (payload3.action === "identity") {
     const ipHash = await getIpHash(payload3);
-    return { status: "success", ip_hash: ipHash, unlocked: isUnlockedRequest(payload3) };
+    return { status: "success", ip_hash: ipHash, unlocked: true };
   }
   let mcpSessionId = payload3.mcpSessionId;
   if (!mcpSessionId) mcpSessionId = await mcpInit("");
@@ -96861,8 +96815,6 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
     const useOpenHands = getEnv2("USE_OPENHANDS_ENGINE") === "true";
     if (useAntigravity && !payload3.plan?.is_edit) {
       const continuation2 = payload3.plan?.continuation;
-      const ipHash = await getIpHash(payload3);
-      const unlocked = isUnlockedRequest(payload3);
       if (continuation2?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation2.ssmCommandId, continuation2.jobId);
         if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, queuePosition: result.queuePosition, mcpSessionId: continuation2.jobId };
@@ -96882,19 +96834,7 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
             console.warn(`[jev] failed to start repair pass, returning original build instead: ${fixErr?.message || fixErr}`);
           }
         }
-        if (!unlocked) {
-          await markTrialUsed(ipHash, continuation2.jobId);
-        }
         return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation2.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation2.fixAttempted };
-      }
-      if (!unlocked) {
-        if (await hasUsedTrial(ipHash)) {
-          return {
-            status: "trial_used",
-            error: "You've already used your free trial build. Join the waitlist to get full access.",
-            waitlist_url: WAITLIST_URL
-          };
-        }
       }
       const userBrief = payload3.plan?.client_requirements || payload3.plan?.prompt || payload3.plan?.structure_name || "";
       const jevIntake = await jevSafe(

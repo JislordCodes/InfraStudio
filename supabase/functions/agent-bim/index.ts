@@ -6,7 +6,7 @@ import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type Referen
 import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts";
 import { SPEC_PRIORITY_RULE } from "../_shared/spec_priority.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
-import { getIpHash, hasUsedTrial, markTrialUsed, isUnlockedRequest, WAITLIST_URL } from "../_shared/trial_gate.ts";
+import { getIpHash } from "../_shared/trial_gate.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -365,12 +365,9 @@ export async function handleBim(payload: any): Promise<any> {
   // frontend learn a hash of its own IP, used in place of the old
   // per-browser localStorage device id so CHAT HISTORY follows the visitor
   // across browsers/devices on the same network (see useSessions.ts).
-  // `unlocked` here is just "did this specific call supply the correct
-  // code" - there is deliberately no persisted per-IP unlock state (see the
-  // `unlocked` check in the build_code handler below for why).
   if (payload.action === "identity") {
     const ipHash = await getIpHash(payload);
-    return { status: "success", ip_hash: ipHash, unlocked: isUnlockedRequest(payload) };
+    return { status: "success", ip_hash: ipHash, unlocked: true };
   }
 
   let mcpSessionId = payload.mcpSessionId;
@@ -742,20 +739,6 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     // Takes priority over USE_OPENHANDS_ENGINE when both happen to be set.
     if (useAntigravity && !payload.plan?.is_edit) {
       const continuation = payload.plan?.continuation;
-      const ipHash = await getIpHash(payload);
-
-      // Unlocked means: THIS request supplies the correct access code -
-      // nothing persisted per-IP or per-browser beyond that. Deliberately
-      // NOT "has this IP ever unlocked before": a visitor who used their one
-      // trial on plain /studios must stay gated on plain /studios even if
-      // they (or this same IP) unlocked at some point in the past - only
-      // actually going through https://www.infrastudio.app/studios?unlock=
-      // again grants access. The frontend re-supplies the code on every
-      // build_code call for the lifetime of that one browser tab (see
-      // useMultiAgentLoop.ts) so a single chat session doesn't need the link
-      // re-clicked between messages, but a fresh /studios visit with no
-      // ?unlock= in its history has nothing to send and is gated normally.
-      const unlocked = isUnlockedRequest(payload);
 
       if (continuation?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation.ssmCommandId, continuation.jobId);
@@ -791,38 +774,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         // frontend to ignore. If a repair pass just ran (fixAttempted), this
         // is its result - the corrected model, or the same clashes again if
         // the fix didn't fully resolve them (not retried further, see above).
-        // Trial gate: only now, on a genuine success, spend this IP's one
-        // free build - a request that errored out shouldn't cost the
-        // visitor their real try. Skipped entirely for an unlocked
-        // (IP-unlocked or owner/trusted-tester) request - never records a
-        // used-up trial for them.
-        if (!unlocked) {
-          await markTrialUsed(ipHash, continuation.jobId);
-        }
         return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
-      }
-
-      // Public-landing-page trial gate: this IP already completed one build.
-      // Checked here (new-build start only, not continuation polls above, so
-      // an in-progress build the visitor already legitimately started is
-      // never interrupted) and not per-edit, so exploring/iterating on the
-      // one model they did build is unaffected - only starting a SEPARATE
-      // fresh build is blocked. Keyed by IP (see trial_gate.ts) rather than
-      // device id/session id, which a visitor can simply clear to "test"
-      // again - that defeats the entire point of a one-test-per-visitor
-      // release. Skipped for an unlocked request (see the `unlocked` check
-      // above) - but that only ever means "this request currently carries
-      // the access code", never a standing per-IP exemption, so a visitor
-      // who exhausted their trial on plain /studios stays gated there even
-      // if they (or this IP) unlocked at some earlier point.
-      if (!unlocked) {
-        if (await hasUsedTrial(ipHash)) {
-          return {
-            status: "trial_used",
-            error: "You've already used your free trial build. Join the waitlist to get full access.",
-            waitlist_url: WAITLIST_URL,
-          };
-        }
       }
 
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";

@@ -1,10 +1,5 @@
 {
   "routes": [
-    {
-      "src": "/",
-      "has": [{ "type": "query", "key": "unlock" }],
-      "dest": "https://infra-studio-z3xc.vercel.app/studios"
-    },
     { "handle": "filesystem" },
     {
       "src": "/dashboardomoSAL6/?",

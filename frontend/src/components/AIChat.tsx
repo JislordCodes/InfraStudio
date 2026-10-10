@@ -208,23 +208,6 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
   const applyBuildResult = async (result: Awaited<ReturnType<typeof runAntigravityBuild>>, sid: string) => {
     if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
 
-    // Public trial gate: a real, expected outcome for a repeat visitor
-    // (see agent-bim/_shared/trial_gate.ts), not a build failure - show
-    // the waitlist CTA and stop here rather than treating it as a
-    // completed (or failed) build.
-    if (result.trialUsed) {
-      const waitlistUrl = result.waitlistUrl || 'https://www.infrastudio.app/?waitlist=early-access';
-      const gateReply: ChatMessage = {
-        role: 'assistant',
-        content: result.reply || "You've already used your free trial build. Join the waitlist to get full access.",
-        cta: { label: 'Join the Waitlist', url: waitlistUrl },
-      };
-      setMessages(prev => [...prev, gateReply]);
-      await saveMessage(sid, { role: gateReply.role, content: gateReply.content });
-      setCurrentSteps([]);
-      return;
-    }
-
     const reply: ChatMessage = { role: 'assistant', content: result.reply || 'Done.' };
     setMessages(prev => [...prev, reply]);
     await saveMessage(sid, reply);
