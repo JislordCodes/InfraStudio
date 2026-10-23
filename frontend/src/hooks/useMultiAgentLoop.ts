@@ -7,6 +7,8 @@ export interface MultiAgentResult {
   ifc_url?: string;
   steps: string[];
   mcp_session_id?: string;
+  element_count?: number;
+  file_size?: number;
 }
 
 export interface ReferenceImageInput {
@@ -114,6 +116,10 @@ export async function runAntigravityBuild(
    *  terminal state (success, error, or trial_used). The caller persists
    *  this to localStorage; see resume above. */
   onPersist?: (state: ActiveBuildState | null) => void,
+  /** Edit / staged-design options: `baseIfcUrl` makes this an in-place edit of
+   *  that model (loaded into the build scene first); `stage` selects one step of
+   *  the staged workflow; `projectBrief` is the original brief, for context. */
+  extra?: { baseIfcUrl?: string; stage?: string; projectBrief?: string },
 ): Promise<MultiAgentResult> {
   const steps: string[] = [];
   const pushStep = (msg: string) => {
@@ -152,7 +158,13 @@ export async function runAntigravityBuild(
     } else {
       bimRes = await callEdge('agent-bim', {
         action: 'build_code',
-        plan: { client_requirements: userMessage, images },
+        plan: {
+          client_requirements: userMessage,
+          images,
+          base_ifc_url: extra?.baseIfcUrl,
+          stage: extra?.stage,
+          project_brief: extra?.projectBrief,
+        },
         mcpSessionId: clientSessionId,
       });
       sessionId = bimRes.mcpSessionId || clientSessionId;
@@ -192,7 +204,7 @@ export async function runAntigravityBuild(
     pushStep("✅ Build complete.");
     const reply = "Build complete. The model is ready.";
     if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: reply });
-    return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId };
+    return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId, element_count: bimRes.element_count, file_size: bimRes.file_size };
   } catch (err: any) {
     // Deliberately NOT clearing the persisted state here: this catch also
     // fires on a plain transient network error from one poll (a wifi blip,

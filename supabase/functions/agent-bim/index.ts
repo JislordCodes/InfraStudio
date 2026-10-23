@@ -8,6 +8,7 @@ import { SPEC_PRIORITY_RULE } from "../_shared/spec_priority.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
 import { getIpHash } from "../_shared/trial_gate.ts";
 import { runClarify } from "../_shared/clarify.ts";
+import { buildEditBrief, buildStageOneBrief, validateBaseIfcUrl, isStageId, type StageId } from "../_shared/design_stages.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -781,10 +782,20 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         // frontend to ignore. If a repair pass just ran (fixAttempted), this
         // is its result - the corrected model, or the same clashes again if
         // the fix didn't fully resolve them (not retried further, see above).
-        return { status: "success", ifc_url: result.ifcUrl, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
+        return { status: "success", ifc_url: result.ifcUrl, element_count: result.elementCount, file_size: result.fileSize, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
       }
 
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";
+
+      // Edit mode: a follow-up request on an existing/imported model (or the next
+      // design stage) carries the URL of the model to edit. It is loaded into the
+      // build slot before the agent starts - see antigravity_agent.ts. Only links
+      // to our own model storage are accepted (the build box holds AWS credentials).
+      const baseIfcUrl = validateBaseIfcUrl(payload.plan?.base_ifc_url);
+      if (payload.plan?.base_ifc_url && !baseIfcUrl) {
+        return { status: "error", error: "That model link is not from a trusted source, so it cannot be edited." };
+      }
+      const stage: StageId | undefined = isStageId(payload.plan?.stage) ? payload.plan.stage : undefined;
 
       // Jev prompt-intake gate: a fast, cheap sanity check before committing to a
       // build that can run up to ~35 minutes of paid EC2/SSM time. Blocks only
@@ -797,7 +808,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       // intended behaviour. No-ops entirely (jevSafe returns null, request
       // proceeds normally) when JEV_API_KEY isn't set or the call fails, so a
       // TypeSafe outage degrades to "gate skipped", never a broken pipeline.
-      const jevIntake = await jevSafe(
+      const jevIntake = baseIfcUrl ? null : await jevSafe(
         { prompt: userBrief, hasReferenceImages: Array.isArray(payload.plan?.images) && payload.plan.images.length > 0 },
         {
           in_scope: {
@@ -940,7 +951,15 @@ ${userBrief}${imageSection}
 
 When finished: call get_scene_info to confirm the total element count, run the clash check above, then call export_ifc.`;
 
-      const brief = isSingleElement ? singleElementBrief : fullStructureBrief;
+      if (baseIfcUrl) {
+        const editBrief = buildEditBrief({ request: userBrief, stage, projectBrief: payload.plan?.project_brief, imageSection, specPriorityRule: SPEC_PRIORITY_RULE });
+        const editCommandId = await startAntigravityBuild(editBrief, jobId, images, { baseIfcUrl });
+        return { status: "continue", continuation: { kind: "antigravity", ssmCommandId: editCommandId, jobId }, progress: "Loading your model...", mcpSessionId: jobId };
+      }
+
+      const brief = stage === "massing"
+        ? buildStageOneBrief({ request: userBrief, imageSection, specPriorityRule: SPEC_PRIORITY_RULE })
+        : isSingleElement ? singleElementBrief : fullStructureBrief;
       const commandId = await startAntigravityBuild(brief, jobId, images);
       const newContinuation = { kind: "antigravity", ssmCommandId: commandId, jobId };
       return { status: "continue", continuation: newContinuation, progress: "Build started...", mcpSessionId: jobId };

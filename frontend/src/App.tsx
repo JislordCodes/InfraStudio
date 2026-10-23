@@ -13,9 +13,18 @@ function App() {
   // the ?ifc_url= / codex-bridge paths below, none of which are "a session".
   const [currentIfcUrl, setCurrentIfcUrl] = useState<string | null>(null);
 
+  // A picked IFC is imported as a new, editable project by the chat (it is
+  // stored, shown in the viewer, and further prompts edit it in place). If the
+  // import can't be stored, the chat calls back and it's shown read-only.
+  const [importFile, setImportFile] = useState<File | null>(null);
+
   const handleFileUpload = (file: File) => {
+    setImportFile(file);
+  };
+
+  const showLocalIfcReadOnly = (file: File) => {
     viewerRef.current?.loadIfc(file);
-    // A local upload has no URL to offer back for download - it's already on
+    // A local file has no URL to offer back for download - it's already on
     // the user's machine - so any previous model's download button goes away
     // rather than pointing at the wrong file.
     setCurrentIfcUrl(null);
@@ -139,6 +148,9 @@ function App() {
               void viewerRef.current?.clearModels();
               setCurrentIfcUrl(null);
             }}
+            importRequest={importFile}
+            onImportHandled={() => setImportFile(null)}
+            onImportFailed={showLocalIfcReadOnly}
           />
         </div>
       </div>

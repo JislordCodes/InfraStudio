@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon } from 'lucide-react';
+import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon, History } from 'lucide-react';
 import { runAntigravityBuild, clarifyBrief, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 import { supabase } from '../lib/supabase';
+import { addVersion, listVersions, type IfcVersion } from '../lib/versions';
+import { STAGES, nextStage, stageIndex, loadStageState, saveStageState, clearStageState, loadStagedPref, saveStagedPref, type StageId } from '../lib/stages';
 
 interface AttachedImage {
   id: string;
@@ -23,11 +25,19 @@ const ACTIVE_BUILD_KEY = 'infrastudio_active_build';
 // itself forever - comfortably past the 800-pass/~3hr poll ceiling.
 const ACTIVE_BUILD_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 
+/** What to record in version history / the staged workflow once a build finishes. */
+interface BuildMeta {
+  label?: string;
+  stage?: string;
+  projectBrief?: string;
+}
+
 interface PersistedActiveBuild {
   sid: string;
   userContent: string;
   continuation: any;
   sessionId: string;
+  meta?: BuildMeta;
   ts: number;
 }
 
@@ -79,9 +89,15 @@ interface AIChatProps {
   /** Fired when the user switches to a chat that has no model yet, so the
    *  viewer doesn't keep showing the previous chat's model. */
   onClearModel?: () => void;
+  /** An IFC file picked with the viewer's upload button: imported as a new
+   *  editable project. */
+  importRequest?: File | null;
+  onImportHandled?: () => void;
+  /** Import couldn't be stored for editing - the caller can still show it read-only. */
+  onImportFailed?: (file: File) => void;
 }
 
-export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel }) => {
+export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel, importRequest, onImportHandled, onImportFailed }) => {
   const {
     sessions,
     activeSessionId,
@@ -104,6 +120,13 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 640 : false);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [stagedPref, setStagedPref] = useState<boolean>(() => loadStagedPref());
+  const [versions, setVersions] = useState<IfcVersion[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
+  // Bumped to re-render when the per-chat stage state (kept in localStorage) changes.
+  const [, setStageTick] = useState(0);
+  const importingRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -172,6 +195,15 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
   activeSessionIdRef.current = activeSessionId;
   const prevSessionRef = useRef<string | null>(null);
 
+  // Version history follows the active chat.
+  useEffect(() => {
+    setViewingVersion(null);
+    setShowHistory(false);
+    if (!activeSessionId) { setVersions([]); return; }
+    void refreshVersions(activeSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
+
   useEffect(() => {
     if (!activeSessionId) return;
     const switched = prevSessionRef.current !== null && prevSessionRef.current !== activeSessionId;
@@ -179,7 +211,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     const session = sessions.find(s => s.id === activeSessionId);
     if (session?.last_ifc_url && onLoadIfcUrl) {
       onLoadIfcUrl(session.last_ifc_url);
-    } else if (switched) {
+    } else if (switched && !importingRef.current) {
       // The chat we switched to has no model: empty the viewer rather than
       // leaving the previous chat's model on screen.
       onClearModel?.();
@@ -232,7 +264,18 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
   // ── Shared build result handling (used by both a fresh send and a resumed
   //    build picked back up after the tab was closed and reopened) ──
 
-  const applyBuildResult = async (result: Awaited<ReturnType<typeof runAntigravityBuild>>, sid: string) => {
+  const applyBuildResult = async (result: Awaited<ReturnType<typeof runAntigravityBuild>>, sid: string, meta?: BuildMeta) => {
+    // A second tab (or a remount) can resume the same in-flight build; whichever
+    // finishes first applies it, the other must not repeat the messages/versions.
+    const jobKey = result.mcp_session_id && result.ifc_url ? `infrastudio_applied_${result.mcp_session_id}` : null;
+    try {
+      if (jobKey && localStorage.getItem(jobKey)) {
+        setCurrentSteps([]);
+        return;
+      }
+      if (jobKey) localStorage.setItem(jobKey, '1');
+    } catch { /* storage unavailable - apply normally */ }
+
     if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
 
     const reply: ChatMessage = { role: 'assistant', content: result.reply || 'Done.' };
@@ -248,15 +291,48 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       await updateSessionData(sid, activeMcpId, result.ifc_url);
     }
 
+    // Every successful build/edit/stage becomes a version users can compare and roll back to.
+    if (result.ifc_url) {
+      await addVersion(sid, {
+        ifc_url: result.ifc_url,
+        label: meta?.label || 'Initial build',
+        stage: meta?.stage,
+        element_count: result.element_count,
+        file_size: result.file_size,
+      });
+      await refreshVersions(sid);
+    }
+
     // The build may finish after the user switched to another chat. It is
     // already saved on its own session above (shown when they switch back), so
     // only touch the viewer if this chat is still the active one.
     if (sid === activeSessionIdRef.current) {
+      setViewingVersion(null);
       if (result.ifc_url && onLoadIfcUrl) {
         onLoadIfcUrl(result.ifc_url);
       }
       if (result.ifc_url) {
         onActiveIfcUrlChange?.(result.ifc_url);
+      }
+    }
+
+    // Staged workflow: this stage is now on screen, waiting for review/approval.
+    if (meta?.stage && result.ifc_url) {
+      const st = loadStageState(sid);
+      saveStageState(sid, {
+        stage: meta.stage as StageId,
+        approved: st?.approved ?? [],
+        brief: meta.projectBrief || st?.brief || '',
+      });
+      setStageTick(t => t + 1);
+      const idx = stageIndex(meta.stage);
+      const cur = STAGES[idx];
+      const nxt = idx >= 0 ? nextStage(meta.stage as StageId) : null;
+      if (cur) {
+        await appendAssistant(sid, {
+          role: 'assistant',
+          content: `✓ ${cur.label} stage ready (${idx + 1} of ${STAGES.length}). Look it over in the viewer. Ask for changes (e.g. "make it taller"), or approve to ${nxt ? `continue to ${nxt.label}` : 'finish'}.`,
+        });
       }
     }
 
@@ -295,11 +371,11 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
           [],
           { continuation: saved.continuation, sessionId: saved.sessionId },
           (state: ActiveBuildState | null) => {
-            if (state) saveActiveBuild({ sid: saved.sid, userContent: saved.userContent, continuation: state.continuation, sessionId: state.sessionId });
+            if (state) saveActiveBuild({ sid: saved.sid, userContent: saved.userContent, continuation: state.continuation, sessionId: state.sessionId, meta: saved.meta });
             else clearActiveBuild();
           },
         );
-        await applyBuildResult(result, saved.sid);
+        await applyBuildResult(result, saved.sid, saved.meta);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         const errMsg: ChatMessage = { role: 'assistant', content: `⚠️ Agent failed: ${detail.slice(0, 300)}` };
@@ -357,28 +433,18 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     void submitText(input);
   };
 
-  const submitText = async (rawText: string) => {
+  /** Resume bookkeeping for one build: remembers what's needed to reconnect
+   *  to it (and what to record in version history when it finishes). */
+  const persistFor = (sid: string, brief: string, meta?: BuildMeta) => (state: ActiveBuildState | null) => {
+    if (state) saveActiveBuild({ sid, userContent: brief, continuation: state.continuation, sessionId: state.sessionId, meta });
+    else clearActiveBuild();
+  };
+
+  const submitText = async (rawText: string, opts: { stageOverride?: StageId; displayText?: string } = {}) => {
     if ((!rawText.trim() && attachedImages.length === 0) || isLoading) return;
 
-    // Every build call resets the MCP scene from scratch (Antigravity has no
-    // edit mode in this pipeline) - sending a second message into a session
-    // that already produced a model would silently overwrite it with
-    // something unrelated. Block that here instead of losing work quietly.
-    const currentSession = sessions.find(s => s.id === activeSessionId);
-    if (currentSession?.last_ifc_url) {
-      const warnMsg: ChatMessage = {
-        role: 'assistant',
-        content: '⚠️ This project already has a generated model. Building again here would overwrite it. Start a new project (tap "New" in the sidebar) to create something different.',
-      };
-      setMessages(prev => [...prev, warnMsg]);
-      saveMessage(currentSession.id, warnMsg).catch(() => {});
-      setInput('');
-      setExpanded(true);
-      return;
-    }
-
     const userContent = rawText.trim() || 'Build a model based on the attached reference image(s).';
-    const userMsg: ChatMessage = { role: 'user', content: userContent };
+    const userMsg: ChatMessage = { role: 'user', content: opts.displayText || userContent };
     const imagesToUpload = attachedImages;
 
     setIsLoading(true);
@@ -414,6 +480,42 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
 
       setMessages(prev => [...prev, userMsg]);
       saveMessage(sid, userMsg).catch(err => console.warn('saveMessage non-fatal:', err));
+
+      const sessionObj = sessions.find(s => s.id === sid);
+      const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
+
+      // ── Edit the existing / imported model in place ──
+      // A chat that already has a model keeps refining it: the model is loaded
+      // into the build scene and only the requested change is made. If an older
+      // version is on screen, the edit starts from THAT version.
+      const viewed = viewingVersion != null ? versions.find(v => v.version === viewingVersion) : undefined;
+      const baseUrl = viewed?.ifc_url || sessionObj?.last_ifc_url || undefined;
+      if (baseUrl) {
+        const st = loadStageState(sid);
+        const stage = opts.stageOverride ?? st?.stage;
+        const meta: BuildMeta = { label: (opts.displayText || userContent).slice(0, 120), stage, projectBrief: st?.brief };
+        // A model that predates version history has no v1: save it as the
+        // baseline first so the user can always roll back to what they had.
+        if (versions.length === 0) {
+          await addVersion(sid, { ifc_url: baseUrl, label: 'Original model' });
+        }
+        setCurrentSteps(['✏️ Editing your model...']);
+        const sidEdit = sid;
+        const result = await runAntigravityBuild(
+          userContent,
+          clientMcpId,
+          (step) => setCurrentSteps(prev => [...prev.slice(-12), step]),
+          async (assistantObj: any) => {
+            await saveMessage(sidEdit, { role: 'assistant', content: assistantObj.content || '', tool_calls: assistantObj.tool_calls });
+          },
+          uploadedImages,
+          undefined,
+          persistFor(sid, userContent, meta),
+          { baseIfcUrl: baseUrl, stage, projectBrief: st?.brief },
+        );
+        await applyBuildResult(result, sid, meta);
+        return;
+      }
 
       // ── Clarify before building ──
       const pending = loadPendingClarify(sid);
@@ -455,10 +557,11 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
         });
       }
 
-      setCurrentSteps(['🤖 Agent starting...']);
-
-      const sessionObj = sessions.find(s => s.id === sid);
-      const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
+      // Staged mode: this first build is the MASSING stage only; later stages
+      // are approved and built one at a time as edits of the previous result.
+      const staged = stagedPref;
+      const meta: BuildMeta | undefined = staged ? { label: 'Massing', stage: 'massing', projectBrief: buildBrief } : undefined;
+      setCurrentSteps([staged ? '🧱 Stage 1: massing...' : '🤖 Agent starting...']);
 
       const sidForPersist = sid;
       const result = await runAntigravityBuild(
@@ -474,13 +577,11 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
         },
         allImages,
         undefined,
-        (state: ActiveBuildState | null) => {
-          if (state) saveActiveBuild({ sid: sidForPersist, userContent: buildBrief, continuation: state.continuation, sessionId: state.sessionId });
-          else clearActiveBuild();
-        },
+        persistFor(sidForPersist, buildBrief, meta),
+        staged ? { stage: 'massing', projectBrief: buildBrief } : undefined,
       );
 
-      await applyBuildResult(result, sid);
+      await applyBuildResult(result, sid, meta);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const errMsg: ChatMessage = { role: 'assistant', content: `⚠️ Agent failed: ${detail.slice(0, 300)}` };
@@ -494,6 +595,119 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     }
   };
 
+  // ── Staged design: approve the stage on screen and build the next one ──
+
+  const approveStage = async () => {
+    if (isLoading || !activeSessionId) return;
+    const sid = activeSessionId;
+    const st = loadStageState(sid);
+    if (!st) return;
+    const cur = STAGES[stageIndex(st.stage)];
+    const nxt = nextStage(st.stage);
+    if (!nxt) {
+      clearStageState(sid);
+      setStageTick(t => t + 1);
+      await appendAssistant(sid, {
+        role: 'assistant',
+        content: '✓ All five stages approved - the design is complete. Keep refining it with follow-up requests, or download the IFC.',
+      });
+      return;
+    }
+    saveStageState(sid, { ...st, approved: st.approved.includes(st.stage) ? st.approved : [...st.approved, st.stage] });
+    setStageTick(t => t + 1);
+    await submitText(
+      `Approved the ${cur.label} stage. Now design the ${nxt.label} stage (${nxt.blurb}).`,
+      { stageOverride: nxt.id, displayText: `✓ Approve ${cur.label} → continue to ${nxt.label}` },
+    );
+  };
+
+  // ── Version history ──
+
+  const refreshVersions = async (sid: string) => {
+    const list = await listVersions(sid);
+    if (sid === activeSessionIdRef.current) setVersions(list);
+  };
+
+  const viewVersion = (v: IfcVersion) => {
+    setViewingVersion(v.version);
+    onLoadIfcUrl?.(v.ifc_url);
+  };
+
+  const backToLatest = () => {
+    setViewingVersion(null);
+    const url = sessions.find(s => s.id === activeSessionId)?.last_ifc_url;
+    if (url) onLoadIfcUrl?.(url);
+  };
+
+  const restoreVersion = async (v: IfcVersion) => {
+    const sid = activeSessionId;
+    if (!sid || isLoading) return;
+    await updateSessionData(sid, undefined, v.ifc_url);
+    await addVersion(sid, {
+      ifc_url: v.ifc_url,
+      label: `Restored v${v.version}`,
+      stage: v.stage ?? undefined,
+      element_count: v.element_count ?? undefined,
+      file_size: v.file_size ?? undefined,
+    });
+    setViewingVersion(null);
+    onActiveIfcUrlChange?.(v.ifc_url);
+    onLoadIfcUrl?.(v.ifc_url);
+    await refreshVersions(sid);
+    await appendAssistant(sid, { role: 'assistant', content: `↩ Restored version ${v.version}. New edits will build on it.` });
+  };
+
+  // ── Import an external IFC project and iterate on it ──
+
+  const importIfc = async (file: File) => {
+    if (isLoading) return;
+    importingRef.current = true;
+    setExpanded(true);
+    setIsLoading(true);
+    setCurrentSteps([`📥 Importing ${file.name}...`]);
+    try {
+      const path = `imports/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.ifc`;
+      const { error } = await supabase.storage.from('ifc-models').upload(path, file, { contentType: 'application/octet-stream', upsert: false });
+      if (error) throw new Error(error.message);
+      const url = supabase.storage.from('ifc-models').getPublicUrl(path).data.publicUrl;
+
+      const title = `Imported - ${file.name.replace(/\.ifc$/i, '')}`.slice(0, 40);
+      const s = await createSession(title);
+      await updateSessionData(s.id, undefined, url);
+      await addVersion(s.id, { ifc_url: url, label: `Imported ${file.name}` });
+      clearStageState(s.id);
+      setStageTick(t => t + 1);
+      onActiveIfcUrlChange?.(url);
+      onLoadIfcUrl?.(url);
+      await refreshVersions(s.id);
+      await appendAssistant(s.id, {
+        role: 'assistant',
+        content: `✓ Imported ${file.name}. It's loaded in the viewer. Tell me what to change, for example "add a floor" or "widen the deck" - everything you don't mention stays as it is.`,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn('[import] failed:', detail);
+      onImportFailed?.(file);
+      const sid = activeSessionIdRef.current;
+      const msg: ChatMessage = { role: 'assistant', content: `⚠️ Couldn't import ${file.name} for editing (${detail.slice(0, 160)}). It's shown in the viewer, but it can't be edited.` };
+      setMessages(prev => [...prev, msg]);
+      if (sid) await saveMessage(sid, { role: msg.role, content: msg.content });
+    } finally {
+      importingRef.current = false;
+      setCurrentSteps([]);
+      setIsLoading(false);
+    }
+  };
+
+  // The App hands over a file picked with the viewer's upload button.
+  useEffect(() => {
+    if (importRequest) {
+      onImportHandled?.();
+      void importIfc(importRequest);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importRequest]);
+
   const displayMsgs = messages.filter(m => {
     if (m.role === 'user') return true;
     if (m.role === 'assistant') {
@@ -506,6 +720,9 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
 
   const hasContent = displayMsgs.length > 0;
   const activeSession = sessions.find(s => s.id === activeSessionId);
+  // Read straight from storage each render (cheap); setStageTick forces a refresh after changes.
+  const stageState = activeSessionId ? loadStageState(activeSessionId) : null;
+  const nextStageInfo = stageState ? nextStage(stageState.stage) : null;
 
   // ── Render ──
 
@@ -648,6 +865,16 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
                     <span className="xs:hidden">IFC</span>
                   </a>
                 )}
+                {versions.length > 0 && (
+                  <button
+                    onClick={() => setShowHistory(v => !v)}
+                    className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] sm:text-xs font-semibold border shrink-0 transition-all ${showHistory ? 'bg-white/15 text-white border-white/20' : 'text-neutral-300 border-white/10 hover:bg-white/10'}`}
+                    title="Version history"
+                  >
+                    <History className="w-3 h-3" />
+                    <span>v{viewingVersion ?? versions[versions.length - 1].version}</span>
+                  </button>
+                )}
                 <div
                   className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-[10px] sm:text-xs font-medium border border-emerald-500/20 shrink-0"
                   title="InfraStudio Engine (High Reasoning)"
@@ -661,6 +888,39 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
                 <ChevronDown className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Version history: view, compare and roll back */}
+            {showHistory && versions.length > 0 && (
+              <div className="px-3 py-2 border-b border-white/5 max-h-[30vh] overflow-y-auto space-y-1">
+                {viewingVersion != null && (
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-400/20 rounded-lg px-2 py-1">
+                    <span>Viewing v{viewingVersion}. Your next edit builds from it.</span>
+                    <button onClick={backToLatest} className="underline shrink-0">Back to latest</button>
+                  </div>
+                )}
+                {[...versions].reverse().map((v, i, arr) => {
+                  const prev = arr[i + 1];
+                  const delta = prev && v.element_count != null && prev.element_count != null ? v.element_count - prev.element_count : null;
+                  const latest = v.version === versions[versions.length - 1].version;
+                  const shown = (viewingVersion ?? versions[versions.length - 1].version) === v.version;
+                  return (
+                    <div key={v.id} className={`flex items-center gap-2 text-[11px] rounded-lg px-2 py-1 border ${shown ? 'bg-blue-600/20 border-blue-400/30 text-white' : 'border-white/5 text-neutral-300'}`}>
+                      <span className="font-bold shrink-0">v{v.version}</span>
+                      <span className="truncate flex-1" title={v.label || ''}>
+                        {v.stage ? `[${v.stage}] ` : ''}{v.label || 'Build'}
+                      </span>
+                      <span className="shrink-0 text-neutral-400 hidden sm:inline">
+                        {v.element_count != null ? `${v.element_count.toLocaleString()} el` : ''}
+                        {delta != null && delta !== 0 ? ` (${delta > 0 ? '+' : ''}${delta})` : ''}
+                        {v.file_size != null ? ` · ${(v.file_size / 1048576).toFixed(1)} MB` : ''}
+                      </span>
+                      {!shown && <button onClick={() => viewVersion(v)} className="shrink-0 underline text-blue-300">View</button>}
+                      {!latest && <button onClick={() => void restoreVersion(v)} disabled={isLoading} className="shrink-0 underline text-emerald-300 disabled:opacity-40">Restore</button>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Messages Scroll Area */}
             <div className="overflow-y-auto px-3 py-2.5 space-y-2.5 max-h-[35vh] sm:max-h-[280px] select-text">
@@ -792,6 +1052,38 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
           </div>
         )}
 
+        {/* Staged design progress: massing -> zones -> facade -> structure -> detail */}
+        {stageState && !loadingMessages && (
+          <div className="flex items-center gap-2 px-3 py-2 border-t border-white/5">
+            <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
+              {STAGES.map(st => {
+                const done = stageState.approved.includes(st.id);
+                const current = stageState.stage === st.id;
+                return (
+                  <span
+                    key={st.id}
+                    title={st.blurb}
+                    className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                      current ? 'bg-blue-600/30 text-blue-200 border-blue-400/40'
+                      : done ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/20'
+                      : 'text-neutral-500 border-white/10'}`}
+                  >
+                    {done ? '✓ ' : ''}{st.label}
+                  </span>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => void approveStage()}
+              disabled={isLoading}
+              className="shrink-0 px-3 py-1.5 rounded-full bg-blue-600 hover:bg-blue-500 active:scale-95 disabled:opacity-40 text-white text-[11px] font-semibold transition-all"
+            >
+              {nextStageInfo ? `Approve → ${nextStageInfo.label}` : 'Approve & finish'}
+            </button>
+          </div>
+        )}
+
         {/* Chat Input Bar (16px text-base on mobile prevents iOS auto-zoom) */}
         <form onSubmit={handleSend} className={`flex items-center gap-2 px-3 py-2.5 ${attachedImages.length > 0 ? '' : 'border-t border-white/5'}`}>
           <input
@@ -811,13 +1103,24 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
           >
             <Paperclip className="w-4 h-4" />
           </button>
+          {!activeSession?.last_ifc_url && !stageState && (
+            <button
+              type="button"
+              onClick={() => { const n = !stagedPref; setStagedPref(n); saveStagedPref(n); }}
+              disabled={isLoading}
+              title="Staged design: build massing, zones, facade, structure and detail one step at a time, reviewing each before moving on"
+              className={`shrink-0 px-2 py-1 rounded-full text-[10px] font-semibold border transition-all disabled:opacity-30 ${stagedPref ? 'bg-blue-600/30 text-blue-200 border-blue-400/40' : 'text-neutral-400 border-white/10 hover:text-white'}`}
+            >
+              Staged
+            </button>
+          )}
           <input
             ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onFocus={() => (hasContent || loadingMessages) && setExpanded(true)}
-            placeholder={attachedImages.length > 0 ? 'Add instructions (optional)...' : activeSession ? `Continue "${activeSession.title}"...` : 'Describe structure to build...'}
+            placeholder={attachedImages.length > 0 ? 'Add instructions (optional)...' : activeSession?.last_ifc_url ? 'Describe a change (e.g. "add a floor")...' : activeSession ? `Continue "${activeSession.title}"...` : 'Describe structure to build...'}
             className="flex-1 bg-transparent text-base sm:text-sm text-white placeholder-neutral-500 focus:outline-none py-1"
             disabled={isLoading}
           />

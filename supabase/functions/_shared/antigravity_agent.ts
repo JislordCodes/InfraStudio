@@ -104,10 +104,61 @@ function buildImageFetchScript(jobId: string, images: ReferenceImage[]): string 
  * that is created here - if the box is ever replaced/rebooted, that one-time
  * setup needs to be redone before this will work again.
  */
-function buildScript(brief: string, jobId: string, images: ReferenceImage[] = []): string {
+/**
+ * Edit mode: shell lines that download the existing model and load it into THIS
+ * slot's MCP scene (through the same sandboxed execute_ifc_code_tool every agent
+ * uses - the IFC travels zlib+base64 inside the code string, then
+ * ifcopenshell.file.from_string replaces the slot's active file) before agy
+ * starts. A failure here ends the build with a clear error instead of letting
+ * the agent "edit" an empty scene.
+ */
+function buildLoadBaseModelScript(safeId: string, baseIfcUrl: string): string {
+  return `
+# ── Edit mode: load the existing model into this slot's scene ──────────────
+BASE_FILE=/root/agy_jobs/base_${safeId}.ifc
+if ! curl -sfL --max-time 240 -o "$BASE_FILE" "$(echo ${b64(baseIfcUrl)} | base64 -d)"; then
+  write_status '{"status":"error","error":"Could not download the existing model to edit."}'
+  exit 1
+fi
+cat > /root/agy_jobs/load_${safeId}.py <<'PYLOAD'
+import base64, json, os, sys, urllib.request, zlib
+port = os.environ["SLOT_PORT"]
+def call(name, args):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}).encode()
+    req = urllib.request.Request("http://127.0.0.1:%s/mcp" % port, data=body, headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+    with urllib.request.urlopen(req, timeout=240) as r:
+        return json.loads(r.read().decode())
+data = open(sys.argv[1], "rb").read()
+packed = base64.b64encode(zlib.compress(data, 6)).decode()
+code = (
+    "import base64, zlib\\n"
+    "txt = zlib.decompress(base64.b64decode('" + packed + "')).decode('utf-8', 'replace')\\n"
+    "ifc = ifcopenshell.file.from_string(txt)\\n"
+    "mod = __import__(get_ifc_file.__module__, fromlist=['_ACTIVE_IFC_FILE'])\\n"
+    "mod._ACTIVE_IFC_FILE = ifc\\n"
+    "print('loaded', len(ifc.by_type('IfcProduct')), 'products', ifc.schema)\\n"
+)
+res = call("execute_ifc_code_tool", {"code": code})
+text = res["result"]["content"][0]["text"]
+parsed = json.loads(text)
+if parsed.get("status") != "success":
+    print(text[:600])
+    sys.exit(1)
+print((parsed.get("output") or "").strip())
+PYLOAD
+if ! python3 /root/agy_jobs/load_${safeId}.py "$BASE_FILE"; then
+  write_status '{"status":"error","error":"Could not load the existing model into the build scene."}'
+  exit 1
+fi
+rm -f "$BASE_FILE"
+`;
+}
+
+function buildScript(brief: string, jobId: string, images: ReferenceImage[] = [], baseIfcUrl?: string): string {
   const safeId = safeJobId(jobId);
   const briefB64 = b64(brief);
   const imageFetch = buildImageFetchScript(jobId, images);
+  const loadBaseModel = baseIfcUrl ? buildLoadBaseModelScript(safeId, baseIfcUrl) : "";
   const addDirFlag = images.length ? `--add-dir ${refImageDir(jobId)}` : "";
   const inner = `#!/bin/bash
 export HOME=/root
@@ -175,12 +226,13 @@ SLOT_PORT=$((7999 + SLOT))
 export SLOT_PORT
 write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":0}"
 
+${loadBaseModel}
 # Heartbeat: reads the live element count from THIS slot's own MCP server
 # (127.0.0.1 only, never crosses slots) and republishes it to S3 every ~6s so
 # the poller can show live progress. Killed once agy itself finishes.
 (
   while true; do
-    CNT=$(curl -s -m 4 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}' 2>/dev/null | grep -o '"count"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*$' | head -1)
+    CNT=$(curl -s -m 4 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}' 2>/dev/null | grep -o 'count[^0-9,]*[0-9]*' | grep -o '[0-9]*$' | head -1)
     if [ -n "$CNT" ]; then write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":$CNT}"; fi
     sleep 6
   done
@@ -320,9 +372,9 @@ python3 /root/agy_jobs/parse_${safeId}.py
   return `echo ${b64(inner)} | base64 -d > /tmp/run_agy_${safeId}.sh && bash /tmp/run_agy_${safeId}.sh`;
 }
 
-export async function startAntigravityBuild(brief: string, jobId: string, images: ReferenceImage[] = []): Promise<string> {
+export async function startAntigravityBuild(brief: string, jobId: string, images: ReferenceImage[] = [], opts: { baseIfcUrl?: string } = {}): Promise<string> {
   if (!brief || !brief.trim()) throw new Error("startAntigravityBuild: empty brief");
-  const script = buildScript(brief, jobId, images);
+  const script = buildScript(brief, jobId, images, opts.baseIfcUrl);
   const res = await ssmClient.send(new SendCommandCommand({
     InstanceIds: [INSTANCE_ID],
     DocumentName: "AWS-RunShellScript",
