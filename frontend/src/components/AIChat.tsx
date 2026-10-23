@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon } from 'lucide-react';
-import { runAntigravityBuild, type ActiveBuildState } from '../hooks/useMultiAgentLoop';
+import { runAntigravityBuild, clarifyBrief, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 import { supabase } from '../lib/supabase';
 
@@ -56,6 +56,18 @@ function saveActiveBuild(record: Omit<PersistedActiveBuild, 'ts'>) {
 function clearActiveBuild() {
   try { localStorage.removeItem(ACTIVE_BUILD_KEY); } catch { /* ignore */ }
 }
+
+/** A clarifying-questions exchange waiting for the user's answer. */
+interface PendingClarify {
+  brief: string;
+  answers: string[];
+  questions: ClarifyQuestion[];
+  round: number;
+  images: { url: string; caption?: string }[];
+}
+
+/** Short replies that mean "stop asking, just build" (only honoured while questions are pending). */
+const SKIP_REPLY_RE = /^\s*(skip|just build|build( it)?( now)?|use (the |sensible )?defaults?|defaults?|go ahead|you decide|up to you|whatever)\b/i;
 
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
@@ -301,11 +313,52 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Clarifying questions (pre-build design conversation) ──
+  // A vague brief gets a few short questions before anything is built; the
+  // pending exchange lives in localStorage per chat so a reload mid-answer
+  // doesn't lose the original brief.
+
+  const loadPendingClarify = (sid: string): PendingClarify | null => {
+    try {
+      const raw = localStorage.getItem(`infrastudio_clarify_${sid}`);
+      return raw ? (JSON.parse(raw) as PendingClarify) : null;
+    } catch {
+      return null;
+    }
+  };
+  const savePendingClarify = (sid: string, p: PendingClarify) => {
+    try { localStorage.setItem(`infrastudio_clarify_${sid}`, JSON.stringify(p)); } catch { /* ignore */ }
+  };
+  const clearPendingClarify = (sid: string) => {
+    try { localStorage.removeItem(`infrastudio_clarify_${sid}`); } catch { /* ignore */ }
+  };
+
+  const formatQuestions = (questions: ClarifyQuestion[], round: number): string => {
+    const lines = questions.map((q, i) => {
+      const opts = q.options.length ? ` (${q.options.join(' / ')})` : '';
+      const def = q.default ? ` — default: ${q.default}` : '';
+      return `${i + 1}. ${q.question}${opts}${def}`;
+    });
+    const intro = round <= 1
+      ? 'A few quick questions so I get the design right:'
+      : 'Thanks. Just a couple more:';
+    return `${intro}\n\n${lines.join('\n')}\n\nAnswer in one message (e.g. "30 storeys, steel frame, podium"), or skip and I'll use the defaults.`;
+  };
+
+  const appendAssistant = async (sid: string, msg: ChatMessage) => {
+    if (sid === activeSessionIdRef.current) setMessages(prev => [...prev, msg]);
+    await saveMessage(sid, { role: msg.role, content: msg.content });
+  };
+
   // ── Send ──
 
-  const handleSend = async (e: React.FormEvent) => {
+  const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim() && attachedImages.length === 0) || isLoading) return;
+    void submitText(input);
+  };
+
+  const submitText = async (rawText: string) => {
+    if ((!rawText.trim() && attachedImages.length === 0) || isLoading) return;
 
     // Every build call resets the MCP scene from scratch (Antigravity has no
     // edit mode in this pipeline) - sending a second message into a session
@@ -324,7 +377,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       return;
     }
 
-    const userContent = input.trim() || 'Build a model based on the attached reference image(s).';
+    const userContent = rawText.trim() || 'Build a model based on the attached reference image(s).';
     const userMsg: ChatMessage = { role: 'user', content: userContent };
     const imagesToUpload = attachedImages;
 
@@ -362,6 +415,46 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       setMessages(prev => [...prev, userMsg]);
       saveMessage(sid, userMsg).catch(err => console.warn('saveMessage non-fatal:', err));
 
+      // ── Clarify before building ──
+      const pending = loadPendingClarify(sid);
+      const skip = !!pending && userContent.length <= 60 && SKIP_REPLY_RE.test(userContent);
+      const allImages = [...(pending?.images || []), ...uploadedImages];
+      setCurrentSteps(['🧠 Reviewing your brief...']);
+      const answers = pending ? [...pending.answers, ...(skip ? [] : [userContent])] : [];
+      const clarified = await clarifyBrief({
+        client_requirements: pending ? pending.brief : userContent,
+        answers: answers.join('\n'),
+        round: pending ? pending.round : 0,
+        skip,
+        has_images: allImages.length > 0,
+        questions_asked: pending?.questions,
+      });
+
+      if (clarified.needs_clarification) {
+        savePendingClarify(sid, {
+          brief: pending ? pending.brief : userContent,
+          answers,
+          questions: clarified.questions,
+          round: clarified.round,
+          images: allImages,
+        });
+        await appendAssistant(sid, {
+          role: 'assistant',
+          content: formatQuestions(clarified.questions, clarified.round),
+        });
+        setCurrentSteps([]);
+        return;
+      }
+
+      clearPendingClarify(sid);
+      const buildBrief = clarified.refined_brief?.trim() || (pending ? pending.brief : userContent);
+      if (clarified.assumptions.length > 0) {
+        await appendAssistant(sid, {
+          role: 'assistant',
+          content: `Got it, building now. Anything not specified, I'm assuming:\n${clarified.assumptions.map(a => `• ${a}`).join('\n')}`,
+        });
+      }
+
       setCurrentSteps(['🤖 Agent starting...']);
 
       const sessionObj = sessions.find(s => s.id === sid);
@@ -369,7 +462,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
 
       const sidForPersist = sid;
       const result = await runAntigravityBuild(
-        userContent,
+        buildBrief,
         clientMcpId,
         (step) => setCurrentSteps(prev => [...prev.slice(-12), step]),
         async (assistantObj: any) => {
@@ -379,10 +472,10 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
             tool_calls: assistantObj.tool_calls,
           });
         },
-        uploadedImages,
+        allImages,
         undefined,
         (state: ActiveBuildState | null) => {
-          if (state) saveActiveBuild({ sid: sidForPersist, userContent, continuation: state.continuation, sessionId: state.sessionId });
+          if (state) saveActiveBuild({ sid: sidForPersist, userContent: buildBrief, continuation: state.continuation, sessionId: state.sessionId });
           else clearActiveBuild();
         },
       );
@@ -617,6 +710,20 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
                     </div>
                   </div>
                 ))
+              )}
+
+              {/* Quick reply while clarifying questions are waiting for an answer. Derived
+                  from the pending state (not stored on the message) so it survives a reload. */}
+              {!isLoading && !loadingMessages && activeSessionId && loadPendingClarify(activeSessionId) && (
+                <div className="flex justify-start pl-7">
+                  <button
+                    type="button"
+                    onClick={() => void submitText('Skip the questions and use sensible defaults')}
+                    className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/10 text-neutral-100 text-xs font-medium transition-all"
+                  >
+                    Skip — use defaults
+                  </button>
+                </div>
               )}
 
               {isLoading && (() => {

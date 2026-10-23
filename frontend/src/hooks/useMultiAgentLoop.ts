@@ -14,6 +14,67 @@ export interface ReferenceImageInput {
   caption?: string;
 }
 
+export interface ClarifyQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  default: string;
+}
+
+export interface ClarifyResponse {
+  needs_clarification: boolean;
+  questions: ClarifyQuestion[];
+  assumptions: string[];
+  /** The brief to actually build from (original + answers + explicit defaults). */
+  refined_brief: string;
+  round: number;
+}
+
+/** Pre-build design conversation: asks whether the brief is missing key
+ *  parameters and, if so, returns a few short questions with defaults. Never
+ *  throws - on any failure it returns "no questions" so a build is never blocked. */
+export async function clarifyBrief(plan: {
+  client_requirements: string;
+  answers?: string;
+  round?: number;
+  skip?: boolean;
+  has_images?: boolean;
+  questions_asked?: ClarifyQuestion[];
+}): Promise<ClarifyResponse> {
+  const fallback: ClarifyResponse = {
+    needs_clarification: false,
+    questions: [],
+    assumptions: [],
+    refined_brief: plan.answers ? `${plan.client_requirements}\n\nClarifications from the user:\n${plan.answers}` : plan.client_requirements,
+    round: plan.round ?? 0,
+  };
+  try {
+    const res = await fetch(`${EDGE_PROXY_BASE}/agent-bim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ action: 'clarify', plan }),
+      signal: AbortSignal.timeout(110000),
+    });
+    if (!res.ok) return fallback;
+    const data = await res.json();
+    if (data?.status !== 'success') return fallback;
+    return {
+      needs_clarification: data.needs_clarification === true && Array.isArray(data.questions) && data.questions.length > 0,
+      questions: Array.isArray(data.questions) ? data.questions : [],
+      assumptions: Array.isArray(data.assumptions) ? data.assumptions : [],
+      refined_brief: typeof data.refined_brief === 'string' && data.refined_brief.trim() ? data.refined_brief : fallback.refined_brief,
+      round: typeof data.round === 'number' ? data.round : fallback.round,
+    };
+  } catch (e) {
+    console.warn('[clarify] failed, building without questions:', e);
+    return fallback;
+  }
+}
+
 /** Enough to resume an in-flight build from a fresh page load - everything
  *  the next `build_code` poll needs, plus what's needed to re-show the chat
  *  bubble it belongs to. Persisted to localStorage (see App-level usage) so a

@@ -96168,6 +96168,56 @@ async function pollAntigravityBuild(commandId, jobId) {
     return { done: false, progressMessage: `Build status check warning: ${msg.slice(0, 200)}` };
   }
 }
+async function runAgyOneShot(prompt, timeoutMs = 9e4) {
+  if (!prompt || !prompt.trim()) throw new Error("runAgyOneShot: empty prompt");
+  const id = safeJobId(`one-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const inner = `#!/bin/bash
+export HOME=/root
+export PATH="$HOME/.local/bin:$PATH"
+source /root/dbus_env.sh
+mkdir -p /root/agy_oneshot/home /root/agy_oneshot/work
+# Own agy HOME (no shared conversation state with builds) but the same login/state dir
+mkdir -p /root/agy_oneshot/home/.gemini
+[ -e /root/agy_oneshot/home/.gemini/antigravity-cli ] || ln -s /root/.gemini/antigravity-cli /root/agy_oneshot/home/.gemini/antigravity-cli
+[ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
+echo "${b642(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
+cd /root/agy_oneshot/work
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1e3) - 10)} agy --model gemini-3.8-flash-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1e3) - 15)}s 2>/dev/null < /dev/null
+rm -f /root/agy_oneshot/${id}.txt
+`;
+  const res = await ssmClient2.send(new import_client_ssm2.SendCommandCommand({
+    InstanceIds: [INSTANCE_ID2],
+    DocumentName: "AWS-RunShellScript",
+    Parameters: { commands: [`echo ${b642(inner)} | base64 -d > /tmp/agy_one_${id}.sh && bash /tmp/agy_one_${id}.sh`] },
+    TimeoutSeconds: Math.max(60, Math.ceil(timeoutMs / 1e3) + 30)
+  }));
+  const commandId = res.Command?.CommandId;
+  if (!commandId) throw new Error("runAgyOneShot: SendCommand returned no CommandId");
+  const deadline = Date.now() + timeoutMs;
+  await new Promise((r9) => setTimeout(r9, 2e3));
+  while (Date.now() < deadline) {
+    try {
+      const inv = await ssmClient2.send(new import_client_ssm2.GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID2 }));
+      const status = inv.Status;
+      if (status === "Success") {
+        const out = inv.StandardOutputContent || "";
+        try {
+          const data = JSON.parse(out.slice(out.indexOf("{")));
+          return String(data.response ?? data.error ?? out);
+        } catch {
+          return out;
+        }
+      }
+      if (status && !["Pending", "InProgress", "Delayed"].includes(status)) {
+        throw new Error(`runAgyOneShot: command ${status}: ${(inv.StandardErrorContent || "").slice(0, 200)}`);
+      }
+    } catch (e9) {
+      if (!/InvocationDoesNotExist/.test(String(e9?.name || e9?.message || e9))) throw e9;
+    }
+    await new Promise((r9) => setTimeout(r9, 2e3));
+  }
+  throw new Error("runAgyOneShot: timed out");
+}
 
 // ../supabase/functions/_shared/spec_priority.ts
 var SPEC_PRIORITY_RULE = `IMPORTANT user-specification priority rule (HIGHEST PRIORITY in this entire brief - it overrides the complexity bar, the architect rule, your own design preferences, and every default below):
@@ -96211,6 +96261,116 @@ async function getIpHash(payload3) {
   const ip = typeof payload3?._clientIp === "string" ? payload3._clientIp.trim() : "";
   if (!ip) return null;
   return hashIp(ip);
+}
+
+// ../supabase/functions/_shared/clarify.ts
+var MAX_CLARIFY_ROUNDS = 2;
+var CLARIFY_SYSTEM_PROMPT = `You are the intake architect for InfraStudio, an AI tool that generates detailed BIM/IFC models of buildings and infrastructure from a written brief. Your job is the conversation BEFORE the build: decide whether the brief is clear enough, and if not, ask a few short, relevant questions - like a senior architect taking a client brief.
+
+Key parameters that matter for a building (ask ONLY about the ones that are missing AND would change the design, and only those relevant to this brief):
+- number of storeys
+- maximum height
+- GFA (gross floor area) or footprint size
+- FSR (floor space ratio) - only if a site/plot area or zoning context is mentioned or clearly relevant
+- site context (urban/suburban/rural/waterfront/sloping, neighbours, orientation, plot size)
+- construction typology / structural system (e.g. reinforced concrete frame, steel frame, timber, masonry)
+- form: podium + tower, slab/bar, courtyard, or single-storey pavilion
+- underground car park / basement (yes/no, rough capacity)
+For infrastructure (bridge, cofferdam, retaining wall, tunnel, dam, ...) ask the equivalents instead: span/length/width, number of spans or piers, loads/traffic, ground and water conditions, material/structural form.
+
+Rules:
+1. NEVER ask about something the brief (or earlier answers) already states. Anything the user stated is binding and must appear unchanged in refined_brief.
+2. If the brief is already specific enough to build well, or is a single element (a column, a wall, a door), set needs_clarification=false and ask nothing.
+3. At most 4 questions, each short (under 15 words), each with 2-4 short "options" and a sensible "default" (what you would assume if skipped). Prefer the 3-4 questions that change the design the most.
+4. Reference images: if images are attached they may already answer layout/form questions - ask fewer questions.
+5. Only the questions are shown to the user; keep the tone plain and friendly, no jargon beyond the parameter names above.
+6. When MODE is "finalize" you must NOT ask anything: set needs_clarification=false and questions=[]. Fold the user's answers into the brief and state explicit, sensible assumptions for every key parameter still missing.
+
+Always produce refined_brief: a clean, complete build specification written from the user's own words + their answers, then a clearly separated "Assumed (not specified by the user)" list of defaults for the parameters still unspecified. Never contradict or silently change anything the user specified. Keep it under 250 words.
+
+Respond with ONE JSON object only, no markdown:
+{"needs_clarification": boolean,
+ "questions": [{"id": "storeys", "question": "How many storeys?", "options": ["1","2-3","4+"], "default": "3 storeys"}],
+ "assumptions": ["3 storeys", "reinforced concrete frame"],
+ "refined_brief": "..."}`;
+function failOpen(brief, answers, round) {
+  return {
+    status: "success",
+    needs_clarification: false,
+    questions: [],
+    assumptions: [],
+    refined_brief: composeBrief(brief, answers),
+    round
+  };
+}
+function composeBrief(brief, answers) {
+  const a9 = (answers || "").trim();
+  return a9 ? `${brief.trim()}
+
+Clarifications from the user:
+${a9}` : brief.trim();
+}
+function cleanQuestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const q5 of raw) {
+    const question = typeof q5?.question === "string" ? q5.question.trim() : "";
+    if (!question) continue;
+    out.push({
+      id: typeof q5?.id === "string" && q5.id.trim() ? q5.id.trim().slice(0, 40) : `q${out.length + 1}`,
+      question: question.slice(0, 160),
+      options: Array.isArray(q5?.options) ? q5.options.filter((o5) => typeof o5 === "string" && o5.trim()).map((o5) => o5.trim().slice(0, 40)).slice(0, 4) : [],
+      default: typeof q5?.default === "string" ? q5.default.trim().slice(0, 120) : ""
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+async function runClarify(payload3) {
+  const plan = payload3?.plan || {};
+  const brief = typeof plan.client_requirements === "string" ? plan.client_requirements.trim() : "";
+  const answers = typeof plan.answers === "string" ? plan.answers.trim() : "";
+  const round = Number.isFinite(plan.round) ? Math.max(0, Math.floor(plan.round)) : 0;
+  const skip = plan.skip === true;
+  const hasImages = plan.has_images === true;
+  const questionsAsked = Array.isArray(plan.questions_asked) ? plan.questions_asked : [];
+  if (!brief) return failOpen("", answers, round);
+  const finalize = skip || round >= MAX_CLARIFY_ROUNDS;
+  const user = [
+    `MODE: ${finalize ? "finalize" : "ask"}`,
+    `ROUND: ${round} of ${MAX_CLARIFY_ROUNDS}`,
+    `REFERENCE IMAGES ATTACHED: ${hasImages ? "yes" : "no"}`,
+    `ORIGINAL BRIEF:
+${brief}`,
+    questionsAsked.length ? `QUESTIONS ALREADY ASKED:
+${questionsAsked.map((q5, i9) => `${i9 + 1}. ${q5?.question}`).join("\n")}` : "",
+    answers ? `USER ANSWERS (free text, may answer some or all of the questions):
+${answers}` : "",
+    skip ? "The user chose to SKIP the remaining questions: apply sensible defaults." : ""
+  ].filter(Boolean).join("\n\n");
+  try {
+    const raw = await runAgyOneShot(`${CLARIFY_SYSTEM_PROMPT}
+
+Do NOT use any tools and do NOT create or edit any files - answer directly with the JSON object only.
+
+---
+${user}`, 9e4);
+    const data = cleanJsonResponse(raw);
+    const refined = typeof data?.refined_brief === "string" && data.refined_brief.trim() ? data.refined_brief.trim() : composeBrief(brief, answers);
+    const questions = finalize ? [] : cleanQuestions(data?.questions);
+    const needs = !finalize && data?.needs_clarification === true && questions.length > 0;
+    return {
+      status: "success",
+      needs_clarification: needs,
+      questions: needs ? questions : [],
+      assumptions: Array.isArray(data?.assumptions) ? data.assumptions.filter((a9) => typeof a9 === "string").slice(0, 10) : [],
+      refined_brief: refined,
+      round: needs ? round + 1 : round
+    };
+  } catch (e9) {
+    console.warn(`[clarify] failing open (build proceeds without questions): ${e9?.message || e9}`);
+    return failOpen(brief, answers, round);
+  }
 }
 
 // ../supabase/functions/agent-bim/index.ts
@@ -96489,6 +96649,9 @@ async function handleBim(payload3) {
     } catch (err) {
       return { status: "error", model, ms: Date.now() - t0, error: err?.message || String(err) };
     }
+  }
+  if (payload3.action === "clarify") {
+    return await runClarify(payload3);
   }
   if (payload3.action === "identity") {
     const ipHash = await getIpHash(payload3);

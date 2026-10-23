@@ -585,3 +585,64 @@ export async function pollAntigravityBuild(commandId: string, jobId?: string): P
     return { done: false, progressMessage: `Build status check warning: ${msg.slice(0, 200)}` };
   }
 }
+
+/**
+ * One-shot, tool-free question to the on-box agy (Gemini) - used for short
+ * conversational steps that must not touch a build slot or the MCP scene, such
+ * as the pre-build clarifying questions (see clarify.ts). Runs in its own agy
+ * HOME so it never collides with a running build's conversation state, blocks
+ * (polling SSM every 2s) up to timeoutMs, and returns agy's plain-text answer.
+ * Throws on any failure - callers decide how to degrade.
+ */
+export async function runAgyOneShot(prompt: string, timeoutMs = 90000): Promise<string> {
+  if (!prompt || !prompt.trim()) throw new Error("runAgyOneShot: empty prompt");
+  const id = safeJobId(`one-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const inner = `#!/bin/bash
+export HOME=/root
+export PATH="$HOME/.local/bin:$PATH"
+source /root/dbus_env.sh
+mkdir -p /root/agy_oneshot/home /root/agy_oneshot/work
+# Own agy HOME (no shared conversation state with builds) but the same login/state dir
+mkdir -p /root/agy_oneshot/home/.gemini
+[ -e /root/agy_oneshot/home/.gemini/antigravity-cli ] || ln -s /root/.gemini/antigravity-cli /root/agy_oneshot/home/.gemini/antigravity-cli
+[ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
+echo "${b64(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
+cd /root/agy_oneshot/work
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model gemini-3.8-flash-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
+rm -f /root/agy_oneshot/${id}.txt
+`;
+  const res = await ssmClient.send(new SendCommandCommand({
+    InstanceIds: [INSTANCE_ID],
+    DocumentName: "AWS-RunShellScript",
+    Parameters: { commands: [`echo ${b64(inner)} | base64 -d > /tmp/agy_one_${id}.sh && bash /tmp/agy_one_${id}.sh`] },
+    TimeoutSeconds: Math.max(60, Math.ceil(timeoutMs / 1000) + 30),
+  }));
+  const commandId = res.Command?.CommandId;
+  if (!commandId) throw new Error("runAgyOneShot: SendCommand returned no CommandId");
+
+  const deadline = Date.now() + timeoutMs;
+  await new Promise((r) => setTimeout(r, 2000));
+  while (Date.now() < deadline) {
+    try {
+      const inv = await ssmClient.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID }));
+      const status = inv.Status;
+      if (status === "Success") {
+        const out = inv.StandardOutputContent || "";
+        try {
+          const data = JSON.parse(out.slice(out.indexOf("{")));
+          return String(data.response ?? data.error ?? out);
+        } catch {
+          return out;
+        }
+      }
+      if (status && !["Pending", "InProgress", "Delayed"].includes(status)) {
+        throw new Error(`runAgyOneShot: command ${status}: ${(inv.StandardErrorContent || "").slice(0, 200)}`);
+      }
+    } catch (e: any) {
+      // The invocation record can briefly not exist right after SendCommand.
+      if (!/InvocationDoesNotExist/.test(String(e?.name || e?.message || e))) throw e;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("runAgyOneShot: timed out");
+}

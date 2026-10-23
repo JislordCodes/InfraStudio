@@ -7,6 +7,7 @@ import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts"
 import { SPEC_PRIORITY_RULE } from "../_shared/spec_priority.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
 import { getIpHash } from "../_shared/trial_gate.ts";
+import { runClarify } from "../_shared/clarify.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -365,6 +366,12 @@ export async function handleBim(payload: any): Promise<any> {
   // frontend learn a hash of its own IP, used in place of the old
   // per-browser localStorage device id so CHAT HISTORY follows the visitor
   // across browsers/devices on the same network (see useSessions.ts).
+  // Pre-build design conversation: asks short follow-up questions for a vague
+  // brief (see _shared/clarify.ts). No MCP session or scene work, fails open.
+  if (payload.action === "clarify") {
+    return await runClarify(payload);
+  }
+
   if (payload.action === "identity") {
     const ipHash = await getIpHash(payload);
     return { status: "success", ip_hash: ipHash, unlocked: true };
