@@ -12,7 +12,10 @@ import { applyExplode, resetExplode } from '../lib/explode';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
+  /** Replaces whatever is shown with this model (previous models are disposed). */
   loadIfcFromUrl: (url: string) => Promise<void>;
+  /** Empties the viewer - used when switching to a chat that has no model yet. */
+  clearModels: () => Promise<void>;
 }
 
 /** Near/far planes on BOTH cameras — an ortho camera needs a negative near to keep
@@ -495,6 +498,12 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
   // Full FragmentsModel instances (methods like getCategories/getItemsVolume) —
   // modelsRef below only types the bbox-shaped subset the camera code needs.
   const fragmentsModelsRef = useRef<FRAGS.FragmentsModel[]>([]);
+  // Each load/clear bumps this; a load that finds it changed mid-flight was
+  // superseded (user switched chats) and must not add its model.
+  const loadTokenRef = useRef(0);
+  // URL of the model currently shown (or loading) - skips redundant reloads of
+  // the same model and lets Collapse fall back to a clean reload.
+  const loadedUrlRef = useRef<string | null>(null);
   // Fragments render through their own streaming/LOD pipeline, so the THREE object
   // graph holds no measurable meshes — THREE.Box3().setFromObject() returns EMPTY.
   // The model itself exposes the real bounds, so keep the models and ask them.
@@ -585,6 +594,22 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     fragments?.core.update(true);
   };
 
+  /** The streamer only advances while the camera moves, so after any bulk
+   *  geometry change (explode / collapse) items can stay culled until the user
+   *  nudges the camera - slower browsers (Firefox) hit this most. Force
+   *  refreshes at widening intervals, like the post-load nudges do. */
+  const nudgeStreamer = (fragments: OBC.FragmentsManager) => {
+    for (const ms of [0, 250, 700, 1400, 2400, 4000, 6500, 10000]) {
+      window.setTimeout(() => {
+        try {
+          fragments.core.update(true);
+        } catch {
+          /* viewer was disposed meanwhile */
+        }
+      }, ms);
+    }
+  };
+
   const toggleExplode = async () => {
     if (exploding) return;
     const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
@@ -592,8 +617,17 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     setExploding(true);
     try {
       if (exploded) {
-        await resetExplode(fragments, fragmentsModelsRef.current);
+        const restored = await resetExplode(fragments, fragmentsModelsRef.current);
         setExploded(false);
+        // Re-bucket and re-apply any active x-ray dimming to the restored items.
+        await refreshDisciplineGroups();
+        if (!restored && loadedUrlRef.current) {
+          // Couldn't verify a clean restore - reload from source so Collapse
+          // always ends in exactly the original model.
+          const url = loadedUrlRef.current;
+          loadedUrlRef.current = null;
+          await loadFromUrl(url);
+        }
       } else {
         const bbox = currentModelBbox();
         const size = bbox ? bbox.getSize(new THREE.Vector3()) : null;
@@ -603,7 +637,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         await applyExplode(fragments, disciplineGroupsRef.current, step);
         setExploded(true);
       }
-      fragments.core.update(true);
+      nudgeStreamer(fragments);
     } catch (e) {
       console.warn('[explode] toggle failed:', e);
     } finally {
@@ -805,6 +839,19 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         // its geometry on top of the original's every time computeDisciplineGroups /
         // computeModelSummary summed across all tracked models (observed live:
         // Structure count climbing from 1501 to 2029 after a single explode).
+        //
+        // The LOD raise below MUST also run for the delta model: it renders every
+        // exploded element, and with the default screen-size culling the small
+        // ones (glass panes, deck boards, interior fit-out) were dropped from
+        // it - they "disappeared" on Explode.
+        // By default distant items are culled/LOD'd by screen size, which leaves a
+        // city-scale model looking empty when you pull back far enough to see it all.
+        try {
+          model.graphicsQuality = 1;
+          model.setLodMode?.(2 /* LodMode.ALL_GEOMETRY */);
+        } catch (e) {
+          console.warn('Could not raise LOD mode:', e);
+        }
         if (model.isDeltaModel) return;
 
         const isNewModel = !modelsRef.current.includes(model);
@@ -814,14 +861,6 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         // A model that streams in while the summary panel is already open should
         // update the tally rather than leave it showing the previous model's counts.
         if (summaryOpenRef.current) void refreshSummary();
-        // By default distant items are culled/LOD'd by screen size, which leaves a
-        // city-scale model looking empty when you pull back far enough to see it all.
-        try {
-          model.graphicsQuality = 1;
-          model.setLodMode?.(2 /* LodMode.ALL_GEOMETRY */);
-        } catch (e) {
-          console.warn('Could not raise LOD mode:', e);
-        }
         console.log('FragmentsModel added to scene and updated core.');
 
         // --- Frame the model once its geometry has actually streamed in ---
@@ -925,9 +964,102 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     void refreshSummary();
   };
 
+  /** Disposes every model in the viewer and resets all per-model UI state
+   *  (selection, summary, x-ray, explode). Models from a previous chat must
+   *  never be left in the scene when another chat is shown. */
+  const clearAllModels = async () => {
+    const fragments = ifcLoaderRef.current?.components.get(OBC.FragmentsManager);
+    selectedRef.current = null;
+    setInspected(null);
+    setInspecting(false);
+    setSummaryOpen(false);
+    setSummaryData(null);
+    setExploded(false);
+    setExploding(false);
+    disciplineGroupsRef.current = {};
+    setDisciplineGroups({});
+    dimmedDisciplinesRef.current = new Set();
+    setDimmedDisciplines(new Set());
+    modelsRef.current = [];
+    fragmentsModelsRef.current = [];
+    modelBboxRef.current = null;
+    if (!fragments) return;
+    try {
+      await fragments.resetHighlight();
+    } catch {
+      /* nothing highlighted / not initialised yet */
+    }
+    for (const id of [...fragments.list.keys()]) {
+      const model = fragments.list.get(id);
+      try {
+        model?.object.removeFromParent();
+      } catch {
+        /* already detached */
+      }
+      try {
+        await fragments.core.disposeModel(id);
+      } catch (e) {
+        console.warn('[viewer] disposeModel failed (may already be gone):', id, e);
+      }
+      try {
+        fragments.list.delete(id);
+      } catch {
+        /* already removed by disposeModel */
+      }
+    }
+    try {
+      fragments.core.update(true);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const loadFromUrl = async (url: string) => {
+    if (!ifcLoaderRef.current) return;
+    // Already showing (or loading) exactly this model - nothing to do.
+    if (url === loadedUrlRef.current) return;
+    const token = ++loadTokenRef.current;
+    loadedUrlRef.current = url;
+    setIsLoadingFile(true);
+    try {
+      if (initPromiseRef.current) await initPromiseRef.current;
+
+      // Anti-crash failsafe: If fragments lost initialization, forcibly re-initialize
+      const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
+      if (!fragments.initialized) {
+        console.warn('Fragments were uninitialized before loadFromUrl. Forcing FragmentsManager init.');
+        fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
+      }
+
+      console.log(`Fetching IFC from URL: ${url}`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const data = new Uint8Array(await response.arrayBuffer());
+      if (token !== loadTokenRef.current) return; // superseded while downloading
+      console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);
+
+      await clearAllModels();
+      if (token !== loadTokenRef.current) return;
+
+      const modelId = `supabase-model-${Date.now()}`;
+      await raceLoadAgainstSceneAdd(fragments, ifcLoaderRef.current.load(data, true, modelId));
+      console.log('IFC load settled (resolved, model reached the scene, or timed out safely)');
+    } catch (error) {
+      console.error('Error loading IFC from URL:', error);
+      if (token === loadTokenRef.current) {
+        loadedUrlRef.current = null;
+        alert(`Failed to load IFC URL. Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } finally {
+      if (token === loadTokenRef.current) setIsLoadingFile(false);
+    }
+  };
+
   useImperativeHandle(ref, () => ({
     loadIfc: async (file: File) => {
       if (!ifcLoaderRef.current) return;
+      const token = ++loadTokenRef.current;
+      loadedUrlRef.current = null;
       setIsLoadingFile(true);
       try {
         if (initPromiseRef.current) await initPromiseRef.current;
@@ -941,45 +1073,26 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
 
         const data = new Uint8Array(await file.arrayBuffer());
         console.log('Starting IFC load, file size:', data.byteLength, 'bytes');
+        if (token !== loadTokenRef.current) return;
+        await clearAllModels();
+        if (token !== loadTokenRef.current) return;
         await raceLoadAgainstSceneAdd(fragments, ifcLoaderRef.current.load(data, true, file.name));
         console.log('IFC load settled (resolved, model reached the scene, or timed out safely)');
       } catch (error) {
         console.error('Error loading IFC file:', error);
         alert(`Failed to load IFC file. Error: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        setIsLoadingFile(false);
+        if (token === loadTokenRef.current) setIsLoadingFile(false);
       }
     },
 
-    loadIfcFromUrl: async (url: string) => {
-      if (!ifcLoaderRef.current) return;
-      setIsLoadingFile(true);
-      try {
-        if (initPromiseRef.current) await initPromiseRef.current;
+    loadIfcFromUrl: loadFromUrl,
 
-        // Anti-crash failsafe: If fragments lost initialization, forcibly re-initialize
-        const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
-        if (!fragments.initialized) {
-          console.warn('Fragments were uninitialized before loadFromUrl. Forcing FragmentsManager init.');
-          fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
-        }
-
-        console.log(`Fetching IFC from URL: ${url}`);
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-        const data = new Uint8Array(await response.arrayBuffer());
-        console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);
-
-        const modelId = `supabase-model-${Date.now()}`;
-        await raceLoadAgainstSceneAdd(fragments, ifcLoaderRef.current.load(data, true, modelId));
-        console.log('IFC load settled (resolved, model reached the scene, or timed out safely)');
-      } catch (error) {
-        console.error('Error loading IFC from URL:', error);
-        alert(`Failed to load IFC URL. Error: ${error instanceof Error ? error.message : String(error)}`);
-      } finally {
-        setIsLoadingFile(false);
-      }
+    clearModels: async () => {
+      loadTokenRef.current++;
+      loadedUrlRef.current = null;
+      setIsLoadingFile(false);
+      await clearAllModels();
     },
   }));
 

@@ -64,9 +64,12 @@ interface AIChatProps {
    *  show/hide something like a download button without duplicating session
    *  state of its own. */
   onActiveIfcUrlChange?: (url: string | null) => void;
+  /** Fired when the user switches to a chat that has no model yet, so the
+   *  viewer doesn't keep showing the previous chat's model. */
+  onClearModel?: () => void;
 }
 
-export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange }) => {
+export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel }) => {
   const {
     sessions,
     activeSessionId,
@@ -151,11 +154,23 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
   }, [messages, expanded, currentSteps]);
 
   // When active session changes — load IFC into viewer & expand chat
+  // Kept current every render so async callbacks (a build finishing, a resumed
+  // build) can tell whether their chat is still the one on screen.
+  const activeSessionIdRef = useRef<string | null>(null);
+  activeSessionIdRef.current = activeSessionId;
+  const prevSessionRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!activeSessionId) return;
+    const switched = prevSessionRef.current !== null && prevSessionRef.current !== activeSessionId;
+    prevSessionRef.current = activeSessionId;
     const session = sessions.find(s => s.id === activeSessionId);
     if (session?.last_ifc_url && onLoadIfcUrl) {
       onLoadIfcUrl(session.last_ifc_url);
+    } else if (switched) {
+      // The chat we switched to has no model: empty the viewer rather than
+      // leaving the previous chat's model on screen.
+      onClearModel?.();
     }
     // Always fire, including with null - a session with no model yet must
     // clear any download affordance left over from a previously active one.
@@ -209,7 +224,8 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
 
     const reply: ChatMessage = { role: 'assistant', content: result.reply || 'Done.' };
-    setMessages(prev => [...prev, reply]);
+    // Saved to its own chat below either way; only shown live if still on screen.
+    if (sid === activeSessionIdRef.current) setMessages(prev => [...prev, reply]);
     await saveMessage(sid, reply);
 
     const activeMcpId = result.mcp_session_id;
@@ -220,11 +236,16 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       await updateSessionData(sid, activeMcpId, result.ifc_url);
     }
 
-    if (result.ifc_url && onLoadIfcUrl) {
-      onLoadIfcUrl(result.ifc_url);
-    }
-    if (result.ifc_url) {
-      onActiveIfcUrlChange?.(result.ifc_url);
+    // The build may finish after the user switched to another chat. It is
+    // already saved on its own session above (shown when they switch back), so
+    // only touch the viewer if this chat is still the active one.
+    if (sid === activeSessionIdRef.current) {
+      if (result.ifc_url && onLoadIfcUrl) {
+        onLoadIfcUrl(result.ifc_url);
+      }
+      if (result.ifc_url) {
+        onActiveIfcUrlChange?.(result.ifc_url);
+      }
     }
 
     setCurrentSteps([]);

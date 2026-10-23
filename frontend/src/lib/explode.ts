@@ -85,14 +85,36 @@ export async function applyExplode(
 /** Reverts every edit applyExplode made, per model. editor.reset() restores
  *  each model's pristine loaded state in one call regardless of how many
  *  items were moved - safe here because nothing else in this app ever
- *  calls into the Editor, so there's no other edit history to lose. */
-export async function resetExplode(fragments: OBC.FragmentsManager, models: FRAGS.FragmentsModel[]): Promise<void> {
+ *  calls into the Editor, so there's no other edit history to lose.
+ *
+ *  Reset alone isn't enough to guarantee the model looks exactly as loaded
+ *  (reported: after Explode then Collapse, deck/interior/glass elements stayed
+ *  missing). So every model also gets its visibility put back explicitly and
+ *  anything still hidden afterwards is forced visible - Explode never hides
+ *  anything on purpose, so "hidden" after Collapse is always a leftover.
+ *  Returns false if any model couldn't be verified, so the caller can fall
+ *  back to reloading the model from source. */
+export async function resetExplode(fragments: OBC.FragmentsManager, models: FRAGS.FragmentsModel[]): Promise<boolean> {
   const editor = fragments.core.editor;
+  let ok = true;
   for (const model of models) {
     try {
       await editor.reset(model.modelId);
     } catch (e) {
       console.warn('[explode] reset failed:', e);
+      ok = false;
+    }
+    try {
+      await model.resetVisible();
+      const stillHidden = await model.getItemsByVisibility(false);
+      if (stillHidden.length) {
+        console.warn(`[explode] ${stillHidden.length} items still hidden after reset - forcing visible`);
+        await model.setVisible(stillHidden, true);
+      }
+    } catch (e) {
+      console.warn('[explode] visibility restore failed:', e);
+      ok = false;
     }
   }
+  return ok;
 }

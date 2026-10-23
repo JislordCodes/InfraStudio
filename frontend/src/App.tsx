@@ -132,7 +132,14 @@ function App() {
       {/* Floating chat - collapses to a single button, see AIChat's own `expanded` state. */}
       <div className="absolute bottom-2 sm:bottom-6 left-1/2 -translate-x-1/2 w-[95%] sm:w-full max-w-xl z-20 px-0 sm:px-4 pb-safe pointer-events-none flex justify-center">
         <div className="pointer-events-auto">
-          <AIChat onLoadIfcUrl={handleLoadIfcUrl} onActiveIfcUrlChange={handleActiveIfcUrlChange} />
+          <AIChat
+            onLoadIfcUrl={handleLoadIfcUrl}
+            onActiveIfcUrlChange={handleActiveIfcUrlChange}
+            onClearModel={() => {
+              void viewerRef.current?.clearModels();
+              setCurrentIfcUrl(null);
+            }}
+          />
         </div>
       </div>
     </div>
