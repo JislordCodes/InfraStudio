@@ -8,6 +8,7 @@ import { SPEC_PRIORITY_RULE } from "../_shared/spec_priority.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
 import { getIpHash } from "../_shared/trial_gate.ts";
 import { runClarify } from "../_shared/clarify.ts";
+import { startParallelBuild, pollParallelBuild } from "../_shared/parallel_build.ts";
 import { buildEditBrief, buildStageOneBrief, validateBaseIfcUrl, isStageId, type StageId } from "../_shared/design_stages.ts";
 
 type McpCall = { resultText: string; session: string };
@@ -748,6 +749,11 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
     if (useAntigravity && !payload.plan?.is_edit) {
       const continuation = payload.plan?.continuation;
 
+      // Fast build: one design split across several slots, then merged (parallel_build.ts).
+      if (continuation?.kind === "parallel") {
+        return await pollParallelBuild(continuation);
+      }
+
       if (continuation?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation.ssmCommandId, continuation.jobId);
         if (!result.done) return { status: "continue", continuation, progress: result.progressMessage, queuePosition: result.queuePosition, mcpSessionId: continuation.jobId };
@@ -955,6 +961,13 @@ When finished: call get_scene_info to confirm the total element count, run the c
         const editBrief = buildEditBrief({ request: userBrief, stage, projectBrief: payload.plan?.project_brief, imageSection, specPriorityRule: SPEC_PRIORITY_RULE });
         const editCommandId = await startAntigravityBuild(editBrief, jobId, images, { baseIfcUrl });
         return { status: "continue", continuation: { kind: "antigravity", ssmCommandId: editCommandId, jobId }, progress: "Loading your model...", mcpSessionId: jobId };
+      }
+
+      // Fast build (opt-in): split across idle slots. Falls back to the normal build below
+      // whenever fewer than 2 slots are free or planning/starting the parts fails.
+      if (payload.plan?.parallel === true && !stage && !isSingleElement) {
+        const par = await startParallelBuild({ jobId, userBrief, images, imageSection, useSubagents: payload.plan?.subagents !== false });
+        if (par) return par;
       }
 
       const brief = stage === "massing"

@@ -23,6 +23,7 @@ import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws
 import { getMcpUrl, extractText } from "./shared.ts";
 import { extractClashReport, type ClashReport } from "./clash_check.ts";
 import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
+import { MERGE_IFC_PY } from "./merge_ifc_script.ts";
 
 const INSTANCE_ID = "i-006cf1785c4abbb6d";
 const REGION = "us-east-1";
@@ -697,4 +698,111 @@ rm -f /root/agy_oneshot/${id}.txt
     await new Promise((r) => setTimeout(r, 2000));
   }
   throw new Error("runAgyOneShot: timed out");
+}
+
+/**
+ * How many build slots could start a new build RIGHT NOW (slots not locked by a
+ * running build, minus builds already waiting in the queue). Used to decide
+ * whether splitting one build across several slots would actually help - with
+ * fewer than 2 free, the parts would just queue behind each other. Never throws:
+ * on any failure it reports 0 so callers fall back to a normal single build.
+ */
+export async function countFreeSlots(timeoutMs = 25000): Promise<number> {
+  try {
+    const script = `export HOME=/root
+mkdir -p /root/agy_jobs/queue
+free=0
+for n in 1 2 3; do touch /root/agy_jobs/slot$n.lock; flock -n /root/agy_jobs/slot$n.lock -c true && free=$((free+1)); done
+q=$(ls /root/agy_jobs/queue 2>/dev/null | wc -l)
+if [ "$free" -gt "$q" ]; then echo FREE:$((free-q)); else echo FREE:0; fi`;
+    const res = await ssmClient.send(new SendCommandCommand({
+      InstanceIds: [INSTANCE_ID],
+      DocumentName: "AWS-RunShellScript",
+      Parameters: { commands: [`echo ${b64(script)} | base64 -d | bash`] },
+      TimeoutSeconds: 60,
+    }));
+    const commandId = res.Command?.CommandId;
+    if (!commandId) return 0;
+    const deadline = Date.now() + timeoutMs;
+    await new Promise((r) => setTimeout(r, 1500));
+    while (Date.now() < deadline) {
+      try {
+        const inv = await ssmClient.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID }));
+        if (inv.Status === "Success") {
+          const m = (inv.StandardOutputContent || "").match(/FREE:(\d+)/);
+          return m ? Math.min(3, Number(m[1])) : 0;
+        }
+        if (inv.Status && !["Pending", "InProgress", "Delayed"].includes(inv.Status)) return 0;
+      } catch (e: any) {
+        if (!/InvocationDoesNotExist/.test(String(e?.name || e?.message || e))) return 0;
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } catch (e) {
+    console.warn("[antigravity_agent] countFreeSlots failed, assuming 0:", e);
+  }
+  return 0;
+}
+
+/**
+ * Parallel builds, final step: merges the finished section files into ONE IFC
+ * on the box's host (ifcopenshell in /root/merge_venv - no build slot or MCP
+ * scene needed), verifies nothing was lost (merged count must equal the sum of
+ * the parts), uploads it to this job's own model key and reports through the
+ * same status.json channel a normal build uses, so pollAntigravityBuild works
+ * on it unchanged.
+ */
+export async function startMergeJob(jobId: string, sectionUrls: string[]): Promise<string> {
+  if (sectionUrls.length < 2) throw new Error("startMergeJob: need at least two sections");
+  const safeId = safeJobId(jobId);
+  const downloads = sectionUrls.map((u, i) =>
+    `curl -sfL --max-time 240 -o s${i}.ifc "$(echo ${b64(u)} | base64 -d)" || { write_status '{"status":"error","error":"Could not download part ${i + 1} to merge."}'; exit 1; }`).join("\n");
+  const files = sectionUrls.map((_, i) => `s${i}.ifc`).join(" ");
+  const inner = `#!/bin/bash
+export HOME=/root
+W=/root/agy_jobs/merge_${safeId}
+mkdir -p $W && cd $W
+write_status() {
+  echo "$1" > /tmp/status_${safeId}.json
+  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/builds/${safeId}/status.json" --region us-east-1 --content-type application/json >/dev/null 2>&1
+}
+write_status '{"status":"building","elementCount":0}'
+echo ${b64(MERGE_IFC_PY)} | base64 -d > /root/merge_ifc.py
+${downloads}
+if ! /root/merge_venv/bin/python /root/merge_ifc.py out.ifc ${files} > report.json 2> err.txt; then
+  write_status '{"status":"error","error":"Merging the parts failed."}'
+  echo "BUILD_ERROR:merge failed: $(tail -c 300 err.txt)"
+  exit 1
+fi
+CHECK=$(/root/merge_venv/bin/python - <<'PYCHK'
+import json
+r = json.load(open("report.json"))
+failed = sum(s.get("failed", 0) for s in r.get("sections", []))
+ok = r.get("merged_products") == r.get("expected_products") and failed == 0
+print(("OK " if ok else "BAD ") + str(r.get("merged_products")))
+PYCHK
+)
+case "$CHECK" in
+  OK*) ;;
+  *) write_status '{"status":"error","error":"Merged model failed its element-count check."}'; echo "BUILD_ERROR:count check failed $CHECK"; exit 1;;
+esac
+COUNT=\${CHECK#OK }
+aws s3 cp out.ifc "s3://${STATUS_BUCKET}/models/${safeId}/model.ifc" --region us-east-1 --content-type application/octet-stream >/dev/null 2>&1 || { write_status '{"status":"error","error":"Could not store the merged model."}'; exit 1; }
+SIZE=$(stat -c %s out.ifc)
+URL="https://${STATUS_BUCKET}.s3.us-east-1.amazonaws.com/models/${safeId}/model.ifc?t=$(date +%s)"
+write_status "{\\"status\\":\\"done\\",\\"ifcUrl\\":\\"$URL\\",\\"fileSize\\":$SIZE,\\"elementCount\\":$COUNT}"
+echo "IFC_URL:$URL"
+echo "FILE_SIZE:$SIZE"
+echo "ELEMENT_COUNT:$COUNT"
+`;
+  const res = await ssmClient.send(new SendCommandCommand({
+    InstanceIds: [INSTANCE_ID],
+    DocumentName: "AWS-RunShellScript",
+    Parameters: { commands: [`echo ${b64(inner)} | base64 -d > /tmp/run_merge_${safeId}.sh && bash /tmp/run_merge_${safeId}.sh`] },
+    TimeoutSeconds: 900,
+  }));
+  const commandId = res.Command?.CommandId;
+  if (!commandId) throw new Error("startMergeJob: SendCommand returned no CommandId");
+  console.log(`[antigravity_agent] Started merge jobId=${jobId} parts=${sectionUrls.length} ssmCommandId=${commandId}`);
+  return commandId;
 }
