@@ -95761,9 +95761,6 @@ async function jevSafe(state3, questions, timeoutMs = 5e3) {
   }
 }
 
-// ../supabase/functions/_shared/merge_ifc_script.ts
-var MERGE_IFC_PY = '"""Merge several IFC section files into one model (parallel builds).\n\nusage: merge_ifc.py OUT.ifc BASE.ifc SECTION2.ifc [SECTION3.ifc ...]\n\nEach section was built by its own agent in its own empty scene, all from one\nshared spec (same origin, grid and storey names/elevations). The first file is\nthe base (its project, site, building and storeys are kept); every product\nfrom the other files is copied into it with its geometry, materials, styles\nand property sets, then placed in the base storey with the same name (or the\nnearest elevation, or a newly created storey).\n\nPrints one JSON line with counts so the caller can verify nothing was lost.\nRuns in /root/merge_venv (ifcopenshell), on the host - it needs no build slot.\n"""\nimport json\nimport sys\n\nimport ifcopenshell\nimport ifcopenshell.api\nimport numpy\nimport ifcopenshell.guid\nimport ifcopenshell.util.element as E\n\nSKIP_CLASSES = ("IfcProject", "IfcSite", "IfcBuilding", "IfcBuildingStorey", "IfcOpeningElement")\n\n\ndef skip(p):\n    return any(p.is_a(c) for c in SKIP_CLASSES)\n\n\ndef elevation(storey):\n    try:\n        return float(storey.Elevation or 0.0)\n    except Exception:\n        return 0.0\n\n\ndef pick_storey(base, src_storey, cache):\n    """Base storey matching a source storey: same name, else nearest elevation, else a new one."""\n    key = (src_storey.Name or "", elevation(src_storey)) if src_storey is not None else None\n    if key in cache:\n        return cache[key]\n    storeys = base.by_type("IfcBuildingStorey")\n    chosen = None\n    if src_storey is not None:\n        name = (src_storey.Name or "").strip().lower()\n        for st in storeys:\n            if (st.Name or "").strip().lower() == name:\n                chosen = st\n                break\n        if chosen is None and storeys:\n            chosen = min(storeys, key=lambda st: abs(elevation(st) - elevation(src_storey)))\n            # Far from any existing level (> 0.5 m): it is a different level, create it.\n            if abs(elevation(chosen) - elevation(src_storey)) > 0.5:\n                chosen = None\n        if chosen is None:\n            building = base.by_type("IfcBuilding")[0]\n            chosen = ifcopenshell.api.run("root.create_entity", base, ifc_class="IfcBuildingStorey", name=src_storey.Name or "Level")\n            chosen.Elevation = elevation(src_storey)\n            # A storey without an object placement can crash the native writer.\n            matrix = numpy.eye(4)\n            matrix[2][3] = elevation(src_storey)\n            ifcopenshell.api.run("geometry.edit_object_placement", base, product=chosen, matrix=matrix, is_si=False)\n            ifcopenshell.api.run("aggregate.assign_object", base, products=[chosen], relating_object=building)\n    elif storeys:\n        chosen = min(storeys, key=elevation)\n    cache[key] = chosen\n    return chosen\n\n\ndef main():\n    out_path, base_path, *others = sys.argv[1:]\n    base = ifcopenshell.open(base_path)\n\n    def count(f):\n        return len([p for p in f.by_type("IfcProduct") if not skip(p)])\n\n    report = {"base_products": count(base), "sections": []}\n    storey_cache = {}\n    # Keep every source file alive until the merged file is written: copied entities\n    # can still point into their source file, and freeing it early corrupted memory\n    # (native segfault in write).\n    keep_alive = []\n    for path in others:\n        src = ifcopenshell.open(path)\n        keep_alive.append(src)\n        products = [p for p in src.by_type("IfcProduct") if not skip(p)]\n        by_storey = {}\n        copied = failed = 0\n        for el in products:\n            try:\n                new = ifcopenshell.api.run("project.append_asset", base, library=src, element=el)\n            except Exception as exc:  # keep going; report at the end\n                failed += 1\n                report.setdefault("errors", []).append("%s %s: %s" % (el.is_a(), el.GlobalId, str(exc)[:120]))\n                continue\n            if new is None:\n                failed += 1\n                continue\n            copied += 1\n            container = E.get_container(el)\n            storey = container if container is not None and container.is_a("IfcBuildingStorey") else None\n            if storey is None and container is not None:\n                # inside a space/other container: use the storey that contains it\n                parent = E.get_aggregate(container)\n                while parent is not None and not parent.is_a("IfcBuildingStorey"):\n                    parent = E.get_aggregate(parent)\n                storey = parent\n            target = pick_storey(base, storey, storey_cache)\n            by_storey.setdefault(target.id() if target else 0, (target, []))[1].append(new)\n        for target, new_products in by_storey.values():\n            if target is None:\n                continue\n            # A plain containment relation: the copied placements already carry the right\n            # absolute position, and assign_container re-parents placements (slow, and it\n            # crashed IfcOpenShell natively on ~1000 products).\n            for i in range(0, len(new_products), 500):\n                base.create_entity("IfcRelContainedInSpatialStructure", GlobalId=ifcopenshell.guid.new(), RelatedElements=new_products[i:i + 500], RelatingStructure=target)\n        report["sections"].append({"file": path.split("/")[-1], "products": len(products), "copied": copied, "failed": failed})\n\n    base.write(out_path)\n    report["merged_products"] = count(ifcopenshell.open(out_path))\n    report["expected_products"] = report["base_products"] + sum(s["copied"] for s in report["sections"])\n    report["storeys"] = [(s.Name, elevation(s)) for s in ifcopenshell.open(out_path).by_type("IfcBuildingStorey")]\n    print(json.dumps(report))\n\n\nif __name__ == "__main__":\n    main()\n';
-
 // ../supabase/functions/_shared/antigravity_agent.ts
 var INSTANCE_ID2 = "i-006cf1785c4abbb6d";
 var REGION2 = "us-east-1";
@@ -96264,95 +96261,6 @@ rm -f /root/agy_oneshot/${id}.txt
   }
   throw new Error("runAgyOneShot: timed out");
 }
-async function countFreeSlots(timeoutMs = 25e3) {
-  try {
-    const script = `export HOME=/root
-mkdir -p /root/agy_jobs/queue
-free=0
-for n in 1 2 3; do touch /root/agy_jobs/slot$n.lock; flock -n /root/agy_jobs/slot$n.lock -c true && free=$((free+1)); done
-q=$(ls /root/agy_jobs/queue 2>/dev/null | wc -l)
-if [ "$free" -gt "$q" ]; then echo FREE:$((free-q)); else echo FREE:0; fi`;
-    const res = await ssmClient2.send(new import_client_ssm2.SendCommandCommand({
-      InstanceIds: [INSTANCE_ID2],
-      DocumentName: "AWS-RunShellScript",
-      Parameters: { commands: [`echo ${b642(script)} | base64 -d | bash`] },
-      TimeoutSeconds: 60
-    }));
-    const commandId = res.Command?.CommandId;
-    if (!commandId) return 0;
-    const deadline = Date.now() + timeoutMs;
-    await new Promise((r9) => setTimeout(r9, 1500));
-    while (Date.now() < deadline) {
-      try {
-        const inv = await ssmClient2.send(new import_client_ssm2.GetCommandInvocationCommand({ CommandId: commandId, InstanceId: INSTANCE_ID2 }));
-        if (inv.Status === "Success") {
-          const m5 = (inv.StandardOutputContent || "").match(/FREE:(\d+)/);
-          return m5 ? Math.min(3, Number(m5[1])) : 0;
-        }
-        if (inv.Status && !["Pending", "InProgress", "Delayed"].includes(inv.Status)) return 0;
-      } catch (e9) {
-        if (!/InvocationDoesNotExist/.test(String(e9?.name || e9?.message || e9))) return 0;
-      }
-      await new Promise((r9) => setTimeout(r9, 1500));
-    }
-  } catch (e9) {
-    console.warn("[antigravity_agent] countFreeSlots failed, assuming 0:", e9);
-  }
-  return 0;
-}
-async function startMergeJob(jobId, sectionUrls) {
-  if (sectionUrls.length < 2) throw new Error("startMergeJob: need at least two sections");
-  const safeId = safeJobId(jobId);
-  const downloads = sectionUrls.map((u, i9) => `curl -sfL --max-time 240 -o s${i9}.ifc "$(echo ${b642(u)} | base64 -d)" || { write_status '{"status":"error","error":"Could not download part ${i9 + 1} to merge."}'; exit 1; }`).join("\n");
-  const files = sectionUrls.map((_, i9) => `s${i9}.ifc`).join(" ");
-  const inner = `#!/bin/bash
-export HOME=/root
-W=/root/agy_jobs/merge_${safeId}
-mkdir -p $W && cd $W
-write_status() {
-  echo "$1" > /tmp/status_${safeId}.json
-  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/builds/${safeId}/status.json" --region us-east-1 --content-type application/json >/dev/null 2>&1
-}
-write_status '{"status":"building","elementCount":0}'
-echo ${b642(MERGE_IFC_PY)} | base64 -d > /root/merge_ifc.py
-${downloads}
-if ! /root/merge_venv/bin/python /root/merge_ifc.py out.ifc ${files} > report.json 2> err.txt; then
-  write_status '{"status":"error","error":"Merging the parts failed."}'
-  echo "BUILD_ERROR:merge failed: $(tail -c 300 err.txt)"
-  exit 1
-fi
-CHECK=$(/root/merge_venv/bin/python - <<'PYCHK'
-import json
-r = json.load(open("report.json"))
-failed = sum(s.get("failed", 0) for s in r.get("sections", []))
-ok = r.get("merged_products") == r.get("expected_products") and failed == 0
-print(("OK " if ok else "BAD ") + str(r.get("merged_products")))
-PYCHK
-)
-case "$CHECK" in
-  OK*) ;;
-  *) write_status '{"status":"error","error":"Merged model failed its element-count check."}'; echo "BUILD_ERROR:count check failed $CHECK"; exit 1;;
-esac
-COUNT=\${CHECK#OK }
-aws s3 cp out.ifc "s3://${STATUS_BUCKET}/models/${safeId}/model.ifc" --region us-east-1 --content-type application/octet-stream >/dev/null 2>&1 || { write_status '{"status":"error","error":"Could not store the merged model."}'; exit 1; }
-SIZE=$(stat -c %s out.ifc)
-URL="https://${STATUS_BUCKET}.s3.us-east-1.amazonaws.com/models/${safeId}/model.ifc?t=$(date +%s)"
-write_status "{\\"status\\":\\"done\\",\\"ifcUrl\\":\\"$URL\\",\\"fileSize\\":$SIZE,\\"elementCount\\":$COUNT}"
-echo "IFC_URL:$URL"
-echo "FILE_SIZE:$SIZE"
-echo "ELEMENT_COUNT:$COUNT"
-`;
-  const res = await ssmClient2.send(new import_client_ssm2.SendCommandCommand({
-    InstanceIds: [INSTANCE_ID2],
-    DocumentName: "AWS-RunShellScript",
-    Parameters: { commands: [`echo ${b642(inner)} | base64 -d > /tmp/run_merge_${safeId}.sh && bash /tmp/run_merge_${safeId}.sh`] },
-    TimeoutSeconds: 900
-  }));
-  const commandId = res.Command?.CommandId;
-  if (!commandId) throw new Error("startMergeJob: SendCommand returned no CommandId");
-  console.log(`[antigravity_agent] Started merge jobId=${jobId} parts=${sectionUrls.length} ssmCommandId=${commandId}`);
-  return commandId;
-}
 
 // ../supabase/functions/_shared/spec_priority.ts
 var SPEC_PRIORITY_RULE = `IMPORTANT user-specification priority rule (HIGHEST PRIORITY in this entire brief - it overrides the complexity bar, the architect rule, your own design preferences, and every default below):
@@ -96506,164 +96414,6 @@ ${user}`, 9e4);
     console.warn(`[clarify] failing open (build proceeds without questions): ${e9?.message || e9}`);
     return failOpen(brief, answers, round);
   }
-}
-
-// ../supabase/functions/_shared/parallel_build.ts
-var PLANNER_PROMPT = `You are the lead architect/engineer splitting ONE design brief into independent sections that separate agents will build AT THE SAME TIME in separate empty IFC models, which are then merged. Because the agents cannot see each other's work, the parts only line up if you fix the shared geometry up front.
-
-Produce:
-1. "shared_spec": a precise, binding specification every section must follow, written as plain text. It MUST fix: the overall dimensions and footprint with the origin (0,0,0) at a stated corner/point and axis directions; the structural grid (spacings); the exact list of building storeys / levels as "<Name> at elevation <m>" (use simple names like "Level 0", "Level 1", "Roof"; for infrastructure use equivalent named reference levels); key heights, spans and thicknesses; the shared material/colour palette. Invent every value the client did not give, plausibly and completely. Anything the client DID state is binding and must be copied unchanged.
-2. "sections": exactly N sections (N is given below). Split by independent PART or DISCIPLINE (for example: structure and foundations / envelope, roof and openings / interior, partitions, stairs and fit-out; for infrastructure: substructure / superstructure / ancillary), so that no element is built by two sections and together they make the complete design. Each section has a short "name" and a "scope" (one or two sentences listing exactly what it builds and what it must NOT build).
-
-Respond with ONE JSON object only, no markdown:
-{"shared_spec": "...", "sections": [{"name": "Structure", "scope": "..."}, {"name": "Envelope", "scope": "..."}]}`;
-async function planSections(brief, n5) {
-  try {
-    const raw = await runAgyOneShot(
-      `${PLANNER_PROMPT}
-
-Do NOT use any tools and do NOT create or edit any files - answer directly with the JSON object only.
-
----
-N = ${n5}
-
-CLIENT BRIEF:
-${brief}`,
-      1e5
-    );
-    const data = cleanJsonResponse(raw);
-    const spec = typeof data?.shared_spec === "string" ? data.shared_spec.trim() : "";
-    const sections = Array.isArray(data?.sections) ? data.sections.filter((s3) => s3 && typeof s3.name === "string" && typeof s3.scope === "string" && s3.name.trim() && s3.scope.trim()).map((s3) => ({ name: s3.name.trim().slice(0, 40), scope: s3.scope.trim().slice(0, 600) })) : [];
-    if (spec.length < 80 || sections.length < 2) return null;
-    return { shared_spec: spec.slice(0, 6e3), sections: sections.slice(0, n5) };
-  } catch (e9) {
-    console.warn(`[parallel] planning failed, falling back to a single build: ${e9?.message || e9}`);
-    return null;
-  }
-}
-function buildSectionBrief(opts) {
-  const { userBrief, plan, index, imageSection, useSubagents } = opts;
-  const mine = plan.sections[index];
-  const others = plan.sections.filter((_, i9) => i9 !== index).map((s3) => `- ${s3.name}: ${s3.scope}`).join("\n");
-  const subagentBlock = useSubagents ? `
-
-SUBAGENTS (optional, for speed): if YOUR section has clearly independent groups of elements (for example separate floors, wings or element families), you may start subagents with invoke_subagent so they build those groups at the same time. Give each subagent a disjoint set of elements (and distinct element names), tell it to use the shared spec above, and wait for ALL subagents to finish and report before you verify and export. All of you share the same scene, so never ask two agents to modify the same element. If in doubt, build it yourself.` : "";
-  return `You are building ONE SECTION of a larger model. Other agents are building the other sections AT THE SAME TIME in their own separate scenes from the same shared specification; afterwards all sections are merged into one IFC. You cannot see their work, so precision on the shared spec is everything.
-
-YOUR SECTION: ${mine.name}
-${mine.scope}
-
-OTHER SECTIONS (do NOT build any of this):
-${others}
-
-${SPEC_PRIORITY_RULE}
-
-SHARED SPECIFICATION (binding for every section - use these exact coordinates, grid, levels and names):
-${plan.shared_spec}
-
-IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_storey, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls; never use bash/curl to talk to the MCP server.
-
-IMPORTANT section rules (non-negotiable):
-- First call initialize_project. Then create EVERY building storey/level from the shared specification with create_storey, using exactly the names and elevations given (even if your section only uses some of them) - the merge matches sections by storey name.
-- Build ONLY your section's scope, at exactly the shared coordinates, so it lines up with the others. Do not build anything listed under the other sections, and do not add a surrounding building, site or extra elements of your own.
-- Place every element in the correct storey. Give every element a real material/surface style (create_surface_style / apply_style_to_object) with realistic colours. Where the user asked for something explicit (e.g. transparent glass) it must actually be realised.
-- Build your section with real detail and a sensible number of elements for ITS scope - do not pad it. There is no clash check against the other sections.
-- execute_ifc_code_tool has a hard 60-second timeout per call: split large work into several calls and assign new elements to the storey with ONE spatial.assign_container call per batch, not one per element.
-- Before exporting, call get_scene_info and check that your section is complete, styled, and matches the shared spec.${subagentBlock}
-
-The full client brief, for context (your section is only part of it):
-${userBrief}${imageSection}
-
-When finished: call get_scene_info to confirm, then call export_ifc.`;
-}
-async function startParallelBuild(opts) {
-  const free = await countFreeSlots();
-  console.log(`[parallel] free slots: ${free}`);
-  if (free < 2) return null;
-  const n5 = Math.min(3, free);
-  const plan = await planSections(opts.userBrief, n5);
-  if (!plan) return null;
-  console.log(`[parallel] plan: ${plan.sections.map((s3) => s3.name).join(" | ")}`);
-  const sections = [];
-  try {
-    for (let i9 = 0; i9 < plan.sections.length; i9++) {
-      const secJob = `${opts.jobId}-s${i9 + 1}`;
-      const brief = buildSectionBrief({ userBrief: opts.userBrief, plan, index: i9, imageSection: opts.imageSection, useSubagents: opts.useSubagents });
-      const cmd = await startAntigravityBuild(brief, secJob, opts.images);
-      sections.push({ name: plan.sections[i9].name, jobId: secJob, ssmCommandId: cmd });
-    }
-  } catch (e9) {
-    console.warn(`[parallel] could not start all sections (${e9?.message || e9}); falling back to a single build`);
-    return null;
-  }
-  return {
-    status: "continue",
-    continuation: { kind: "parallel", phase: "sections", jobId: opts.jobId, sections },
-    progress: `Building ${sections.length} parts in parallel: ${sections.map((s3) => s3.name).join(", ")}...`,
-    mcpSessionId: opts.jobId
-  };
-}
-function sectionLine(s3, live) {
-  if (s3.error) return `${s3.name} \u2717`;
-  if (s3.done) return `${s3.name} \u2713${typeof s3.count === "number" ? ` (${s3.count.toLocaleString()})` : ""}`;
-  const l5 = live[s3.jobId];
-  if (l5?.queue) return `${s3.name} queued`;
-  return `${s3.name}${typeof l5?.count === "number" && l5.count > 0 ? ` ${l5.count.toLocaleString()}` : ""}`;
-}
-async function pollParallelBuild(continuation) {
-  const jobId = continuation.jobId;
-  if (continuation.phase === "merge") {
-    const r9 = await pollAntigravityBuild(continuation.ssmCommandId, jobId);
-    if (!r9.done) {
-      return { status: "continue", continuation, progress: `Merging ${continuation.parts} parts into one model...`, mcpSessionId: jobId };
-    }
-    if (r9.error || !r9.ifcUrl) return { status: "error", error: `Merging the parts failed: ${r9.error || "no model produced"}`, mcpSessionId: jobId };
-    return { status: "success", ifc_url: r9.ifcUrl, element_count: r9.elementCount, file_size: r9.fileSize, mcpSessionId: jobId };
-  }
-  const sections = continuation.sections.map((s3) => ({ ...s3 }));
-  const live = {};
-  await Promise.all(sections.filter((s3) => !s3.done && !s3.error).map(async (s3) => {
-    try {
-      const r9 = await pollAntigravityBuild(s3.ssmCommandId, s3.jobId);
-      if (!r9.done) {
-        live[s3.jobId] = { count: r9.elementCount, queue: r9.queuePosition };
-        return;
-      }
-      if (r9.error || !r9.ifcUrl) {
-        s3.error = r9.error || "no model produced";
-        return;
-      }
-      s3.done = true;
-      s3.url = r9.ifcUrl;
-      s3.count = r9.elementCount;
-    } catch (e9) {
-      console.warn(`[parallel] poll of ${s3.jobId} failed: ${e9?.message || e9}`);
-    }
-  }));
-  const failed = sections.filter((s3) => s3.error);
-  if (failed.length) {
-    return { status: "error", error: `Part "${failed[0].name}" failed: ${failed[0].error}. Try again, or turn off Fast build.`, mcpSessionId: jobId };
-  }
-  if (sections.every((s3) => s3.done && s3.url)) {
-    try {
-      const mergeCmd = await startMergeJob(jobId, sections.map((s3) => s3.url));
-      return {
-        status: "continue",
-        continuation: { kind: "parallel", phase: "merge", jobId, ssmCommandId: mergeCmd, parts: sections.length },
-        progress: `All ${sections.length} parts built. Merging into one model...`,
-        mcpSessionId: jobId
-      };
-    } catch (e9) {
-      return { status: "error", error: `Could not start merging the parts: ${e9?.message || e9}`, mcpSessionId: jobId };
-    }
-  }
-  const doneN = sections.filter((s3) => s3.done).length;
-  return {
-    status: "continue",
-    continuation: { ...continuation, sections },
-    progress: `Building ${sections.length} parts in parallel (${doneN} of ${sections.length} done): ${sections.map((s3) => sectionLine(s3, live)).join(" \xB7 ")}`,
-    mcpSessionId: jobId
-  };
 }
 
 // ../supabase/functions/_shared/design_stages.ts
@@ -97372,9 +97122,6 @@ result = h.create_box(extents=[${l5}, ${w}, ${h9}], pos=[${x}, ${y}, ${z}], rot_
     const useOpenHands = getEnv2("USE_OPENHANDS_ENGINE") === "true";
     if (useAntigravity && !payload3.plan?.is_edit) {
       const continuation2 = payload3.plan?.continuation;
-      if (continuation2?.kind === "parallel") {
-        return await pollParallelBuild(continuation2);
-      }
       if (continuation2?.kind === "antigravity") {
         const result = await pollAntigravityBuild(continuation2.ssmCommandId, continuation2.jobId);
         if (!result.done) return { status: "continue", continuation: continuation2, progress: result.progressMessage, queuePosition: result.queuePosition, mcpSessionId: continuation2.jobId };
@@ -97503,10 +97250,6 @@ When finished: call get_scene_info to confirm the total element count, run the c
         const editBrief = buildEditBrief({ request: userBrief, stage, projectBrief: payload3.plan?.project_brief, imageSection, specPriorityRule: SPEC_PRIORITY_RULE });
         const editCommandId = await startAntigravityBuild(editBrief, jobId, images, { baseIfcUrl });
         return { status: "continue", continuation: { kind: "antigravity", ssmCommandId: editCommandId, jobId }, progress: "Loading your model...", mcpSessionId: jobId };
-      }
-      if (payload3.plan?.parallel === true && !stage && !isSingleElement) {
-        const par = await startParallelBuild({ jobId, userBrief, images, imageSection, useSubagents: payload3.plan?.subagents !== false });
-        if (par) return par;
       }
       const brief = stage === "massing" ? buildStageOneBrief({ request: userBrief, imageSection, specPriorityRule: SPEC_PRIORITY_RULE }) : isSingleElement ? singleElementBrief : fullStructureBrief;
       const commandId = await startAntigravityBuild(brief, jobId, images);
