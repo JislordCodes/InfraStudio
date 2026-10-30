@@ -1,6 +1,6 @@
 /**
  * Routes a new-build brief to the Antigravity CLI ("agy") - a real agentic
- * coding CLI driving Gemini 3.8 Flash High via the user's own Antigravity Pro
+ * coding CLI driving Gemini 4 Argon High via the user's own Antigravity Pro
  * subscription - running headless on the EC2 MCP box via AWS SSM Run Command,
  * as an alternative to this pipeline's own direct-model orchestration and to
  * the (dormant) OpenHands/Token Harbor path in openhands_agent.ts.
@@ -26,7 +26,7 @@ import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
 const INSTANCE_ID = "i-006cf1785c4abbb6d";
 const REGION = "us-east-1";
-const AGY_MODEL = "gemini-3.8-flash-high";
+const AGY_MODEL = "gemini-4-argon-high";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
 // see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
@@ -660,7 +660,7 @@ mkdir -p /root/agy_oneshot/home/.gemini
 [ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
 echo "${b64(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
 cd /root/agy_oneshot/work
-HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model gemini-3.8-flash-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model gemini-4-argon-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
 rm -f /root/agy_oneshot/${id}.txt
 `;
   const res = await ssmClient.send(new SendCommandCommand({

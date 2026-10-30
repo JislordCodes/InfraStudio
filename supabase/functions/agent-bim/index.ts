@@ -738,7 +738,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
 
     // Antigravity routing (new builds only, toggled by USE_ANTIGRAVITY_ENGINE):
     // hands the raw brief to the Antigravity CLI ("agy") - a real agentic
-    // coding CLI driving Gemini 3.8 Flash High via the user's own Antigravity
+    // coding CLI driving Gemini 4 Argon High via the user's own Antigravity
     // Pro subscription - headless on the EC2 MCP box via SSM, the same
     // deployment shape as the OpenHands path below but on infrastructure that
     // is actually confirmed working end-to-end this session (real materials
