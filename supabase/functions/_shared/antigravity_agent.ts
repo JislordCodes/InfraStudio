@@ -305,6 +305,28 @@ except Exception:
     resp = content
 
 url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
+# The agent sometimes finishes its work and exports but forgets to quote the model
+# link in its final message (seen on edits), which used to turn a good build into an
+# error. The link isn't needed from the agent: ask this slot's MCP server to export
+# the current scene and read file_url from its JSON reply.
+if not url_match:
+    try:
+        _port = os.environ.get("SLOT_PORT")
+        _req = _ur.Request(
+            f"http://127.0.0.1:{_port}/mcp",
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "export_ifc", "arguments": {}}}).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+        )
+        with _ur.urlopen(_req, timeout=120) as _resp:
+            _body = json.loads(_resp.read().decode())
+        for _item in _body.get("result", {}).get("content", []) or []:
+            if isinstance(_item, dict) and "text" in _item:
+                _fu = json.loads(_item["text"]).get("file_url")
+                if _fu:
+                    resp = resp + "\\n" + _fu
+        url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
+    except Exception:
+        pass
 size_match = re.search(r'([\\d,]+)\\s*bytes', resp)
 count_match = re.search(r'[Tt]otal[^:]*:\\s*\\**\\s*([\\d,]+)', resp)
 # CLASH_REPORT:{...} is printed by the clash-check code agy runs and ends up

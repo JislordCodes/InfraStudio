@@ -108,7 +108,7 @@ The change requested:
 
 ${request}${imageSection}
 
-When finished, call export_ifc.`;
+When finished, call export_ifc, then end your final message with the exact model link (file_url) that export_ifc returned.`;
 }
 
 /** Brief for the first stage of a staged build: a normal new build, restricted to massing. */
@@ -128,5 +128,5 @@ First, call initialize_project to reset the MCP scene to a fresh IFC4 state. The
 
 ${request}${imageSection}
 
-When finished: call get_scene_info to confirm the model, then call export_ifc.`;
+When finished: call get_scene_info to confirm the model, then call export_ifc, then end your final message with the exact model link (file_url) that export_ifc returned.`;
 }
