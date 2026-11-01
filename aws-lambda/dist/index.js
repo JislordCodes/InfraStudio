@@ -95764,7 +95764,7 @@ async function jevSafe(state3, questions, timeoutMs = 5e3) {
 // ../supabase/functions/_shared/antigravity_agent.ts
 var INSTANCE_ID2 = "i-006cf1785c4abbb6d";
 var REGION2 = "us-east-1";
-var AGY_MODEL = "gemini-4-argon-high";
+var AGY_MODEL = "gemini-3.8-flash-high";
 var STATUS_BUCKET = "infrastudio-ifc-models-us-east-1";
 var ssmClient2 = new import_client_ssm2.SSMClient({ region: REGION2 });
 function b642(s3) {
@@ -96247,7 +96247,7 @@ mkdir -p /root/agy_oneshot/home/.gemini
 [ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
 echo "${b642(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
 cd /root/agy_oneshot/work
-HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1e3) - 10)} agy --model gemini-4-argon-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1e3) - 15)}s 2>/dev/null < /dev/null
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1e3) - 10)} agy --model gemini-3.8-flash-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1e3) - 15)}s 2>/dev/null < /dev/null
 rm -f /root/agy_oneshot/${id}.txt
 `;
   const res = await ssmClient2.send(new import_client_ssm2.SendCommandCommand({
