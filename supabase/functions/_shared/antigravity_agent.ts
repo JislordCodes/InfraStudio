@@ -26,7 +26,7 @@ import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
 const INSTANCE_ID = "i-006cf1785c4abbb6d";
 const REGION = "us-east-1";
-const AGY_MODEL = "claude-sonnet-5-5-high";
+const AGY_MODEL = "gemini-3.8-flash-high";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
 // see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
@@ -682,7 +682,7 @@ mkdir -p /root/agy_oneshot/home/.gemini
 [ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
 echo "${b64(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
 cd /root/agy_oneshot/work
-HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model claude-sonnet-5-5-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model gemini-3.8-flash-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
 rm -f /root/agy_oneshot/${id}.txt
 `;
   const res = await ssmClient.send(new SendCommandCommand({
