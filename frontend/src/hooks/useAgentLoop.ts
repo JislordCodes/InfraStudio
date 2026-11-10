@@ -1,3 +1,4 @@
+import { BACKEND_BASE } from "../lib/backend";
 
 /**
  * Client-side agentic loop.
@@ -6,7 +7,7 @@
  */
 
 // ══ CONFIG ══
-const EDGE_PROXY_URL = (import.meta.env.VITE_EDGE_PROXY_BASE ? `${import.meta.env.VITE_EDGE_PROXY_BASE}/gemini-chat` : "https://56-228-86-56.nip.io/gemini-chat");
+const EDGE_PROXY_URL = `${BACKEND_BASE}/gemini-chat`;
 const MAX_TURNS = 25;
 
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
