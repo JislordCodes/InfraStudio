@@ -6,7 +6,7 @@
       "headers": { "X-Robots-Tag": "noindex, nofollow", "Cache-Control": "no-store" },
       "dest": "/dashboard.html"
     },
-    { "src": "/studios", "dest": "https://infra-studio-z3xc.vercel.app/studios" },
-    { "src": "/studios/(.*)", "dest": "https://infra-studio-z3xc.vercel.app/studios/$1" }
+    { "src": "/studios", "dest": "https://infra-studio.vercel.app/studios" },
+    { "src": "/studios/(.*)", "dest": "https://infra-studio.vercel.app/studios/$1" }
   ]
 }

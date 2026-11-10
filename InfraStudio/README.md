@@ -68,7 +68,7 @@ addresses once people start signing up — don't commit it.
 ## Notes
 
 - **"Try Now"** links out to the live prototype at
-  `https://infra-studio-z3xc.vercel.app`.
+  `https://infra-studio.vercel.app/studios`.
 - No fabricated metrics, logos, testimonials, or traction claims are used,
   per the product's current working-prototype stage.
 
