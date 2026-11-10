@@ -34,7 +34,7 @@ dependencies = [
     "tqdm>=4.66.0",
     
     # Standalone MCP client support
-    "mcp>=1.0.0",
+    "mcp>=1.14.1,<2",
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",

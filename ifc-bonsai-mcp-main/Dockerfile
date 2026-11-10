@@ -45,8 +45,7 @@ COPY . .
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -e . && \
     pip install --no-cache-dir \
-        "mcp>=1.0.0" \
-        fastmcp \
+        "mcp>=1.14.1,<2" \
         sentence-transformers \
         chromadb \
         fastapi \
@@ -101,6 +100,12 @@ RUN mkdir -p ${BLENDER_ADDONS_DIR} && \
     # Step 3: Install ALL wheels (including dependencies like 'bcf' and 'ifcopenshell')
     # into Blender's own Python interpreter so they are available as platform libraries.
     # We remove --no-index to allow fetching missing secondary dependencies (like pydantic) from PyPI.
+    # Post-release wheels are named "...-0.8.5-post1-py311-..." which Blender's bundled pip rejects
+    # ("Invalid build number: post1"). Rename them to the PEP 427 form "...-0.8.5.post1-py311-...".
+    for w in /tmp/bonsai_ext/bonsai/wheels/*-post[0-9]*-py*.whl; do \
+      [ -e "$w" ] || continue; \
+      mv "$w" "$(echo "$w" | sed -E 's/-(post[0-9]+)-py/.\1-py/')"; \
+    done && \
     ${BLENDER_PYTHON} -m pip install --find-links=/tmp/bonsai_ext/bonsai/wheels /tmp/bonsai_ext/bonsai/wheels/*.whl && \
     ${BLENDER_PYTHON} -m pip install --no-cache-dir "numpy<2.0.0" && \
     echo "=== Step 3 done — dependencies installed via pip ===" && \

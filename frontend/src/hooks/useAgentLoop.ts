@@ -6,7 +6,7 @@
  */
 
 // ══ CONFIG ══
-const EDGE_PROXY_URL = (import.meta.env.VITE_EDGE_PROXY_BASE ? `${import.meta.env.VITE_EDGE_PROXY_BASE}/gemini-chat` : "https://xdii2dngnrumglsuv74fv5awz40rgwrg.lambda-url.us-east-1.on.aws/gemini-chat");
+const EDGE_PROXY_URL = (import.meta.env.VITE_EDGE_PROXY_BASE ? `${import.meta.env.VITE_EDGE_PROXY_BASE}/gemini-chat` : "https://vqybxhybuhje7zrqgqnbv5cbrq0osnak.lambda-url.eu-north-1.on.aws/gemini-chat");
 const MAX_TURNS = 25;
 
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZW9pbHZxZXl1aGVzbGtmaGpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzNDM2MjEsImV4cCI6MjA5MzkxOTYyMX0.f9ewqw57exbpvMcG_SUgXPytztDC08oeSFe3DTC9atc";
