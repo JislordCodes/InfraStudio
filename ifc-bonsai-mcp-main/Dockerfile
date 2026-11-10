@@ -124,6 +124,9 @@ RUN python scripts/init_knowledge_base.py \
         --cache-dir /app/.cache/huggingface \
         --persist-dir /app/.cache/chromadb
 
+# S3 export (supabase_uploader.py) needs boto3; the instance role supplies credentials.
+RUN pip install --no-cache-dir boto3
+
 # ── Setup Runtime ──────────────────────────────────────────────────────────
 RUN chmod +x /app/docker/start.sh
 EXPOSE 8000
