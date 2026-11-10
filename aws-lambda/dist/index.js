@@ -95432,8 +95432,8 @@ if (typeof Deno !== "undefined" && Deno.serve) {
 
 // ../supabase/functions/_shared/openhands_agent.ts
 var import_client_ssm = __toESM(require_dist_cjs32());
-var INSTANCE_ID = "i-006cf1785c4abbb6d";
-var REGION = "us-east-1";
+var INSTANCE_ID = "i-0ba791406b4ad446d";
+var REGION = "eu-north-1";
 var LLM_SECRET_ID = "infrastudio/tokenharbor-api-key";
 var LLM_ENDPOINT_BASE_URL = "https://tokenharbor.ai/v1";
 var LLM_MODEL_NAME = "openai/deepseek-v4.1-flash:free";
@@ -95762,10 +95762,10 @@ async function jevSafe(state3, questions, timeoutMs = 5e3) {
 }
 
 // ../supabase/functions/_shared/antigravity_agent.ts
-var INSTANCE_ID2 = "i-006cf1785c4abbb6d";
-var REGION2 = "us-east-1";
+var INSTANCE_ID2 = "i-0ba791406b4ad446d";
+var REGION2 = "eu-north-1";
 var AGY_MODEL = "gemini-3.8-flash-high";
-var STATUS_BUCKET = "infrastudio-ifc-models-us-east-1";
+var STATUS_BUCKET = "infrastudio-ifc-models-eu-north-1";
 var ssmClient2 = new import_client_ssm2.SSMClient({ region: REGION2 });
 function b642(s3) {
   return typeof Buffer !== "undefined" ? Buffer.from(s3, "utf-8").toString("base64") : btoa(s3);
@@ -95856,7 +95856,7 @@ mkdir -p /root/agy_jobs /root/agy_jobs/queue
 STATUS_KEY="builds/${safeId}/status.json"
 write_status() {
   echo "$1" > /tmp/status_${safeId}.json
-  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region us-east-1 --content-type application/json >/dev/null 2>&1
+  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region ${REGION2} --content-type application/json >/dev/null 2>&1
 }
 # "starting", NOT "queued": this write happens before the build has even tried to
 # grab a slot, so calling it queued told visitors "high demand - you're #1 in line"
@@ -95935,7 +95935,7 @@ STATUS_KEY = "builds/${safeId}/status.json"
 def push_status(obj):
     try:
         subprocess.run(
-            ["aws", "s3", "cp", "-", f"s3://{STATUS_BUCKET}/{STATUS_KEY}", "--region", "us-east-1", "--content-type", "application/json"],
+            ["aws", "s3", "cp", "-", f"s3://{STATUS_BUCKET}/{STATUS_KEY}", "--region", "${REGION2}", "--content-type", "application/json"],
             input=json.dumps(obj).encode(), capture_output=True,
         )
     except Exception:
@@ -95971,7 +95971,7 @@ def final_element_count():
 # unique-key copy below has succeeded.
 def s3_object_size(bucket, key):
     try:
-        r = subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", "us-east-1"], capture_output=True, text=True)
+        r = subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", "${REGION2}"], capture_output=True, text=True)
         if r.returncode == 0:
             return json.loads(r.stdout).get("ContentLength")
     except Exception:
@@ -96044,9 +96044,9 @@ if url_match:
     if m:
         bucket, shared_key = m.group(1), m.group(2)
         unique_key = 'models/${safeId}/model.ifc'
-        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', 'us-east-1'], capture_output=True, text=True)
+        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION2}'], capture_output=True, text=True)
         if r.returncode == 0:
-            final_url = f'https://{bucket}.s3.us-east-1.amazonaws.com/{unique_key}?t={int(time.time())}'
+            final_url = f'https://{bucket}.s3.${REGION2}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
     final_count = final_element_count()
     if final_count is None and count_match:
@@ -96110,7 +96110,7 @@ async function fetchLiveElementCount() {
 async function fetchBuildStatus(jobId) {
   try {
     const safeId = safeJobId(jobId);
-    const url = `https://${STATUS_BUCKET}.s3.us-east-1.amazonaws.com/builds/${safeId}/status.json?t=${Date.now()}`;
+    const url = `https://${STATUS_BUCKET}.s3.${REGION2}.amazonaws.com/builds/${safeId}/status.json?t=${Date.now()}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(4e3) });
     if (!res.ok) return void 0;
     return await res.json();
@@ -96475,7 +96475,7 @@ function stageInstruction(stage) {
   return STAGE_INSTRUCTIONS[stage];
 }
 var ALLOWED_MODEL_HOSTS = [
-  /^infrastudio-ifc-models-us-east-1\.s3\.us-east-1\.amazonaws\.com$/,
+  /^infrastudio-ifc-models-eu-north-1\.s3\.eu-north-1\.amazonaws\.com$/,
   /^pzeoilvqeyuheslkfhjq\.supabase\.co$/
 ];
 function validateBaseIfcUrl(raw) {

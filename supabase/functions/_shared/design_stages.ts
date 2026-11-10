@@ -56,7 +56,7 @@ export function stageInstruction(stage: StageId): string {
  *  instance credentials, so an arbitrary URL would be a server-side request
  *  forgery risk). Our own S3 model bucket and the Supabase storage project. */
 const ALLOWED_MODEL_HOSTS = [
-  /^infrastudio-ifc-models-us-east-1\.s3\.us-east-1\.amazonaws\.com$/,
+  /^infrastudio-ifc-models-eu-north-1\.s3\.eu-north-1\.amazonaws\.com$/,
   /^pzeoilvqeyuheslkfhjq\.supabase\.co$/,
 ];
 

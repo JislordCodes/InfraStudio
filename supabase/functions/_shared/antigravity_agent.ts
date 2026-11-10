@@ -24,8 +24,8 @@ import { getMcpUrl, extractText } from "./shared.ts";
 import { extractClashReport, type ClashReport } from "./clash_check.ts";
 import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
-const INSTANCE_ID = "i-006cf1785c4abbb6d";
-const REGION = "us-east-1";
+const INSTANCE_ID = "i-0ba791406b4ad446d";
+const REGION = "eu-north-1";
 const AGY_MODEL = "gemini-3.8-flash-high";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
@@ -33,7 +33,7 @@ const AGY_MODEL = "gemini-3.8-flash-high";
 // touching each other's IFC scene. A 4th+ concurrent build waits in a FIFO
 // queue on the box itself (see buildScript's ticket/slot-lock logic) instead
 // of every build serializing behind one global lock like before.
-const STATUS_BUCKET = "infrastudio-ifc-models-us-east-1";
+const STATUS_BUCKET = "infrastudio-ifc-models-eu-north-1";
 
 const ssmClient = new SSMClient({ region: REGION });
 
@@ -174,7 +174,7 @@ mkdir -p /root/agy_jobs /root/agy_jobs/queue
 STATUS_KEY="builds/${safeId}/status.json"
 write_status() {
   echo "$1" > /tmp/status_${safeId}.json
-  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region us-east-1 --content-type application/json >/dev/null 2>&1
+  aws s3 cp /tmp/status_${safeId}.json "s3://${STATUS_BUCKET}/$STATUS_KEY" --region ${REGION} --content-type application/json >/dev/null 2>&1
 }
 # "starting", NOT "queued": this write happens before the build has even tried to
 # grab a slot, so calling it queued told visitors "high demand - you're #1 in line"
@@ -253,7 +253,7 @@ STATUS_KEY = "builds/${safeId}/status.json"
 def push_status(obj):
     try:
         subprocess.run(
-            ["aws", "s3", "cp", "-", f"s3://{STATUS_BUCKET}/{STATUS_KEY}", "--region", "us-east-1", "--content-type", "application/json"],
+            ["aws", "s3", "cp", "-", f"s3://{STATUS_BUCKET}/{STATUS_KEY}", "--region", "${REGION}", "--content-type", "application/json"],
             input=json.dumps(obj).encode(), capture_output=True,
         )
     except Exception:
@@ -289,7 +289,7 @@ def final_element_count():
 # unique-key copy below has succeeded.
 def s3_object_size(bucket, key):
     try:
-        r = subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", "us-east-1"], capture_output=True, text=True)
+        r = subprocess.run(["aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", "${REGION}"], capture_output=True, text=True)
         if r.returncode == 0:
             return json.loads(r.stdout).get("ContentLength")
     except Exception:
@@ -362,9 +362,9 @@ if url_match:
     if m:
         bucket, shared_key = m.group(1), m.group(2)
         unique_key = 'models/${safeId}/model.ifc'
-        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', 'us-east-1'], capture_output=True, text=True)
+        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION}'], capture_output=True, text=True)
         if r.returncode == 0:
-            final_url = f'https://{bucket}.s3.us-east-1.amazonaws.com/{unique_key}?t={int(time.time())}'
+            final_url = f'https://{bucket}.s3.${REGION}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
     final_count = final_element_count()
     if final_count is None and count_match:
@@ -458,7 +458,7 @@ interface BuildStatus {
 async function fetchBuildStatus(jobId: string): Promise<BuildStatus | undefined> {
   try {
     const safeId = safeJobId(jobId);
-    const url = `https://${STATUS_BUCKET}.s3.us-east-1.amazonaws.com/builds/${safeId}/status.json?t=${Date.now()}`;
+    const url = `https://${STATUS_BUCKET}.s3.${REGION}.amazonaws.com/builds/${safeId}/status.json?t=${Date.now()}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) return undefined;
     return await res.json();
