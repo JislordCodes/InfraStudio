@@ -1014,6 +1014,39 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     }
   };
 
+  // A model lives on a bucket hostname such as <bucket>.s3.<region>.amazonaws.com. That name is
+  // new to most networks, and a DNS lookup that times out right when a build finishes shows up as
+  // "Failed to fetch" and an empty scene. So retry, and alternate with the shared path-style S3
+  // address (s3.<region>.amazonaws.com/<bucket>/...), which every network already has cached.
+  const alternateModelUrl = (url: string): string | null => {
+    try {
+      const u = new URL(url);
+      const m = u.hostname.match(/^([a-z0-9.-]+)\.s3\.([a-z0-9-]+)\.amazonaws\.com$/i);
+      if (!m) return null;
+      return `https://s3.${m[2]}.amazonaws.com/${m[1]}${u.pathname}${u.search}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const fetchModel = async (url: string): Promise<Response> => {
+    const alt = alternateModelUrl(url);
+    const candidates = alt ? [url, alt, url, alt, url, alt] : [url, url, url, url];
+    let lastError: unknown = new Error('Failed to fetch');
+    for (let i = 0; i < candidates.length; i++) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * i, 4000)));
+      try {
+        const res = await fetch(candidates[i]);
+        if (res.ok) return res;
+        lastError = new Error(`HTTP ${res.status}: ${res.statusText}`);
+        if (res.status >= 400 && res.status < 500) break; // the file is not there or not allowed, retrying cannot help
+      } catch (error) {
+        lastError = error; // network or DNS failure, try the next address
+      }
+    }
+    throw lastError;
+  };
+
   const loadFromUrl = async (url: string) => {
     if (!ifcLoaderRef.current) return;
     // Already showing (or loading) exactly this model - nothing to do.
@@ -1032,8 +1065,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       }
 
       console.log(`Fetching IFC from URL: ${url}`);
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const response = await fetchModel(url);
       const data = new Uint8Array(await response.arrayBuffer());
       if (token !== loadTokenRef.current) return; // superseded while downloading
       console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);

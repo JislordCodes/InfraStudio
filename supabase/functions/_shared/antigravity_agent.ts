@@ -154,11 +154,36 @@ rm -f "$BASE_FILE"
 `;
 }
 
+/**
+ * New-build mode: shell lines that reset THIS slot's MCP scene to a fresh, empty IFC4 project
+ * before agy starts, so nothing from the slot's previous build can leak into the new model.
+ */
+function buildResetSceneScript(): string {
+  return `
+# ── New build: start this slot from an empty project ───────────────────────
+RESET_OK=0
+for ATTEMPT in 1 2 3; do
+  if curl -s -m 90 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"initialize_project","arguments":{"project_name":"InfraStudio Model"}}}' | grep -q 'Successfully initialized'; then
+    RESET_OK=1
+    break
+  fi
+  sleep 3
+done
+if [ "$RESET_OK" -ne 1 ]; then
+  write_status '{"status":"error","error":"Could not prepare an empty scene for this build."}'
+  exit 1
+fi
+`;
+}
+
 function buildScript(brief: string, jobId: string, images: ReferenceImage[] = [], baseIfcUrl?: string): string {
   const safeId = safeJobId(jobId);
   const briefB64 = b64(brief);
   const imageFetch = buildImageFetchScript(jobId, images);
-  const loadBaseModel = baseIfcUrl ? buildLoadBaseModelScript(safeId, baseIfcUrl) : "";
+  // Edit builds load the existing model into the slot. New builds must start from an empty project:
+  // a slot keeps its last model in memory, and relying on the agent to call initialize_project
+  // let a cheaper model skip it, so a "wall" came back inside the previous build's shed.
+  const loadBaseModel = baseIfcUrl ? buildLoadBaseModelScript(safeId, baseIfcUrl) : buildResetSceneScript();
   const addDirFlag = images.length ? `--add-dir ${refImageDir(jobId)}` : "";
   const inner = `#!/bin/bash
 export HOME=/root
