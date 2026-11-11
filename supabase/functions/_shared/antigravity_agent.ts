@@ -24,7 +24,7 @@ import { getMcpUrl, extractText } from "./shared.ts";
 import { extractClashReport, type ClashReport } from "./clash_check.ts";
 import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
-const INSTANCE_ID = "i-0ba791406b4ad446d";
+const INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 const REGION = "eu-north-1";
 const AGY_MODEL = "gemini-3.8-flash-high";
 
@@ -33,7 +33,7 @@ const AGY_MODEL = "gemini-3.8-flash-high";
 // touching each other's IFC scene. A 4th+ concurrent build waits in a FIFO
 // queue on the box itself (see buildScript's ticket/slot-lock logic) instead
 // of every build serializing behind one global lock like before.
-const STATUS_BUCKET = "infrastudio-ifc-models-eu-north-1";
+const STATUS_BUCKET = "infrastudio-ifc-models-343262620843";
 
 const ssmClient = new SSMClient({ region: REGION });
 

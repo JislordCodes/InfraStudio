@@ -3,7 +3,7 @@
 # Run from the repo root in Git Bash:  bash ec2/deploy_api.sh
 # Needs the SSH key at C:/Users/david/agy-login/boxkey (override with BOXKEY=...).
 set -e
-IP="${BOX_IP:-56.228.86.56}"
+IP="${BOX_IP:-13.63.78.238}"
 KEY="${BOXKEY:-/c/Users/david/agy-login/boxkey}"
 SSHO="-i $KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
 

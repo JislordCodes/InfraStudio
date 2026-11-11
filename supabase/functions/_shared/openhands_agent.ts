@@ -21,7 +21,7 @@
  */
 import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 
-const INSTANCE_ID = "i-0ba791406b4ad446d";
+const INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 const REGION = "eu-north-1";
 const LLM_SECRET_ID = "infrastudio/tokenharbor-api-key";
 const LLM_ENDPOINT_BASE_URL = "https://tokenharbor.ai/v1";

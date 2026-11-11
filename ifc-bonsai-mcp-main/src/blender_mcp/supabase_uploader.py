@@ -14,7 +14,7 @@ from urllib.error import URLError, HTTPError
 
 logger = logging.getLogger("StorageUploader")
 
-S3_BUCKET = os.environ.get("S3_BUCKET", "infrastudio-ifc-models-eu-north-1")
+S3_BUCKET = os.environ.get("S3_BUCKET", "infrastudio-ifc-models-343262620843")
 S3_REGION = os.environ.get("AWS_REGION", "eu-north-1")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://pzeoilvqeyuheslkfhjq.supabase.co")

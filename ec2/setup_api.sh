@@ -6,7 +6,7 @@
 #   /opt/infrastudio/api/index.js    the esbuild bundle (aws-lambda/dist/index.js)
 #   /opt/infrastudio/api/server.js   ec2/api/server.js
 #   /etc/infrastudio-api.env         KEY=value lines (MCP_URL, USE_ANTIGRAVITY_ENGINE, EXPLABS_API_KEY ...)
-# Usage: setup_api.sh <public-hostname>     e.g. 56-228-86-56.nip.io
+# Usage: setup_api.sh <public-hostname>     e.g. 13-63-78-238.nip.io
 set -e
 HOSTNAME_PUBLIC="${1:?usage: setup_api.sh <public-hostname>}"
 
