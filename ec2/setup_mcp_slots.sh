@@ -65,6 +65,10 @@ for N in 2 3; do
     [ "$b" = config ] && continue
     ln -sfn "$f" "$H/.gemini/$b"
   done
+  # Always link the shared login state, even before the one-time login has happened
+  # (a dangling link is fine and starts working once /root/.gemini/antigravity-cli exists).
+  rm -rf "$H/.gemini/antigravity-cli"
+  ln -sfn /root/.gemini/antigravity-cli "$H/.gemini/antigravity-cli"
   rm -rf "$H/.gemini/config"
   cp -r /root/.gemini/config "$H/.gemini/config"
   sed -i "s#localhost:8000/mcp#localhost:$PORT/mcp#" "$H/.gemini/config/mcp_config.json"

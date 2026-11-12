@@ -26,7 +26,8 @@ import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
 const INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 const REGION = "eu-north-1";
-const AGY_MODEL = "gemini-4-hydrogen-high";
+const AGY_MODEL = "gemini-4-hydrogen-xhigh";
+const CLARIFY_MODEL = "gemini-4-hydrogen-high";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
 // see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
@@ -139,7 +140,17 @@ code = (
     "print('loaded', len(ifc.by_type('IfcProduct')), 'products', ifc.schema)\\n"
 )
 res = call("execute_ifc_code_tool", {"code": code})
-text = res["result"]["content"][0]["text"]
+def first_text(content):
+    # Slots 2 and 3 wrap the reply in an extra list, so look through nested lists.
+    for it in content:
+        if isinstance(it, list):
+            t = first_text(it)
+            if t is not None:
+                return t
+        elif isinstance(it, dict) and "text" in it:
+            return it["text"]
+    return None
+text = first_text(res["result"]["content"])
 parsed = json.loads(text)
 if parsed.get("status") != "success":
     print(text[:600])
@@ -264,7 +275,7 @@ ${loadBaseModel}
 ) &
 HEARTBEAT_PID=$!
 
-setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort high -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort xhigh -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
 wait $AGY_PID
 kill $HEARTBEAT_PID 2>/dev/null
@@ -300,7 +311,7 @@ def final_element_count():
         )
         with _ur.urlopen(req, timeout=8) as resp:
             body = json.loads(resp.read().decode())
-        for item in body.get("result", {}).get("content", []) or []:
+        for item in _flat(body.get("result", {}).get("content", []) or []):
             if isinstance(item, dict) and "text" in item:
                 parsed = json.loads(item["text"])
                 if isinstance(parsed.get("count"), int):
@@ -308,6 +319,14 @@ def final_element_count():
     except Exception:
         pass
     return None
+
+# Slots 2 and 3 wrap MCP replies in an extra list; flatten so every slot parses alike.
+def _flat(items):
+    for it in items:
+        if isinstance(it, list):
+            yield from _flat(it)
+        else:
+            yield it
 
 # Authoritative file size, straight off the object actually sitting in S3 -
 # real bytes, not agy's own text description of them. Only callable once the
@@ -344,7 +363,7 @@ if not url_match:
         )
         with _ur.urlopen(_req, timeout=120) as _resp:
             _body = json.loads(_resp.read().decode())
-        for _item in _body.get("result", {}).get("content", []) or []:
+        for _item in _flat(_body.get("result", {}).get("content", []) or []):
             if isinstance(_item, dict) and "text" in _item:
                 _fu = json.loads(_item["text"]).get("file_url")
                 if _fu:
@@ -707,7 +726,7 @@ mkdir -p /root/agy_oneshot/home/.gemini
 [ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
 echo "${b64(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
 cd /root/agy_oneshot/work
-HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model ${AGY_MODEL} -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1000) - 10)} agy --model ${CLARIFY_MODEL} -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1000) - 15)}s 2>/dev/null < /dev/null
 rm -f /root/agy_oneshot/${id}.txt
 `;
   const res = await ssmClient.send(new SendCommandCommand({

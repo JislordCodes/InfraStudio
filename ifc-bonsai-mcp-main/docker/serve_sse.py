@@ -230,9 +230,17 @@ async def mcp_asgi_app(scope, receive, send):
                         tool_name = tool_name[4:]
                     # mcp.call_tool() is the FastMCP public async method.
                     # Internally handles context injection & result conversion.
-                    content = await mcp.call_tool(tool_name, tool_args)
+                    res = await mcp.call_tool(tool_name, tool_args)
+                    # Newer mcp versions return (content_blocks, structured_result);
+                    # send only the content blocks so clients see a flat list.
+                    if isinstance(res, (tuple, list)) and len(res) > 0 and isinstance(res[0], list):
+                        blocks = res[0]
+                    elif isinstance(res, list):
+                        blocks = res
+                    else:
+                        blocks = [res]
                     result_data = {
-                        "content": [_to_json_safe(c) for c in content],
+                        "content": [_to_json_safe(c) for c in blocks],
                         "isError": False,
                     }
 
