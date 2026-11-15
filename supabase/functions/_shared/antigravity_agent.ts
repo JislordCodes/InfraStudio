@@ -342,11 +342,15 @@ def s3_object_size(bucket, key):
 
 with open('/root/agy_jobs/${safeId}.log') as f:
     content = f.read()
+data = {}
 try:
     data = json.loads(content)
     resp = data.get('response', '') or data.get('error', '') or content
 except Exception:
     resp = content
+# agy reports status ERROR when it hit the time limit or crashed. Whatever scene the
+# slot holds then is partial, so it must not be shown as a finished build.
+agy_failed = isinstance(data, dict) and str(data.get('status', '')).upper() == 'ERROR'
 
 url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
 # The agent sometimes finishes its work and exports but forgets to quote the model
@@ -416,18 +420,23 @@ if url_match:
     final_size = authoritative_size
     if final_size is None and size_match:
         final_size = int(size_match.group(1).replace(",", ""))
-    print(f'IFC_URL:{final_url}')
-    if final_size is not None:
-        print(f'FILE_SIZE:{final_size}')
-    if final_count is not None:
-        print(f'ELEMENT_COUNT:{final_count}')
-    push_status({
-        "status": "done",
-        "ifcUrl": final_url,
-        "fileSize": final_size,
-        "elementCount": final_count,
-        "clashReport": clash_json,
-    })
+    if agy_failed and (final_count is None or final_count < 20):
+        err = "The build ran out of time before the model was ready. Try a smaller request, or build it in steps."
+        print(f'BUILD_ERROR:{err}')
+        push_status({"status": "error", "error": err})
+    else:
+        print(f'IFC_URL:{final_url}')
+        if final_size is not None:
+            print(f'FILE_SIZE:{final_size}')
+        if final_count is not None:
+            print(f'ELEMENT_COUNT:{final_count}')
+        push_status({
+            "status": "done",
+            "ifcUrl": final_url,
+            "fileSize": final_size,
+            "elementCount": final_count,
+            "clashReport": clash_json,
+        })
 else:
     err = resp[-500:]
     print(f'BUILD_ERROR:{err}')
