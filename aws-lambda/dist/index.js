@@ -95432,7 +95432,7 @@ if (typeof Deno !== "undefined" && Deno.serve) {
 
 // ../supabase/functions/_shared/openhands_agent.ts
 var import_client_ssm = __toESM(require_dist_cjs32());
-var INSTANCE_ID = "i-0ba791406b4ad446d";
+var INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 var REGION = "eu-north-1";
 var LLM_SECRET_ID = "infrastudio/tokenharbor-api-key";
 var LLM_ENDPOINT_BASE_URL = "https://tokenharbor.ai/v1";
@@ -95762,10 +95762,11 @@ async function jevSafe(state3, questions, timeoutMs = 5e3) {
 }
 
 // ../supabase/functions/_shared/antigravity_agent.ts
-var INSTANCE_ID2 = "i-0ba791406b4ad446d";
+var INSTANCE_ID2 = "i-0fad6ae7f3ef4d4dd";
 var REGION2 = "eu-north-1";
-var AGY_MODEL = "gemini-3.8-flash-high";
-var STATUS_BUCKET = "infrastudio-ifc-models-eu-north-1";
+var AGY_MODEL = "gemini-4-neon-high";
+var CLARIFY_MODEL = "gemini-4-neon-high";
+var STATUS_BUCKET = "infrastudio-ifc-models-343262620843";
 var ssmClient2 = new import_client_ssm2.SSMClient({ region: REGION2 });
 function b642(s3) {
   return typeof Buffer !== "undefined" ? Buffer.from(s3, "utf-8").toString("base64") : btoa(s3);
@@ -95822,7 +95823,17 @@ code = (
     "print('loaded', len(ifc.by_type('IfcProduct')), 'products', ifc.schema)\\n"
 )
 res = call("execute_ifc_code_tool", {"code": code})
-text = res["result"]["content"][0]["text"]
+def first_text(content):
+    # Slots 2 and 3 wrap the reply in an extra list, so look through nested lists.
+    for it in content:
+        if isinstance(it, list):
+            t = first_text(it)
+            if t is not None:
+                return t
+        elif isinstance(it, dict) and "text" in it:
+            return it["text"]
+    return None
+text = first_text(res["result"]["content"])
 parsed = json.loads(text)
 if parsed.get("status") != "success":
     print(text[:600])
@@ -95836,11 +95847,28 @@ fi
 rm -f "$BASE_FILE"
 `;
 }
+function buildResetSceneScript() {
+  return `
+# \u2500\u2500 New build: start this slot from an empty project \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+RESET_OK=0
+for ATTEMPT in 1 2 3; do
+  if curl -s -m 90 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"initialize_project","arguments":{"project_name":"InfraStudio Model"}}}' | grep -q 'Successfully initialized'; then
+    RESET_OK=1
+    break
+  fi
+  sleep 3
+done
+if [ "$RESET_OK" -ne 1 ]; then
+  write_status '{"status":"error","error":"Could not prepare an empty scene for this build."}'
+  exit 1
+fi
+`;
+}
 function buildScript2(brief, jobId, images = [], baseIfcUrl) {
   const safeId = safeJobId(jobId);
   const briefB64 = b642(brief);
   const imageFetch = buildImageFetchScript(jobId, images);
-  const loadBaseModel = baseIfcUrl ? buildLoadBaseModelScript(safeId, baseIfcUrl) : "";
+  const loadBaseModel = baseIfcUrl ? buildLoadBaseModelScript(safeId, baseIfcUrl) : buildResetSceneScript();
   const addDirFlag = images.length ? `--add-dir ${refImageDir(jobId)}` : "";
   const inner = `#!/bin/bash
 export HOME=/root
@@ -95912,9 +95940,14 @@ ${loadBaseModel}
 # Heartbeat: reads the live element count from THIS slot's own MCP server
 # (127.0.0.1 only, never crosses slots) and republishes it to S3 every ~6s so
 # the poller can show live progress. Killed once agy itself finishes.
+#
+# The count comes from the active IFC file the agent builds into, not from
+# get_scene_info. get_scene_info counts Blender objects, and the new-build reset
+# does not clear those, so it stayed frozen at the previous model's total.
+COUNT_REQ='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_ifc_code_tool","arguments":{"code":"print(\\"ELEMS=\\" + str(len(get_ifc_file().by_type(\\"IfcElement\\"))))"}}}'
 (
   while true; do
-    CNT=$(curl -s -m 4 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}' 2>/dev/null | grep -o 'count[^0-9,]*[0-9]*' | grep -o '[0-9]*$' | head -1)
+    CNT=$(curl -s -m 8 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$COUNT_REQ" 2>/dev/null | grep -o 'ELEMS=[0-9]*' | grep -o '[0-9]*$' | head -1)
     if [ -n "$CNT" ]; then write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":$CNT}"; fi
     sleep 6
   done
@@ -95952,19 +95985,29 @@ def final_element_count():
     try:
         req = _ur.Request(
             f"http://127.0.0.1:{port}/mcp",
-            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_info", "arguments": {}}}).encode(),
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "execute_ifc_code_tool", "arguments": {"code": "print('ELEMS=' + str(len(get_ifc_file().by_type('IfcElement'))))"}}}).encode(),
             headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
         )
-        with _ur.urlopen(req, timeout=8) as resp:
+        with _ur.urlopen(req, timeout=20) as resp:
             body = json.loads(resp.read().decode())
-        for item in body.get("result", {}).get("content", []) or []:
+        # Counts the active IFC file, not Blender objects (get_scene_info goes stale
+        # after the new-build reset and reports the previous model's total).
+        for item in _flat(body.get("result", {}).get("content", []) or []):
             if isinstance(item, dict) and "text" in item:
-                parsed = json.loads(item["text"])
-                if isinstance(parsed.get("count"), int):
-                    return parsed["count"]
+                found = re.search(r'ELEMS=(\\d+)', item["text"])
+                if found:
+                    return int(found.group(1))
     except Exception:
         pass
     return None
+
+# Slots 2 and 3 wrap MCP replies in an extra list; flatten so every slot parses alike.
+def _flat(items):
+    for it in items:
+        if isinstance(it, list):
+            yield from _flat(it)
+        else:
+            yield it
 
 # Authoritative file size, straight off the object actually sitting in S3 -
 # real bytes, not agy's own text description of them. Only callable once the
@@ -95980,11 +96023,15 @@ def s3_object_size(bucket, key):
 
 with open('/root/agy_jobs/${safeId}.log') as f:
     content = f.read()
+data = {}
 try:
     data = json.loads(content)
     resp = data.get('response', '') or data.get('error', '') or content
 except Exception:
     resp = content
+# agy reports status ERROR when it hit the time limit or crashed. Whatever scene the
+# slot holds then is partial, so it must not be shown as a finished build.
+agy_failed = isinstance(data, dict) and str(data.get('status', '')).upper() == 'ERROR'
 
 url_match = re.search(r'https://\\S+\\.ifc\\S*', resp)
 # The agent sometimes finishes its work and exports but forgets to quote the model
@@ -96001,7 +96048,7 @@ if not url_match:
         )
         with _ur.urlopen(_req, timeout=120) as _resp:
             _body = json.loads(_resp.read().decode())
-        for _item in _body.get("result", {}).get("content", []) or []:
+        for _item in _flat(_body.get("result", {}).get("content", []) or []):
             if isinstance(_item, dict) and "text" in _item:
                 _fu = json.loads(_item["text"]).get("file_url")
                 if _fu:
@@ -96044,8 +96091,16 @@ if url_match:
     if m:
         bucket, shared_key = m.group(1), m.group(2)
         unique_key = 'models/${safeId}/model.ifc'
-        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION2}'], capture_output=True, text=True)
-        if r.returncode == 0:
+        # A single failed copy used to leave the job pointing at the shared key, which
+        # the next build in this slot then overwrote. Retry before giving up.
+        r = None
+        for _try in range(4):
+            r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION2}'], capture_output=True, text=True)
+            if r.returncode == 0:
+                break
+            print(f'COPY_RETRY:{_try + 1}:{(r.stderr or "")[-200:]}')
+            time.sleep(3)
+        if r is not None and r.returncode == 0:
             final_url = f'https://{bucket}.s3.${REGION2}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
     final_count = final_element_count()
@@ -96054,18 +96109,23 @@ if url_match:
     final_size = authoritative_size
     if final_size is None and size_match:
         final_size = int(size_match.group(1).replace(",", ""))
-    print(f'IFC_URL:{final_url}')
-    if final_size is not None:
-        print(f'FILE_SIZE:{final_size}')
-    if final_count is not None:
-        print(f'ELEMENT_COUNT:{final_count}')
-    push_status({
-        "status": "done",
-        "ifcUrl": final_url,
-        "fileSize": final_size,
-        "elementCount": final_count,
-        "clashReport": clash_json,
-    })
+    if agy_failed and (final_count is None or final_count < 20):
+        err = "The build ran out of time before the model was ready. Try a smaller request, or build it in steps."
+        print(f'BUILD_ERROR:{err}')
+        push_status({"status": "error", "error": err})
+    else:
+        print(f'IFC_URL:{final_url}')
+        if final_size is not None:
+            print(f'FILE_SIZE:{final_size}')
+        if final_count is not None:
+            print(f'ELEMENT_COUNT:{final_count}')
+        push_status({
+            "status": "done",
+            "ifcUrl": final_url,
+            "fileSize": final_size,
+            "elementCount": final_count,
+            "clashReport": clash_json,
+        })
 else:
     err = resp[-500:]
     print(f'BUILD_ERROR:{err}')
@@ -96096,13 +96156,19 @@ async function fetchLiveElementCount() {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
       signal: AbortSignal.timeout(4e3),
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_scene_info", arguments: {} } })
+      // Counts the active IFC file. get_scene_info counts Blender objects and goes
+      // stale after the new-build reset.
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "execute_ifc_code_tool", arguments: { code: "print('ELEMS=' + str(len(get_ifc_file().by_type('IfcElement'))))" } }
+      })
     });
     const json = await res.json();
     const text = extractText(json?.result?.content);
-    if (!text) return void 0;
-    const parsed = JSON.parse(text);
-    return typeof parsed?.count === "number" ? parsed.count : void 0;
+    const found = text?.match(/ELEMS=(\d+)/);
+    return found ? Number(found[1]) : void 0;
   } catch {
     return void 0;
   }
@@ -96247,7 +96313,7 @@ mkdir -p /root/agy_oneshot/home/.gemini
 [ -e /root/agy_oneshot/home/.gemini/config ] || ln -s /root/.gemini/config /root/agy_oneshot/home/.gemini/config
 echo "${b642(prompt)}" | base64 -d > /root/agy_oneshot/${id}.txt
 cd /root/agy_oneshot/work
-HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1e3) - 10)} agy --model gemini-3.8-flash-low -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1e3) - 15)}s 2>/dev/null < /dev/null
+HOME=/root/agy_oneshot/home timeout ${Math.max(20, Math.floor(timeoutMs / 1e3) - 10)} agy --model ${CLARIFY_MODEL} -p "$(cat /root/agy_oneshot/${id}.txt)" --dangerously-skip-permissions --output-format json --print-timeout ${Math.max(15, Math.floor(timeoutMs / 1e3) - 15)}s 2>/dev/null < /dev/null
 rm -f /root/agy_oneshot/${id}.txt
 `;
   const res = await ssmClient2.send(new import_client_ssm2.SendCommandCommand({
@@ -96475,7 +96541,7 @@ function stageInstruction(stage) {
   return STAGE_INSTRUCTIONS[stage];
 }
 var ALLOWED_MODEL_HOSTS = [
-  /^infrastudio-ifc-models-eu-north-1\.s3\.eu-north-1\.amazonaws\.com$/,
+  /^infrastudio-ifc-models-[a-z0-9-]+\.s3\.eu-north-1\.amazonaws\.com$/,
   /^pzeoilvqeyuheslkfhjq\.supabase\.co$/
 ];
 function validateBaseIfcUrl(raw) {

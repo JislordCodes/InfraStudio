@@ -266,9 +266,14 @@ ${loadBaseModel}
 # Heartbeat: reads the live element count from THIS slot's own MCP server
 # (127.0.0.1 only, never crosses slots) and republishes it to S3 every ~6s so
 # the poller can show live progress. Killed once agy itself finishes.
+#
+# The count comes from the active IFC file the agent builds into, not from
+# get_scene_info. get_scene_info counts Blender objects, and the new-build reset
+# does not clear those, so it stayed frozen at the previous model's total.
+COUNT_REQ='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_ifc_code_tool","arguments":{"code":"print(\\"ELEMS=\\" + str(len(get_ifc_file().by_type(\\"IfcElement\\"))))"}}}'
 (
   while true; do
-    CNT=$(curl -s -m 4 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}' 2>/dev/null | grep -o 'count[^0-9,]*[0-9]*' | grep -o '[0-9]*$' | head -1)
+    CNT=$(curl -s -m 8 -X POST "http://127.0.0.1:$SLOT_PORT/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$COUNT_REQ" 2>/dev/null | grep -o 'ELEMS=[0-9]*' | grep -o '[0-9]*$' | head -1)
     if [ -n "$CNT" ]; then write_status "{\\"status\\":\\"building\\",\\"slot\\":$SLOT,\\"elementCount\\":$CNT}"; fi
     sleep 6
   done
@@ -306,16 +311,18 @@ def final_element_count():
     try:
         req = _ur.Request(
             f"http://127.0.0.1:{port}/mcp",
-            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_info", "arguments": {}}}).encode(),
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "execute_ifc_code_tool", "arguments": {"code": "print('ELEMS=' + str(len(get_ifc_file().by_type('IfcElement'))))"}}}).encode(),
             headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
         )
-        with _ur.urlopen(req, timeout=8) as resp:
+        with _ur.urlopen(req, timeout=20) as resp:
             body = json.loads(resp.read().decode())
+        # Counts the active IFC file, not Blender objects (get_scene_info goes stale
+        # after the new-build reset and reports the previous model's total).
         for item in _flat(body.get("result", {}).get("content", []) or []):
             if isinstance(item, dict) and "text" in item:
-                parsed = json.loads(item["text"])
-                if isinstance(parsed.get("count"), int):
-                    return parsed["count"]
+                found = re.search(r'ELEMS=(\\d+)', item["text"])
+                if found:
+                    return int(found.group(1))
     except Exception:
         pass
     return None
@@ -410,8 +417,16 @@ if url_match:
     if m:
         bucket, shared_key = m.group(1), m.group(2)
         unique_key = 'models/${safeId}/model.ifc'
-        r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION}'], capture_output=True, text=True)
-        if r.returncode == 0:
+        # A single failed copy used to leave the job pointing at the shared key, which
+        # the next build in this slot then overwrote. Retry before giving up.
+        r = None
+        for _try in range(4):
+            r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION}'], capture_output=True, text=True)
+            if r.returncode == 0:
+                break
+            print(f'COPY_RETRY:{_try + 1}:{(r.stderr or "")[-200:]}')
+            time.sleep(3)
+        if r is not None and r.returncode == 0:
             final_url = f'https://{bucket}.s3.${REGION}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
     final_count = final_element_count()
@@ -477,13 +492,17 @@ async function fetchLiveElementCount(): Promise<number | undefined> {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
       signal: AbortSignal.timeout(4000),
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_scene_info", arguments: {} } }),
+      // Counts the active IFC file. get_scene_info counts Blender objects and goes
+      // stale after the new-build reset.
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "execute_ifc_code_tool", arguments: { code: "print('ELEMS=' + str(len(get_ifc_file().by_type('IfcElement'))))" } },
+      }),
     });
     const json = await res.json();
     const text = extractText(json?.result?.content);
-    if (!text) return undefined;
-    const parsed = JSON.parse(text);
-    return typeof parsed?.count === "number" ? parsed.count : undefined;
+    const found = text?.match(/ELEMS=(\d+)/);
+    return found ? Number(found[1]) : undefined;
   } catch {
     return undefined;
   }
