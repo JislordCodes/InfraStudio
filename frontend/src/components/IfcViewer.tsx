@@ -16,6 +16,27 @@ export interface IfcViewerHandle {
   loadIfcFromUrl: (url: string) => Promise<void>;
   /** Empties the viewer - used when switching to a chat that has no model yet. */
   clearModels: () => Promise<void>;
+  /** Shows a model held in memory (an edited copy), replacing whatever is shown. */
+  loadIfcBytes: (bytes: Uint8Array) => Promise<void>;
+  /** Paints these elements (by IFC GlobalId) and optionally flies the camera to them. */
+  highlightGuids: (guids: string[], color?: string, focus?: boolean) => Promise<void>;
+  clearHighlights: () => Promise<void>;
+  /** Numbered markers floating above elements, for review comments. */
+  setPins: (pins: { guid: string; label: string; color?: string }[]) => Promise<void>;
+}
+
+/** The element the user clicked, as the viewer reads it from the model. */
+export interface PickedElement {
+  guid: string;
+  name: string | null;
+  cls: string | null;
+}
+
+export interface IfcViewerProps {
+  /** Fires with a copy of the file each time a model is loaded from a URL or a picked file. */
+  onModelBytes?: (bytes: Uint8Array, source: { url?: string; name?: string }) => void;
+  /** Fires when the user clicks an element, or null when they click empty space. */
+  onPick?: (el: PickedElement | null) => void;
 }
 
 /** Near/far planes on BOTH cameras — an ortho camera needs a negative near to keep
@@ -468,8 +489,13 @@ async function computeModelSummary(
   return { totalElements, categories, totalVolume, footprint, height };
 }
 
-export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
+export const IfcViewer = forwardRef<IfcViewerHandle, IfcViewerProps>((props, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  // The scene is built once, so its listeners read the latest callbacks through this ref.
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  const worldRef = useRef<OBC.SimpleWorld<OBC.SimpleScene, OBC.OrthoPerspectiveCamera, OBC.SimpleRenderer> | null>(null);
+  const pinGroupRef = useRef<THREE.Group | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const ifcLoaderRef = useRef<OBC.IfcLoader | null>(null);
   const initPromiseRef = useRef<Promise<void> | null>(null);
@@ -686,6 +712,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     world.renderer = new OBC.SimpleRenderer(components, container);
     world.camera = new OBC.OrthoPerspectiveCamera(components);
     cameraRef.current = world.camera;
+    worldRef.current = world;
 
     // ── 2. Init engine BEFORE accessing any component APIs ──────────────────
     components.init();
@@ -772,6 +799,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
           if (selectedRef.current) await fragments.resetHighlight();
           selectedRef.current = null;
           if (isMounted) setInspected(null);
+          propsRef.current.onPick?.(null);
           return;
         }
 
@@ -795,6 +823,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         if (isMounted && stillSelected) {
           setInspected(data);
           setInspecting(false);
+          if (data.guid) propsRef.current.onPick?.({ guid: data.guid, name: data.name, cls: data.category });
         }
       } catch (err) {
         console.warn('Element inspect failed:', err);
@@ -1068,6 +1097,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
       const response = await fetchModel(url);
       const data = new Uint8Array(await response.arrayBuffer());
       if (token !== loadTokenRef.current) return; // superseded while downloading
+      // The loader takes ownership of the buffer, so the studio gets its own copy.
+      propsRef.current.onModelBytes?.(data.slice(), { url });
       console.log(`Fetched ${data.byteLength} bytes, loading into viewer...`);
 
       await clearAllModels();
@@ -1087,6 +1118,107 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     }
   };
 
+  /** Local ids of these GlobalIds in every loaded model, keyed by model id. */
+  const resolveGuids = async (guids: string[]): Promise<Record<string, Set<number>>> => {
+    const map: Record<string, Set<number>> = {};
+    for (const model of fragmentsModelsRef.current) {
+      try {
+        const ids = (await model.getLocalIdsByGuids(guids)).filter((n): n is number => typeof n === 'number');
+        if (ids.length) map[model.modelId] = new Set(ids);
+      } catch (e) {
+        console.warn('[viewer] guid lookup failed:', e);
+      }
+    }
+    return map;
+  };
+
+  const highlightGuids = async (guids: string[], color: string, focus: boolean) => {
+    const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
+    if (!fragments) return;
+    try {
+      await fragments.resetHighlight();
+    } catch {
+      /* nothing highlighted */
+    }
+    selectedRef.current = null;
+    if (!guids.length) return;
+    const map = await resolveGuids(guids);
+    if (!Object.keys(map).length) return;
+    await fragments.highlight(
+      { color: new THREE.Color(color), renderedFaces: FRAGS.RenderedFaces.TWO, opacity: 1, transparent: false },
+      map,
+    );
+    if (focus && cameraRef.current) {
+      try {
+        const boxes = await fragments.getBBoxes(map);
+        const box = new THREE.Box3();
+        for (const b of boxes) if (b && !b.isEmpty()) box.union(b);
+        if (!box.isEmpty()) {
+          const size = box.getSize(new THREE.Vector3());
+          // a tiny element would put the camera inside it, so frame at least a few metres
+          const pad = Math.max(2, Math.max(size.x, size.y, size.z) * 0.6);
+          box.expandByScalar(pad);
+          frameBox(cameraRef.current, box, true);
+        }
+      } catch (e) {
+        console.warn('[viewer] focus failed:', e);
+      }
+    }
+    fragments.core.update(true);
+  };
+
+  const placePins = async (pins: { guid: string; label: string; color?: string }[]) => {
+    const world = worldRef.current;
+    const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
+    if (!world?.scene || !fragments) return;
+    if (pinGroupRef.current) {
+      pinGroupRef.current.removeFromParent();
+      pinGroupRef.current.traverse((o) => {
+        const sp = o as THREE.Sprite;
+        if (sp.isSprite) {
+          sp.material.map?.dispose();
+          sp.material.dispose();
+        }
+      });
+      pinGroupRef.current = null;
+    }
+    if (!pins.length) return;
+    const group = new THREE.Group();
+    for (const pin of pins) {
+      const map = await resolveGuids([pin.guid]);
+      if (!Object.keys(map).length) continue;
+      const boxes = await fragments.getBBoxes(map);
+      const box = new THREE.Box3();
+      for (const b of boxes) if (b && !b.isEmpty()) box.union(b);
+      if (box.isEmpty()) continue;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 96;
+      const g = canvas.getContext('2d')!;
+      g.fillStyle = pin.color || '#f59e0b';
+      g.beginPath();
+      g.arc(48, 48, 42, 0, Math.PI * 2);
+      g.fill();
+      g.lineWidth = 6;
+      g.strokeStyle = '#ffffff';
+      g.stroke();
+      g.fillStyle = '#111827';
+      g.font = 'bold 46px sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(pin.label, 48, 51);
+      const tex = new THREE.CanvasTexture(canvas);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, sizeAttenuation: false }));
+      sprite.scale.set(0.045, 0.045, 1);
+      sprite.renderOrder = 999;
+      const c = box.getCenter(new THREE.Vector3());
+      sprite.position.set(c.x, box.max.y + Math.max(0.3, (box.max.y - box.min.y) * 0.05), c.z);
+      group.add(sprite);
+    }
+    world.scene.three.add(group);
+    pinGroupRef.current = group;
+    fragments.core.update(true);
+  };
+
   useImperativeHandle(ref, () => ({
     loadIfc: async (file: File) => {
       if (!ifcLoaderRef.current) return;
@@ -1104,6 +1236,7 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
         }
 
         const data = new Uint8Array(await file.arrayBuffer());
+        propsRef.current.onModelBytes?.(data.slice(), { name: file.name });
         console.log('Starting IFC load, file size:', data.byteLength, 'bytes');
         if (token !== loadTokenRef.current) return;
         await clearAllModels();
@@ -1119,6 +1252,43 @@ export const IfcViewer = forwardRef<IfcViewerHandle>((_, ref) => {
     },
 
     loadIfcFromUrl: loadFromUrl,
+
+    loadIfcBytes: async (bytes: Uint8Array) => {
+      if (!ifcLoaderRef.current) return;
+      const token = ++loadTokenRef.current;
+      loadedUrlRef.current = `bytes:${Date.now()}`;
+      setIsLoadingFile(true);
+      try {
+        if (initPromiseRef.current) await initPromiseRef.current;
+        const fragments = ifcLoaderRef.current.components.get(OBC.FragmentsManager);
+        if (!fragments.initialized) fragments.init(`${import.meta.env.BASE_URL}fragments-worker.mjs`);
+        await clearAllModels();
+        if (token !== loadTokenRef.current) return;
+        await raceLoadAgainstSceneAdd(fragments, ifcLoaderRef.current.load(bytes.slice(), true, `edit-${Date.now()}`));
+      } catch (error) {
+        console.error('Error loading edited model:', error);
+      } finally {
+        if (token === loadTokenRef.current) setIsLoadingFile(false);
+      }
+    },
+
+    highlightGuids: async (guids: string[], color = '#ef4444', focus = true) => {
+      await highlightGuids(guids, color, focus);
+    },
+
+    clearHighlights: async () => {
+      const fragments = cameraRef.current?.components.get(OBC.FragmentsManager);
+      selectedRef.current = null;
+      try {
+        await fragments?.resetHighlight();
+      } catch {
+        /* nothing highlighted */
+      }
+    },
+
+    setPins: async (pins) => {
+      await placePins(pins);
+    },
 
     clearModels: async () => {
       loadTokenRef.current++;

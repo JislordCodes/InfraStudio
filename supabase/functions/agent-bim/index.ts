@@ -8,6 +8,7 @@ import { SPEC_PRIORITY_RULE } from "../_shared/spec_priority.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
 import { getIpHash } from "../_shared/trial_gate.ts";
 import { runClarify } from "../_shared/clarify.ts";
+import { runAskModel } from "../_shared/ask_model.ts";
 import { buildEditBrief, buildStageOneBrief, validateBaseIfcUrl, isStageId, type StageId } from "../_shared/design_stages.ts";
 
 type McpCall = { resultText: string; session: string };
@@ -371,6 +372,11 @@ export async function handleBim(payload: any): Promise<any> {
   // brief (see _shared/clarify.ts). No MCP session or scene work, fails open.
   if (payload.action === "clarify") {
     return await runClarify(payload);
+  }
+
+  // Question about the open model: translated into a structured query the browser runs.
+  if (payload.action === "ask_model") {
+    return await runAskModel(payload);
   }
 
   if (payload.action === "identity") {

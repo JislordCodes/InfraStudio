@@ -63,3 +63,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.ifc
+
+# Small IFC models the automated tests read
+!frontend/tests/fixtures/*.ifc

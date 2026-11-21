@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Upload } from 'lucide-react';
-import { IfcViewer, type IfcViewerHandle } from './components/IfcViewer';
+import { IfcViewer, type IfcViewerHandle, type PickedElement } from './components/IfcViewer';
 import { AIChat } from './components/AIChat';
+import { StudioDock } from './studio/StudioDock';
+import { ReviewMode } from './studio/ReviewMode';
+import type { AdoptRequest, LoadedModel } from './studio/useStudio';
+import { reviewIdFromLocation } from './lib/review';
 import './index.css';
 
 function App() {
@@ -17,6 +21,14 @@ function App() {
   // stored, shown in the viewer, and further prompts edit it in place). If the
   // import can't be stored, the chat calls back and it's shown read-only.
   const [importFile, setImportFile] = useState<File | null>(null);
+
+  // A link with ?review=... opens a shared model for commenting instead of the builder.
+  const reviewId = useMemo(() => reviewIdFromLocation(), []);
+  // The loaded model's bytes, handed to the studio so it can measure and edit the same file.
+  const [loaded, setLoaded] = useState<LoadedModel | null>(null);
+  const [adopt, setAdopt] = useState<AdoptRequest | null>(null);
+  const [picked, setPicked] = useState<PickedElement | null>(null);
+  const pickRef = useRef<((el: PickedElement | null) => void) | null>(null);
 
   const handleFileUpload = (file: File) => {
     setImportFile(file);
@@ -85,7 +97,17 @@ function App() {
   return (
     <div className="relative w-full h-[100dvh] overflow-hidden bg-neutral-950">
       {/* No chrome bar - the scene fills the entire viewport, everything else floats on top. */}
-      <IfcViewer ref={viewerRef} />
+      <IfcViewer
+        ref={viewerRef}
+        onModelBytes={(bytes, src) => setLoaded({ bytes, url: src.url, name: src.name, nonce: Date.now() })}
+        onPick={(el) => {
+          setPicked(el);
+          pickRef.current?.(el);
+        }}
+      />
+
+      {reviewId && <ReviewMode reviewId={reviewId} viewerRef={viewerRef} picked={picked} onLoadModel={handleLoadIfcUrl} />}
+      {!reviewId && <StudioDock viewerRef={viewerRef} loaded={loaded} onAdopt={setAdopt} pickRef={pickRef} />}
 
       <input
         ref={fileInputRef}
@@ -107,6 +129,7 @@ function App() {
 
       {/* Brand mark + local upload - bottom-left, out of the way of the FPS/engine
           overlays IfcViewer already renders in the top corners. */}
+      {!reviewId && (
       <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-20 flex items-center gap-1.5 pointer-events-auto">
         <div
           className="flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 rounded-full border border-white/10 shadow-lg backdrop-blur-xl bg-neutral-900/80"
@@ -122,9 +145,10 @@ function App() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Download - the one CTA that should never be easy to miss once a model exists. */}
-      {currentIfcUrl && (
+      {currentIfcUrl && !reviewId && (
         <a
           href={currentIfcUrl}
           download="model.ifc"
@@ -139,6 +163,7 @@ function App() {
       )}
 
       {/* Floating chat - collapses to a single button, see AIChat's own `expanded` state. */}
+      {!reviewId && (
       <div className="absolute bottom-2 sm:bottom-6 left-1/2 -translate-x-1/2 w-[95%] sm:w-full max-w-xl z-20 px-0 sm:px-4 pb-safe pointer-events-none flex justify-center">
         <div className="pointer-events-auto">
           <AIChat
@@ -151,9 +176,12 @@ function App() {
             importRequest={importFile}
             onImportHandled={() => setImportFile(null)}
             onImportFailed={showLocalIfcReadOnly}
+            adoptModel={adopt}
+            onAdoptHandled={() => setAdopt(null)}
           />
         </div>
       </div>
+      )}
     </div>
   );
 }

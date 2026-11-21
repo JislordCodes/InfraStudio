@@ -4,6 +4,7 @@ import { handleInterpreter } from "../supabase/functions/agent-interpreter/index
 import { handleArchitect } from "../supabase/functions/agent-architect/index.ts";
 import { handleReviewer } from "../supabase/functions/agent-reviewer/index.ts";
 import { handleBim } from "../supabase/functions/agent-bim/index.ts";
+import { handleReview } from "./review.ts";
 import { mcpInit, mcpCallTool, fetchMcpTools } from "../supabase/functions/_shared/shared.ts";
 
 // Set global dispatcher with 10-minute timeouts for reasoning models (qwen3.7-max)
@@ -126,6 +127,8 @@ export const handler = async (event: any, context: any) => {
       // {status:"continue"} response before AWS hard-kills the invocation at `Timeout`.
       payload._deadline = Date.now() + Math.max(30000, remainingMs - 350000);
       result = await handleBim(payload);
+    } else if (cleanPath.endsWith("/review")) {
+      result = await handleReview(payload);
     } else if (cleanPath.endsWith("/gemini-chat")) {
       // Direct handling for legacy / chat calls
       if (payload.action === "init") {

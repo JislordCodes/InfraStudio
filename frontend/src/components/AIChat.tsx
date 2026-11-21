@@ -95,9 +95,12 @@ interface AIChatProps {
   onImportHandled?: () => void;
   /** Import couldn't be stored for editing - the caller can still show it read-only. */
   onImportFailed?: (file: File) => void;
+  /** A hand-edited model saved from the studio: becomes a new version of this chat. */
+  adoptModel?: { nonce: number; url: string; label: string; elementCount?: number; fileSize?: number } | null;
+  onAdoptHandled?: () => void;
 }
 
-export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel, importRequest, onImportHandled, onImportFailed }) => {
+export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel, importRequest, onImportHandled, onImportFailed, adoptModel, onAdoptHandled }) => {
   const {
     sessions,
     activeSessionId,
@@ -707,6 +710,33 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importRequest]);
+
+  // A model edited by hand in the studio, saved as a new version of this chat.
+  useEffect(() => {
+    if (!adoptModel) return;
+    const req = adoptModel;
+    onAdoptHandled?.();
+    void (async () => {
+      try {
+        let sid = activeSessionIdRef.current;
+        if (!sid) {
+          const s = await createSession(req.label.slice(0, 40));
+          sid = s.id;
+        }
+        const previous = sessions.find(s => s.id === sid)?.last_ifc_url;
+        if (previous && versions.length === 0) await addVersion(sid, { ifc_url: previous, label: 'Original model' });
+        await updateSessionData(sid, undefined, req.url);
+        await addVersion(sid, { ifc_url: req.url, label: req.label, element_count: req.elementCount, file_size: req.fileSize });
+        await refreshVersions(sid);
+        setViewingVersion(null);
+        onActiveIfcUrlChange?.(req.url);
+        await appendAssistant(sid, { role: 'assistant', content: 'Saved your hand edits as a new version. Further requests in this chat build on it.' });
+      } catch (err) {
+        console.warn('[studio] could not save the edited model as a version:', err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adoptModel?.nonce]);
 
   const displayMsgs = messages.filter(m => {
     if (m.role === 'user') return true;
