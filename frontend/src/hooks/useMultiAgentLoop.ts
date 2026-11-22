@@ -10,6 +10,8 @@ export interface MultiAgentResult {
   mcp_session_id?: string;
   element_count?: number;
   file_size?: number;
+  /** The build hit its time limit, so the model is unfinished. */
+  partial?: boolean;
 }
 
 export interface ReferenceImageInput {
@@ -202,10 +204,13 @@ export async function runAntigravityBuild(
       throw new Error(bimRes.error || 'Build failed.');
     }
 
-    pushStep("✅ Build complete.");
-    const reply = "Build complete. The model is ready.";
+    const partial = bimRes.partial === true;
+    pushStep(partial ? "⚠️ Build stopped at its time limit." : "✅ Build complete.");
+    const reply = partial
+      ? `⚠️ This build ran out of time (30 minutes), so the model is unfinished${typeof bimRes.element_count === 'number' ? ` (${bimRes.element_count.toLocaleString()} elements so far)` : ''}. What is shown is only what was built before the limit. To finish it, ask for the next piece in this chat, for example "now add the seating bowl", then "now add the facade and roof". Each request builds on what is already there. Very large projects work best in several smaller steps.`
+      : "Build complete. The model is ready.";
     if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: reply });
-    return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId, element_count: bimRes.element_count, file_size: bimRes.file_size };
+    return { reply, ifc_url: bimRes.ifc_url, steps, mcp_session_id: sessionId, element_count: bimRes.element_count, file_size: bimRes.file_size, partial };
   } catch (err: any) {
     // Deliberately NOT clearing the persisted state here: this catch also
     // fires on a plain transient network error from one poll (a wifi blip,

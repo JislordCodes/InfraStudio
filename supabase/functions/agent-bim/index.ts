@@ -788,7 +788,7 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
         // frontend to ignore. If a repair pass just ran (fixAttempted), this
         // is its result - the corrected model, or the same clashes again if
         // the fix didn't fully resolve them (not retried further, see above).
-        return { status: "success", ifc_url: result.ifcUrl, element_count: result.elementCount, file_size: result.fileSize, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
+        return { status: "success", ifc_url: result.ifcUrl, element_count: result.elementCount, file_size: result.fileSize, partial: result.partial === true, mcpSessionId: continuation.jobId, clash_report: result.clashReport, clash_verdict: result.clashVerdict, clash_repair_attempted: !!continuation.fixAttempted };
       }
 
       const userBrief = payload.plan?.client_requirements || payload.plan?.prompt || payload.plan?.structure_name || "";

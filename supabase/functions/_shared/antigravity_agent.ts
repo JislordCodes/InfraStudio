@@ -445,12 +445,17 @@ if url_match:
             print(f'FILE_SIZE:{final_size}')
         if final_count is not None:
             print(f'ELEMENT_COUNT:{final_count}')
+        # A run cut off by the time limit still leaves a usable partial model, but it must
+        # not be presented as finished.
+        if agy_failed:
+            print('PARTIAL:1')
         push_status({
             "status": "done",
             "ifcUrl": final_url,
             "fileSize": final_size,
             "elementCount": final_count,
             "clashReport": clash_json,
+            "partial": bool(agy_failed),
         })
 else:
     err = resp[-500:]
@@ -516,6 +521,8 @@ interface BuildStatus {
   ifcUrl?: string;
   fileSize?: number;
   clashReport?: ClashReport;
+  /** The agent hit its time limit, so the model is unfinished. */
+  partial?: boolean;
   error?: string;
 }
 
@@ -544,6 +551,8 @@ export interface AntigravityPollResult {
   ifcUrl?: string;
   fileSize?: number;
   elementCount?: number;
+  /** True when the build was cut off by the time limit and the model is unfinished. */
+  partial?: boolean;
   error?: string;
   progressMessage?: string;
   /** Position in the on-box queue (1 = next up) while every slot is busy.
@@ -653,6 +662,7 @@ export async function pollAntigravityBuild(commandId: string, jobId?: string): P
         ifcUrl: s3Status.ifcUrl,
         fileSize: s3Status.fileSize,
         elementCount: s3Status.elementCount,
+        partial: s3Status.partial === true,
         clashReport: s3Status.clashReport,
         clashVerdict,
       };
@@ -689,6 +699,7 @@ export async function pollAntigravityBuild(commandId: string, jobId?: string): P
           ifcUrl: urlMatch[1],
           fileSize: sizeMatch ? Number(sizeMatch[1]) : undefined,
           elementCount: countMatch ? Number(countMatch[1]) : undefined,
+          partial: /PARTIAL:1/.test(out),
           clashReport,
           clashVerdict,
         };
