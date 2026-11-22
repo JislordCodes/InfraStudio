@@ -26,8 +26,8 @@ import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
 const INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 const REGION = "eu-north-1";
-const AGY_MODEL = "gemini-4-neon-xhigh";
-const CLARIFY_MODEL = "gemini-4-neon-xhigh";
+const AGY_MODEL = "gemini-4-hydrogen-xhigh";
+const CLARIFY_MODEL = "gemini-4-hydrogen-xhigh";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
 // see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
