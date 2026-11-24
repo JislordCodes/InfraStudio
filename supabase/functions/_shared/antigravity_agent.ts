@@ -26,8 +26,9 @@ import { jevSafe, type ChoiceAnswer } from "./jev_client.ts";
 
 const INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 const REGION = "eu-north-1";
-const AGY_MODEL = "gemini-4-hydrogen-xhigh";
-const CLARIFY_MODEL = "gemini-4-hydrogen-xhigh";
+const AGY_MODEL = "gemini-4-carbon-high";
+const AGY_EFFORT = "high"; // carbon tops out at high; hydrogen and neon go to xhigh
+const CLARIFY_MODEL = "gemini-4-carbon-high";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
 // see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
@@ -280,7 +281,7 @@ COUNT_REQ='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execu
 ) &
 HEARTBEAT_PID=$!
 
-setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort xhigh -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
+setsid nohup env HOME=$AGY_HOME agy --model ${AGY_MODEL} --effort ${AGY_EFFORT} -p "$BRIEF" --dangerously-skip-permissions ${addDirFlag} --output-format json --print-timeout 30m > /root/agy_jobs/${safeId}.log 2>&1 < /dev/null &
 AGY_PID=$!
 wait $AGY_PID
 kill $HEARTBEAT_PID 2>/dev/null
