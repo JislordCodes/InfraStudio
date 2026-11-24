@@ -1,9 +1,12 @@
 import { CORS, callQwen, cleanJsonResponse } from "../_shared/shared.ts";
+import { classifyIntent, QUESTION_SYSTEM_PROMPT } from "../_shared/intent.ts";
+import { runAgyOneShot } from "../_shared/antigravity_agent.ts";
 
 const systemPrompt = `You are the Interpreter Agent for InfraStudio.
 Your sole responsibility is to convert natural-language user intent into a complete, machine-readable design brief.
 
 Core Directives:
+ 0. INTENT (CRITICAL): Set "intent" to "question" when the latest user message only asks something (what, why, how, is it, how many, explain, describe) and does not ask for the model to be built or changed. Set "intent" to "action" for any request to build, add, change, move, remove, resize or paint. "Can you add a door?" is an action. "How tall is the roof?" is a question. When unsure, use "action".
  1. STRUCTURE CATEGORY (CRITICAL): Classify the user request into ONE of these categories:
     - "infrastructure" — structural frames, column grids, beam/column networks, pad bases, footings, foundations, bridges, tunnels, dams, retaining walls, towers, monuments, roads, railways, piers, jetties
     - "building" — houses, apartments, offices, warehouses, factories, any structure with rooms/storeys
@@ -23,6 +26,7 @@ Strict Restrictions:
 
 Expected JSON Schema:
 {
+  "intent": "action" | "question",
   "is_edit": boolean,
   "edit_instructions": ["string"],
   "structure_category": "building" | "infrastructure" | "mep" | "custom",
@@ -49,6 +53,42 @@ function designSeedFrom(text: string, sessionId = ""): number {
   return Math.abs(hash);
 }
 
+async function answerQuestion(messages: any[], latestText: string): Promise<any> {
+  const history = (Array.isArray(messages) ? messages : [])
+    .filter((m: any) => m?.role === "user" || m?.role === "assistant")
+    .slice(-12)
+    .map((m: any) => ({ role: m.role, content: String(m.content || "").slice(0, 4000) }));
+  let answer = "";
+  // The production box answers through the build agent's one-shot channel
+  // (about 13 s, no tools). The direct model call is the fallback.
+  try {
+    const transcript = history.map((m: any) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`).join("\n");
+    const raw = await runAgyOneShot(
+      `${QUESTION_SYSTEM_PROMPT}\n\nDo NOT use any tools and do NOT create or edit any files. Reply with the answer text only.\n\nConversation so far:\n${transcript}\n\nAnswer the last USER message.`,
+      75000,
+    );
+    answer = String(raw || "").trim();
+  } catch (err) {
+    console.warn("[handleInterpreter] one-shot question answer failed:", err);
+    try {
+      answer = (await callQwen(QUESTION_SYSTEM_PROMPT, history, false, "glm-5.3", 60000, "high", 1200)).trim();
+    } catch (err2) {
+      console.warn("[handleInterpreter] question answer failed:", err2);
+    }
+  }
+  if (!answer) {
+    answer = "I read that as a question, so I did not change the model. For counts, sizes and costs, use Ask in the Studio dock under the viewer. To change something, tell me what to change.";
+  }
+  return {
+    intent: "question",
+    answer,
+    is_edit: false,
+    needs_clarification: false,
+    client_requirements: latestText,
+    prompt: latestText,
+  };
+}
+
 export async function handleInterpreter(payload: any): Promise<any> {
   const rawMessages = payload.messages || (payload.prompt ? [{ role: "user", content: String(payload.prompt) }] : (payload.text ? [{ role: "user", content: String(payload.text) }] : []));
   const messages = Array.isArray(rawMessages) && rawMessages.length > 0
@@ -71,6 +111,13 @@ export async function handleInterpreter(payload: any): Promise<any> {
 
   let result: any = null;
   const latestText = (Array.isArray(messages) ? messages[messages.length - 1]?.content : String(messages)) || "";
+
+  // A question is answered in chat. It must never reach the architect or the
+  // build, which would start a build and change the user's model.
+  const heuristicIntent = classifyIntent(String(latestText));
+  if (heuristicIntent === "question") {
+    return await answerQuestion(messages, String(latestText));
+  }
 
   // When OpenHands owns the actual build (a real coding agent doing its own
   // interpretation, planning, and construction), this model-based
@@ -113,6 +160,10 @@ export async function handleInterpreter(payload: any): Promise<any> {
       needs_clarification: false,
       confidence_score: 0.95
     };
+  }
+
+  if (result?.intent === "question" && heuristicIntent !== "action") {
+    return await answerQuestion(messages, String(latestText));
   }
 
   const priorAssistantText = Array.isArray(messages)

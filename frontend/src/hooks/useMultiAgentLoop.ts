@@ -266,6 +266,11 @@ export async function runMultiAgentLoop(
     // 1. Interpreter
     pushStep("Interpreter Agent: Processing request...");
     const brief = await callEdge('agent-interpreter', { messages, sessionId, model: selectedModel });
+    if (brief.intent === 'question' && brief.answer) {
+      pushStep("Interpreter Agent: This is a question, so nothing will be built.");
+      if (onAssistantMessage) onAssistantMessage({ role: "assistant", content: brief.answer });
+      return { reply: brief.answer, steps, mcp_session_id: sessionId };
+    }
     if (brief.needs_clarification) {
       const question = brief.clarifying_question || "Please describe the building or infrastructure you want, including scale and key spaces.";
       pushStep("Interpreter Agent: More design information is needed before modelling.");
