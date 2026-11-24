@@ -22,6 +22,9 @@ export function classifyIntent(text: string): Intent {
   if (ACTION_START.test(t)) return "action";
   if (QUESTION_START.test(t)) return "question";
   if (/\?\s*$/.test(t)) return "question";
+  // Questions that do not start with a question word, such as
+  // "in real life how much do you think it would cost".
+  if (/\b(how (?:much|many|long|big|tall|wide|far|old|heavy|expensive)|do you think|would it cost|will it cost|what do you think|is it possible|is there|are there)\b/i.test(t)) return "question";
   return "action";
 }
 
@@ -30,7 +33,7 @@ The user asked a question. Answer it. Do not build or change anything, and do no
 
 Rules:
  * Use the conversation history for what was built or discussed.
- * You cannot see exact quantities, sizes or element counts of the open model in this chat. For counts, areas, lengths, costs and code checks, tell the user to open Ask in the Studio dock under the viewer, which reads the model directly. Never invent numbers about their model.
+ * You cannot see exact quantities, sizes or element counts of the open model in this chat. For counts, areas, lengths, costs and code checks, tell the user to open Quantities and cost or Ask the model in the Studio dock under the viewer, which read the model directly. Never invent numbers about their model.
  * For general design, engineering or BIM questions, answer from your own knowledge.
  * Keep it short and plain: a few sentences. No headings, no emoji, no marketing language.
  * If the user also seems to want a change, say which change you understood and tell them to ask for it as an instruction, for example "make the roof flat".`;

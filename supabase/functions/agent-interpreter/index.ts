@@ -115,7 +115,7 @@ export async function handleInterpreter(payload: any): Promise<any> {
   // A question is answered in chat. It must never reach the architect or the
   // build, which would start a build and change the user's model.
   const heuristicIntent = classifyIntent(String(latestText));
-  if (heuristicIntent === "question") {
+  if (payload.forceQuestion === true || heuristicIntent === "question") {
     return await answerQuestion(messages, String(latestText));
   }
 

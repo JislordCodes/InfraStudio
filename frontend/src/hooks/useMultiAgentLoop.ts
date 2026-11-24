@@ -80,6 +80,25 @@ export async function clarifyBrief(plan: {
   }
 }
 
+/** Answers a question about the design in chat. Nothing is built or changed.
+ *  Throws on failure so the caller can say so instead of showing a made-up answer. */
+export async function askQuestion(messages: { role: string; content: string }[]): Promise<string> {
+  const res = await fetch(`${EDGE_PROXY_BASE}/agent-interpreter`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify({ messages, forceQuestion: true }),
+    signal: AbortSignal.timeout(110000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (typeof data?.answer !== 'string' || !data.answer.trim()) throw new Error('empty answer');
+  return data.answer.trim();
+}
+
 /** Enough to resume an in-flight build from a fresh page load - everything
  *  the next `build_code` poll needs, plus what's needed to re-show the chat
  *  bubble it belongs to. Persisted to localStorage (see App-level usage) so a

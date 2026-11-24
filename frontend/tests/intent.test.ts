@@ -33,3 +33,13 @@ describe('classifyIntent', () => {
   for (const q of questions) it(`question: ${q}`, () => expect(classifyIntent(q)).toBe('question'))
   for (const a of actions) it(`action: ${a || '(empty)'}`, () => expect(classifyIntent(a)).toBe('action'))
 })
+
+describe('classifyIntent phrasing without a question word', () => {
+  it('reads a cost question as a question', () => {
+    expect(classifyIntent('in real life how much do you think it would cost')).toBe('question')
+    expect(classifyIntent('do you think this is structurally sound')).toBe('question')
+  })
+  it('still builds when the message asks for a change', () => {
+    expect(classifyIntent('make it taller so it looks good')).toBe('action')
+  })
+})

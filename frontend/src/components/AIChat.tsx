@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon, History } from 'lucide-react';
-import { runAntigravityBuild, clarifyBrief, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
+import { runAntigravityBuild, clarifyBrief, askQuestion, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
+import { classifyIntent } from '../../../supabase/functions/_shared/intent';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 import { supabase } from '../lib/supabase';
 import { addVersion, listVersions, type IfcVersion } from '../lib/versions';
@@ -124,6 +125,17 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [stagedPref, setStagedPref] = useState<boolean>(() => loadStagedPref());
+  // Auto answers clear questions in chat and builds everything else. Ask never
+  // builds. Build always builds.
+  type ChatMode = 'auto' | 'ask' | 'build';
+  const [chatMode, setChatModeState] = useState<ChatMode>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('infrastudio_chat_mode') : null;
+    return v === 'ask' || v === 'build' ? v : 'auto';
+  });
+  const setChatMode = (m: ChatMode) => {
+    setChatModeState(m);
+    try { localStorage.setItem('infrastudio_chat_mode', m); } catch { /* storage unavailable */ }
+  };
   const [versions, setVersions] = useState<IfcVersion[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [viewingVersion, setViewingVersion] = useState<number | null>(null);
@@ -483,6 +495,22 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
 
       setMessages(prev => [...prev, userMsg]);
       saveMessage(sid, userMsg).catch(err => console.warn('saveMessage non-fatal:', err));
+
+      // A question is answered in chat. It never builds or changes the model.
+      const isStageStep = !!opts.stageOverride || !!opts.displayText;
+      const wantsAnswer = !isStageStep && (chatMode === 'ask' || (chatMode === 'auto' && classifyIntent(userContent) === 'question'));
+      if (wantsAnswer) {
+        setCurrentSteps(['💬 Answering your question...']);
+        try {
+          const history = [...messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-11), userMsg]
+            .map(m => ({ role: m.role, content: m.content }));
+          await appendAssistant(sid, { role: 'assistant', content: await askQuestion(history) });
+        } catch {
+          await appendAssistant(sid, { role: 'assistant', content: 'I could not answer that just now. Nothing was built or changed. Try again in a moment.' });
+        }
+        setCurrentSteps([]);
+        return;
+      }
 
       const sessionObj = sessions.find(s => s.id === sid);
       const clientMcpId = sessionObj?.mcp_session_id || localStorage.getItem(`infrastudio_mcp_${sid}`) || '';
@@ -1144,13 +1172,31 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
               Staged
             </button>
           )}
+          <div className="shrink-0 flex rounded-full border border-white/10 overflow-hidden text-[10px] font-semibold" role="group" aria-label="What should the AI do with your message">
+            {([
+              ['auto', 'Auto', 'Answers clear questions, builds everything else'],
+              ['ask', 'Ask', 'Only answers. Never builds or changes the model'],
+              ['build', 'Build', 'Always builds or edits the model'],
+            ] as const).map(([id, label, tip]) => (
+              <button
+                key={id}
+                type="button"
+                title={tip}
+                disabled={isLoading}
+                onClick={() => setChatMode(id)}
+                className={`px-2 py-1 transition-colors disabled:opacity-40 ${chatMode === id ? (id === 'ask' ? 'bg-emerald-600/40 text-emerald-100' : 'bg-blue-600/40 text-blue-100') : 'text-neutral-400 hover:text-white'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <input
             ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onFocus={() => (hasContent || loadingMessages) && setExpanded(true)}
-            placeholder={attachedImages.length > 0 ? 'Add instructions (optional)...' : activeSession?.last_ifc_url ? 'Describe a change (e.g. "add a floor")...' : activeSession ? `Continue "${activeSession.title}"...` : 'Describe structure to build...'}
+            placeholder={chatMode === 'ask' ? 'Ask a question about the design...' : attachedImages.length > 0 ? 'Add instructions (optional)...' : activeSession?.last_ifc_url ? 'Describe a change (e.g. "add a floor")...' : activeSession ? `Continue "${activeSession.title}"...` : 'Describe structure to build...'}
             className="flex-1 bg-transparent text-base sm:text-sm text-white placeholder-neutral-500 focus:outline-none py-1"
             disabled={isLoading}
           />
