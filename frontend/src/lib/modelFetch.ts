@@ -8,7 +8,9 @@ export function gzipSiblingUrl(url: string): string | null {
   try {
     const u = new URL(url)
     if (!/\.amazonaws\.com$/i.test(u.hostname)) return null
-    if (!/\/models\/[^/]+\/model\.ifc$/i.test(u.pathname)) return null
+    // Only job-unique keys (a UUID folder). Shared slot keys such as models/c21f969b/ are
+    // overwritten by later builds, so a gzip copy of them would go stale.
+    if (!/\/models\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/model\.ifc$/i.test(u.pathname)) return null
     u.pathname = `${u.pathname}.gz`
     return u.toString()
   } catch {

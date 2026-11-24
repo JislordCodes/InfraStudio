@@ -422,7 +422,7 @@ if url_match:
         # the next build in this slot then overwrote. Retry before giving up.
         r = None
         for _try in range(4):
-            r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--region', '${REGION}'], capture_output=True, text=True)
+            r = subprocess.run(['aws', 's3', 'cp', f's3://{bucket}/{shared_key}', f's3://{bucket}/{unique_key}', '--copy-props', 'none', '--region', '${REGION}'], capture_output=True, text=True)
             if r.returncode == 0:
                 break
             print(f'COPY_RETRY:{_try + 1}:{(r.stderr or "")[-200:]}')
