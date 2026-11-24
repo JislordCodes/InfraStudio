@@ -27,6 +27,7 @@ function App() {
   // The loaded model's bytes, handed to the studio so it can measure and edit the same file.
   const [loaded, setLoaded] = useState<LoadedModel | null>(null);
   const [adopt, setAdopt] = useState<AdoptRequest | null>(null);
+  const [modelSummary, setModelSummary] = useState<string | null>(null);
   const [picked, setPicked] = useState<PickedElement | null>(null);
   const pickRef = useRef<((el: PickedElement | null) => void) | null>(null);
 
@@ -107,7 +108,7 @@ function App() {
       />
 
       {reviewId && <ReviewMode reviewId={reviewId} viewerRef={viewerRef} picked={picked} onLoadModel={handleLoadIfcUrl} />}
-      {!reviewId && <StudioDock viewerRef={viewerRef} loaded={loaded} onAdopt={setAdopt} pickRef={pickRef} />}
+      {!reviewId && <StudioDock viewerRef={viewerRef} loaded={loaded} onAdopt={setAdopt} pickRef={pickRef} onSummary={setModelSummary} />}
 
       <input
         ref={fileInputRef}
@@ -178,6 +179,7 @@ function App() {
             onImportFailed={showLocalIfcReadOnly}
             adoptModel={adopt}
             onAdoptHandled={() => setAdopt(null)}
+            modelSummary={modelSummary}
           />
         </div>
       </div>

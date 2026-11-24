@@ -82,7 +82,7 @@ export async function clarifyBrief(plan: {
 
 /** Answers a question about the design in chat. Nothing is built or changed.
  *  Throws on failure so the caller can say so instead of showing a made-up answer. */
-export async function askQuestion(messages: { role: string; content: string }[]): Promise<string> {
+export async function askQuestion(messages: { role: string; content: string }[], modelContext?: string | null): Promise<string> {
   const res = await fetch(`${EDGE_PROXY_BASE}/agent-interpreter`, {
     method: 'POST',
     headers: {
@@ -90,7 +90,7 @@ export async function askQuestion(messages: { role: string; content: string }[])
       'apikey': SUPABASE_ANON_KEY,
       'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
     },
-    body: JSON.stringify({ messages, forceQuestion: true }),
+    body: JSON.stringify({ messages, forceQuestion: true, modelContext: modelContext ? modelContext.slice(0, 9000) : undefined }),
     signal: AbortSignal.timeout(110000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

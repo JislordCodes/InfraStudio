@@ -11,6 +11,7 @@ import { pinsFor, rememberedReview } from './reviewPins';
 import { DrawingsPanel } from './DrawingsPanel';
 import { Spinner } from './ui';
 import { getReview, type Review } from '../lib/review';
+import { summarizeModel } from '../engine/summary';
 
 type Tab = 'edit' | 'schedule' | 'rules' | 'ask' | 'share' | 'drawings';
 
@@ -29,9 +30,11 @@ interface Props {
   onAdopt: (req: AdoptRequest) => void;
   /** The app points this at the studio so clicks in the viewer select elements. */
   pickRef: { current: ((el: PickedElement | null) => void) | null };
+  /** Receives a text description of the open model for the chat, or null when there is none. */
+  onSummary?: (summary: string | null) => void;
 }
 
-export function StudioDock({ viewerRef, loaded, onAdopt, pickRef }: Props) {
+export function StudioDock({ viewerRef, loaded, onAdopt, pickRef, onSummary }: Props) {
   const studio = useStudio(viewerRef, loaded);
   useEffect(() => {
     pickRef.current = studio.pick;
@@ -39,6 +42,11 @@ export function StudioDock({ viewerRef, loaded, onAdopt, pickRef }: Props) {
       pickRef.current = null;
     };
   }, [studio.pick, pickRef]);
+  useEffect(() => {
+    if (!onSummary) return;
+    if (studio.table && studio.schedule) onSummary(summarizeModel(studio.table, studio.schedule, studio.rules, studio.overlaps.length));
+    else onSummary(null);
+  }, [studio.table, studio.schedule, studio.rules, studio.overlaps, onSummary]);
   const [tab, setTab] = useState<Tab | null>(null);
   const [saving, setSaving] = useState(false);
   const [review, setReview] = useState<Review | null>(null);

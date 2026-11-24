@@ -218,3 +218,21 @@ describe('pdf and bcf output', () => {
     expect(vp).toContain('IfcGuid="3WYZvcJmT7Xh_XA_dhMjJ_"');
   });
 });
+
+describe('summarizeModel', () => {
+  it('describes the model in IFC terms for the chat', async () => {
+    const { summarizeModel } = await import('../src/engine/summary.ts');
+    const { buildSchedule } = await import('../src/engine/schedule.ts');
+    const { runRules } = await import('../src/engine/rules.ts');
+    const { eng, table } = load();
+    const text = summarizeModel(table, buildSchedule(table), runRules(table), 0);
+    expect(text).toContain('IFC entity types');
+    expect(text).toContain('IfcWall');
+    expect(text).toContain('Estimated construction cost');
+    expect(text).toContain('Plan view from above');
+    expect(text).toContain('Side view');
+    if (process.env.SHOW_SUMMARY) fs.writeFileSync(process.env.SHOW_SUMMARY, text);
+    expect(text).toMatch(/Elements: [0-9]+/);
+    eng.dispose();
+  });
+});

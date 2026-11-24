@@ -99,9 +99,11 @@ interface AIChatProps {
   /** A hand-edited model saved from the studio: becomes a new version of this chat. */
   adoptModel?: { nonce: number; url: string; label: string; elementCount?: number; fileSize?: number } | null;
   onAdoptHandled?: () => void;
+  /** Text description of the open model, sent with chat questions so answers use the real model. */
+  modelSummary?: string | null;
 }
 
-export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel, importRequest, onImportHandled, onImportFailed, adoptModel, onAdoptHandled }) => {
+export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChange, onClearModel, importRequest, onImportHandled, onImportFailed, adoptModel, onAdoptHandled, modelSummary }) => {
   const {
     sessions,
     activeSessionId,
@@ -504,7 +506,7 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
         try {
           const history = [...messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-11), userMsg]
             .map(m => ({ role: m.role, content: m.content }));
-          await appendAssistant(sid, { role: 'assistant', content: await askQuestion(history) });
+          await appendAssistant(sid, { role: 'assistant', content: await askQuestion(history, modelSummary) });
         } catch {
           await appendAssistant(sid, { role: 'assistant', content: 'I could not answer that just now. Nothing was built or changed. Try again in a moment.' });
         }

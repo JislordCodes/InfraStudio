@@ -53,7 +53,7 @@ function designSeedFrom(text: string, sessionId = ""): number {
   return Math.abs(hash);
 }
 
-async function answerQuestion(messages: any[], latestText: string): Promise<any> {
+async function answerQuestion(messages: any[], latestText: string, modelContext = ""): Promise<any> {
   const history = (Array.isArray(messages) ? messages : [])
     .filter((m: any) => m?.role === "user" || m?.role === "assistant")
     .slice(-12)
@@ -64,7 +64,7 @@ async function answerQuestion(messages: any[], latestText: string): Promise<any>
   try {
     const transcript = history.map((m: any) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`).join("\n");
     const raw = await runAgyOneShot(
-      `${QUESTION_SYSTEM_PROMPT}\n\nDo NOT use any tools and do NOT create or edit any files. Reply with the answer text only.\n\nConversation so far:\n${transcript}\n\nAnswer the last USER message.`,
+      `${QUESTION_SYSTEM_PROMPT}${modelContext ? `\n\nMODEL DATA (measured from the user's open model, treat as true):\n${modelContext}` : ""}\n\nDo NOT use any tools and do NOT create or edit any files. Reply with the answer text only.\n\nConversation so far:\n${transcript}\n\nAnswer the last USER message.`,
       75000,
     );
     answer = String(raw || "").trim();
@@ -116,7 +116,7 @@ export async function handleInterpreter(payload: any): Promise<any> {
   // build, which would start a build and change the user's model.
   const heuristicIntent = classifyIntent(String(latestText));
   if (payload.forceQuestion === true || heuristicIntent === "question") {
-    return await answerQuestion(messages, String(latestText));
+    return await answerQuestion(messages, String(latestText), String(payload.modelContext || "").slice(0, 9000));
   }
 
   // When OpenHands owns the actual build (a real coding agent doing its own
@@ -163,7 +163,7 @@ export async function handleInterpreter(payload: any): Promise<any> {
   }
 
   if (result?.intent === "question" && heuristicIntent !== "action") {
-    return await answerQuestion(messages, String(latestText));
+    return await answerQuestion(messages, String(latestText), String(payload.modelContext || "").slice(0, 9000));
   }
 
   const priorAssistantText = Array.isArray(messages)
