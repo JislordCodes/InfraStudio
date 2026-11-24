@@ -9,6 +9,7 @@ import { ModelSummaryPanel, type ModelSummaryData, type CategoryCount } from './
 import { DisciplineLayerBar } from './DisciplineLayerBar';
 import { computeDisciplineGroups, type DisciplineBucket, type DisciplineGroup } from '../lib/discipline';
 import { applyExplode, resetExplode } from '../lib/explode';
+import { fetchGzippedModel } from '../lib/modelFetch';
 
 export interface IfcViewerHandle {
   loadIfc: (file: File) => Promise<void>;
@@ -1094,8 +1095,8 @@ export const IfcViewer = forwardRef<IfcViewerHandle, IfcViewerProps>((props, ref
       }
 
       console.log(`Fetching IFC from URL: ${url}`);
-      const response = await fetchModel(url);
-      const data = new Uint8Array(await response.arrayBuffer());
+      const data =
+        (await fetchGzippedModel(url)) ?? new Uint8Array(await (await fetchModel(url)).arrayBuffer());
       if (token !== loadTokenRef.current) return; // superseded while downloading
       // The loader takes ownership of the buffer, so the studio gets its own copy.
       propsRef.current.onModelBytes?.(data.slice(), { url });

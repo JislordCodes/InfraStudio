@@ -429,6 +429,16 @@ if url_match:
         if r is not None and r.returncode == 0:
             final_url = f'https://{bucket}.s3.${REGION}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
+            # A gzip copy next to the model. IFC text shrinks about 10 times, which is
+            # most of the load time on a slow connection. Best effort: the viewer falls
+            # back to the plain file when this is missing.
+            try:
+                subprocess.run(
+                    f'aws s3 cp s3://{bucket}/{unique_key} - --region ${REGION} | gzip -6 | aws s3 cp - s3://{bucket}/{unique_key}.gz --region ${REGION} --content-type application/gzip',
+                    shell=True, capture_output=True, text=True, timeout=180,
+                )
+            except Exception as _gz_err:
+                print(f'GZIP_SKIPPED:{_gz_err}')
     final_count = final_element_count()
     if final_count is None and count_match:
         final_count = int(count_match.group(1).replace(",", ""))
