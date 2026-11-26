@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { getScopedSupabase } from '../lib/supabase';
 import { getDeviceId } from '../lib/deviceId';
 import { getIdentity } from '../lib/identity';
+import { enqueue, flushOutbox, pendingSessionUpdates, retrying, type OutboxJob } from '../lib/outbox';
 
 export interface ChatSession {
   id: string;
@@ -28,6 +29,22 @@ export interface ChatMessage {
 
 const ACTIVE_SESSION_KEY = 'infrastudio_active_session';
 
+/** A session that exists in the database. Local fallback sessions start with "session_". */
+const isDbSessionId = (id: string) => !id.startsWith('session_');
+
+/** Writes one saved job to the database. True when it went through. */
+async function sendJob(job: OutboxJob): Promise<boolean> {
+  const supabase = await getScopedSupabase();
+  if (job.kind === 'message') {
+    const { error } = await supabase.from('ifc_messages').insert({ session_id: job.sessionId, ...job.msg });
+    if (error) console.warn('Error saving message to DB:', error);
+    return !error;
+  }
+  const { error } = await supabase.from('ifc_sessions').update(job.updates).eq('id', job.sessionId);
+  if (error) console.warn('Error updating session in DB:', error);
+  return !error;
+}
+
 export function useSessions() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionIdState] = useState<string | null>(() => {
@@ -47,6 +64,14 @@ export function useSessions() {
 
   useEffect(() => {
     loadSessions();
+    // Send saved-but-unsent chat data again as soon as the connection is back.
+    const retry = () => { void flushOutbox(sendJob); };
+    window.addEventListener('online', retry);
+    const timer = window.setInterval(retry, 60000);
+    return () => {
+      window.removeEventListener('online', retry);
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -86,48 +111,28 @@ export function useSessions() {
 
   async function loadSessions() {
     try {
-      const { ipHash } = await getIdentity();
       const deviceId = getDeviceId();
       const supabase = await getScopedSupabase();
 
-      // One-time backfill: sessions created before the ip_hash column
-      // existed (or by a visitor whose IP couldn't be resolved at the time)
-      // are permanently invisible to another browser's IP-based lookup
-      // below, since they only ever match on device_id - confirmed this was
-      // actually happening (every session in the DB still had ip_hash:
-      // null, including ones created after the column was added, because
-      // an EXISTING session is only ever inserted once and never patched
-      // afterwards). Tag this device's own null-ip_hash sessions with its
-      // current ip_hash on every load so they become findable cross-browser
-      // going forward. Fire-and-forget - a failure here just means one more
-      // load without the backfill, not a broken session list.
-      if (ipHash) {
-        supabase.from('ifc_sessions').update({ ip_hash: ipHash }).eq('device_id', deviceId).is('ip_hash', null)
-          .then(({ error: backfillError }) => {
-            if (backfillError) console.warn('ip_hash backfill failed (non-fatal):', backfillError);
-          });
-      }
+      // Send again anything that failed to save last time, before reading.
+      await flushOutbox(sendJob);
 
-      // IP-based lookup (see lib/identity.ts) finds sessions from ANY
-      // browser/device on this IP, not just this one - OR'd with the
-      // legacy per-browser device_id filter so sessions created before
-      // ip_hash existed (or from a visitor whose IP couldn't be resolved)
-      // still show up on the browser that made them. Requires the scoped
-      // client (x-ip-hash header) - RLS enforces device_id/ip_hash
-      // visibility independent of this query's own filter, so the plain
-      // `supabase` client (x-device-id only) would silently return nothing
-      // for another browser's sessions even with this exact same query.
-      let query = supabase.from('ifc_sessions').select('*');
-      query = ipHash
-        ? query.or(`ip_hash.eq.${ipHash},device_id.eq.${deviceId}`)
-        : query.eq('device_id', deviceId);
-      const { data, error } = await query.order('created_at', { ascending: false });
+      // Chats are private to this browser. They used to be shared with every
+      // browser on the same public IP address (an office or campus network),
+      // which let other people see each other's chats and models.
+      const { data, error } = await supabase
+        .from('ifc_sessions')
+        .select('*')
+        .eq('device_id', deviceId)
+        .order('created_at', { ascending: false });
 
       if (error) {
         console.warn('Error loading sessions:', error);
         return;
       }
       if (data) {
+        // A model link that could not be saved yet still belongs to its chat.
+        for (const s of data) Object.assign(s, pendingSessionUpdates(s.id));
         setSessions(data);
         const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
         if (stored && !data.find(s => s.id === stored)) {
@@ -143,13 +148,18 @@ export function useSessions() {
     try {
       const { ipHash } = await getIdentity();
       const supabase = await getScopedSupabase();
-      const { data, error } = await supabase
-        .from('ifc_sessions')
-        .insert({ title, mcp_session_id: '', device_id: getDeviceId(), ip_hash: ipHash })
-        .select()
-        .single();
-
-      if (!error && data) {
+      let created: ChatSession | null = null;
+      await retrying(async () => {
+        const { data, error } = await supabase
+          .from('ifc_sessions')
+          .insert({ title, mcp_session_id: '', device_id: getDeviceId(), ip_hash: ipHash })
+          .select()
+          .single();
+        if (!error && data) created = data as ChatSession;
+        return !!created;
+      });
+      if (created) {
+        const data = created as ChatSession;
         setSessions(prev => [data, ...prev]);
         setActiveSessionId(data.id);
         setMessages([]);
@@ -193,21 +203,18 @@ export function useSessions() {
   }
 
   const saveMessage = useCallback(async (sessionId: string, msg: ChatMessage) => {
-    try {
-      const { role, content, tool_calls, tool_call_id, reasoning_details } = msg;
-      const supabase = await getScopedSupabase();
-      const { error } = await supabase.from('ifc_messages').insert({
-        session_id: sessionId,
-        role,
-        content: content || '',
-        tool_calls: tool_calls || null,
-        tool_call_id: tool_call_id || null,
-        reasoning_details: reasoning_details || null,
-      });
-      if (error) console.warn('Error saving message to DB:', error);
-    } catch (e) {
-      console.warn('saveMessage DB insert error (non-fatal):', e);
-    }
+    const { role, content, tool_calls, tool_call_id, reasoning_details } = msg;
+    const row = {
+      role,
+      content: content || '',
+      tool_calls: tool_calls || null,
+      tool_call_id: tool_call_id || null,
+      reasoning_details: reasoning_details || null,
+    };
+    // A local fallback session has no database row to attach messages to.
+    if (!isDbSessionId(sessionId)) return;
+    const ok = await retrying(() => sendJob({ kind: 'message', sessionId, msg: row }));
+    if (!ok) enqueue({ kind: 'message', sessionId, msg: row });
   }, []);
 
   async function updateSessionData(sessionId: string, mcpSessionId?: string, lastIfcUrl?: string) {
@@ -221,17 +228,10 @@ export function useSessions() {
       prev.map(s => (s.id === sessionId ? { ...s, ...updates } : s))
     );
 
-    try {
-      const supabase = await getScopedSupabase();
-      const { error } = await supabase
-        .from('ifc_sessions')
-        .update(updates)
-        .eq('id', sessionId);
-
-      if (error) console.warn('Error updating session in DB:', error);
-    } catch (e) {
-      console.warn('updateSessionData DB error (non-fatal):', e);
-    }
+    if (!isDbSessionId(sessionId)) return;
+    // The link to a chat's model must never be lost: retry, then keep it in this browser.
+    const ok = await retrying(() => sendJob({ kind: 'session', sessionId, updates }));
+    if (!ok) enqueue({ kind: 'session', sessionId, updates });
   }
 
   return {

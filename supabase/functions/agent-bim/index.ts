@@ -10,6 +10,7 @@ import { getIpHash } from "../_shared/trial_gate.ts";
 import { runClarify } from "../_shared/clarify.ts";
 import { runAskModel } from "../_shared/ask_model.ts";
 import { buildEditBrief, buildStageOneBrief, validateBaseIfcUrl, isStageId, type StageId } from "../_shared/design_stages.ts";
+import { isSharedSlotModelUrl, SHARED_MODEL_MESSAGE } from "../_shared/modelKeys.ts";
 
 type McpCall = { resultText: string; session: string };
 
@@ -800,6 +801,10 @@ print("DEDUP_RESULT:" + json.dumps({"removed": removed_names, "count": len(remov
       const baseIfcUrl = validateBaseIfcUrl(payload.plan?.base_ifc_url);
       if (payload.plan?.base_ifc_url && !baseIfcUrl) {
         return { status: "error", error: "That model link is not from a trusted source, so it cannot be edited." };
+      }
+      // A chat whose model sits on a shared slot key may now point at someone else's model.
+      if (isSharedSlotModelUrl(baseIfcUrl)) {
+        return { status: "error", error: SHARED_MODEL_MESSAGE };
       }
       const stage: StageId | undefined = isStageId(payload.plan?.stage) ? payload.plan.stage : undefined;
 

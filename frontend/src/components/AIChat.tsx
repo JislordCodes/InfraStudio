@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon, History } from 'lucide-react';
 import { runAntigravityBuild, clarifyBrief, askQuestion, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
 import { classifyIntent } from '../../../supabase/functions/_shared/intent';
+import { isSharedSlotModelUrl, SHARED_MODEL_MESSAGE } from '../../../supabase/functions/_shared/modelKeys';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
 import { supabase } from '../lib/supabase';
 import { addVersion, listVersions, type IfcVersion } from '../lib/versions';
@@ -524,6 +525,13 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       const viewed = viewingVersion != null ? versions.find(v => v.version === viewingVersion) : undefined;
       const baseUrl = viewed?.ifc_url || sessionObj?.last_ifc_url || undefined;
       if (baseUrl) {
+        // An old chat whose model sits on a shared build-slot key may now point at someone
+        // else's model. Never edit it.
+        if (isSharedSlotModelUrl(baseUrl)) {
+          await appendAssistant(sid, { role: 'assistant', content: SHARED_MODEL_MESSAGE });
+          setCurrentSteps([]);
+          return;
+        }
         const st = loadStageState(sid);
         const stage = opts.stageOverride ?? st?.stage;
         const meta: BuildMeta = { label: (opts.displayText || userContent).slice(0, 120), stage, projectBrief: st?.brief };

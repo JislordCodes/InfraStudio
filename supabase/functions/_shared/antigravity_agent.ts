@@ -414,6 +414,7 @@ if url_match:
     # link only if the copy fails.
     final_url = url
     authoritative_size = None
+    copy_ok = False
     m = re.match(r'https://([^.]+)\\.s3[.\\w-]*\\.amazonaws\\.com/([^?]+)', url)
     if m:
         bucket, shared_key = m.group(1), m.group(2)
@@ -438,6 +439,7 @@ if url_match:
             except Exception as _stream_err:
                 print(f'COPY_STREAM_FAILED:{_stream_err}')
         if r is not None and r.returncode == 0:
+            copy_ok = True
             final_url = f'https://{bucket}.s3.${REGION}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
             # A gzip copy next to the model. IFC text shrinks about 10 times, which is
@@ -456,7 +458,13 @@ if url_match:
     final_size = authoritative_size
     if final_size is None and size_match:
         final_size = int(size_match.group(1).replace(",", ""))
-    if agy_failed and (final_count is None or final_count < 20):
+    if m and not copy_ok:
+        # Never hand a chat the shared slot key: the next build in this slot overwrites it,
+        # and the chat would then show someone else's model.
+        err = "The model was built but could not be saved to its own safe location, so it was not attached to your chat. Please run the request again."
+        print(f'BUILD_ERROR:{err}')
+        push_status({"status": "error", "error": err})
+    elif agy_failed and (final_count is None or final_count < 20):
         err = "The build ran out of time before the model was ready. Try a smaller request, or build it in steps."
         print(f'BUILD_ERROR:{err}')
         push_status({"status": "error", "error": err})
