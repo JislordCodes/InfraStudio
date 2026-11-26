@@ -427,6 +427,16 @@ if url_match:
                 break
             print(f'COPY_RETRY:{_try + 1}:{(r.stderr or "")[-200:]}')
             time.sleep(3)
+        if r is None or r.returncode != 0:
+            # Last resort: stream the object through this box. It needs only read and write on
+            # the two keys, and checks the size afterwards. Never hand the chat the shared key if
+            # this can be avoided: the next build in this slot overwrites it.
+            try:
+                r = subprocess.run(['bash', '-c', f'set -o pipefail; aws s3 cp s3://{bucket}/{shared_key} - --region ${REGION} | aws s3 cp - s3://{bucket}/{unique_key} --region ${REGION}'], capture_output=True, text=True, timeout=900)
+                if r.returncode == 0 and s3_object_size(bucket, unique_key) != s3_object_size(bucket, shared_key):
+                    r.returncode = 1
+            except Exception as _stream_err:
+                print(f'COPY_STREAM_FAILED:{_stream_err}')
         if r is not None and r.returncode == 0:
             final_url = f'https://{bucket}.s3.${REGION}.amazonaws.com/{unique_key}?t={int(time.time())}'
             authoritative_size = s3_object_size(bucket, unique_key)
