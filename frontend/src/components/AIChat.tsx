@@ -291,6 +291,18 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       if (jobKey) localStorage.setItem(jobKey, '1');
     } catch { /* storage unavailable - apply normally */ }
 
+    // An empty model is never a result. Keep the chat on its existing model.
+    if (result.ifc_url && result.element_count === 0) {
+      const empty: ChatMessage = {
+        role: 'assistant',
+        content: '⚠️ That request came back with an empty model, so I did not replace your existing model. It is exactly as it was. Please send the request again.',
+      };
+      if (sid === activeSessionIdRef.current) setMessages(prev => [...prev, empty]);
+      await saveMessage(sid, empty);
+      setCurrentSteps([]);
+      return;
+    }
+
     if (result.steps?.length) setCurrentSteps(result.steps.slice(-8));
 
     const reply: ChatMessage = { role: 'assistant', content: result.reply || 'Done.' };

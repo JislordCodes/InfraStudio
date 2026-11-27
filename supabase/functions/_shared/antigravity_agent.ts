@@ -158,7 +158,10 @@ if parsed.get("status") != "success":
     sys.exit(1)
 print((parsed.get("output") or "").strip())
 PYLOAD
-if ! python3 /root/agy_jobs/load_${safeId}.py "$BASE_FILE"; then
+python3 /root/agy_jobs/load_${safeId}.py "$BASE_FILE" > /root/agy_jobs/baseinfo_${safeId}.txt 2>&1
+LOAD_RC=$?
+cat /root/agy_jobs/baseinfo_${safeId}.txt
+if [ "$LOAD_RC" -ne 0 ]; then
   write_status '{"status":"error","error":"Could not load the existing model into the build scene."}'
   exit 1
 fi
@@ -458,7 +461,23 @@ if url_match:
     final_size = authoritative_size
     if final_size is None and size_match:
         final_size = int(size_match.group(1).replace(",", ""))
-    if m and not copy_ok:
+    # An edit must never replace a model with an empty or gutted one. The base model's product
+    # count was printed when it was loaded into the scene.
+    base_products = None
+    try:
+        _bi = open('/root/agy_jobs/baseinfo_${safeId}.txt').read()
+        _bm = re.search(r'loaded (\\d+) products', _bi)
+        if _bm:
+            base_products = int(_bm.group(1))
+    except Exception:
+        pass
+    gutted = (final_count is not None and final_count == 0) or (
+        base_products is not None and base_products >= 50 and (final_count is None or final_count < base_products * 0.2))
+    if gutted:
+        err = "The edit did not work: the model came back empty or mostly missing, so your existing model was left exactly as it was. Please send the request again."
+        print(f'BUILD_ERROR:{err}')
+        push_status({"status": "error", "error": err})
+    elif m and not copy_ok:
         # Never hand a chat the shared slot key: the next build in this slot overwrites it,
         # and the chat would then show someone else's model.
         err = "The model was built but could not be saved to its own safe location, so it was not attached to your chat. Please run the request again."

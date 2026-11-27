@@ -4,7 +4,7 @@ import { handleReviewer } from "../agent-reviewer/index.ts";
 import { startOpenHandsBuild, pollOpenHandsBuild } from "../_shared/openhands_agent.ts";
 import { startAntigravityBuild, pollAntigravityBuild, refImagePath, type ReferenceImage } from "../_shared/antigravity_agent.ts";
 import { CLASH_CHECK_PYTHON, type ClashReport } from "../_shared/clash_check.ts";
-import { SPEC_PRIORITY_RULE } from "../_shared/spec_priority.ts";
+import { SPEC_PRIORITY_RULE, NO_RENDER_RULE } from "../_shared/spec_priority.ts";
 import { jevSafe } from "../_shared/jev_client.ts";
 import { getIpHash } from "../_shared/trial_gate.ts";
 import { runClarify } from "../_shared/clarify.ts";
@@ -913,6 +913,8 @@ IMPORTANT scope rule (non-negotiable): this is a request for a single element (o
 
 ${SPEC_PRIORITY_RULE}
 
+${NO_RENDER_RULE}
+
 Where a dimension isn't given, use a real-world-plausible size for this element type (e.g. a typical structural column, a standard-height wall) rather than an arbitrary or tiny placeholder size.
 
 IMPORTANT quality bar: apply a real, appropriate material/surface style (via create_surface_style/apply_style_to_object) before exporting - this one element should not be left unstyled.
@@ -933,6 +935,8 @@ When finished, call export_ifc directly - skip any clash check or complexity rev
       const fullStructureBrief = `You are acting as the complete pipeline for this build, not just an executor: interpreter (figure out what is really being asked), architect (invent every spec that isn't given), executor (build it via real tool calls), and reviewer (check your own result before exporting). No other agent will look at this before export - own every decision yourself.
 
 ${SPEC_PRIORITY_RULE}
+
+${NO_RENDER_RULE}
 
 IMPORTANT tool-usage rule: you have direct MCP tool-calling access to functions like create_wall, build_room, create_slab, create_stairs, create_trimesh_ifc, create_mesh_ifc, execute_ifc_code_tool, create_surface_style, apply_style_to_object, get_scene_info, export_ifc, etc. Always call these as native tool calls through your own tool-calling interface. Do NOT use the bash/terminal tool to run curl or hand-craft raw HTTP/JSON-RPC requests to the MCP server - that is unnecessary, unsupported, and will not work correctly.
 
