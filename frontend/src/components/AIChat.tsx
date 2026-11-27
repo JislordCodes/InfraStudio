@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, ChevronDown, PanelLeftOpen, PanelLeftClose, Plus, MessageSquare, Loader2, Trash2, X, Download, Paperclip, Image as ImageIcon, History } from 'lucide-react';
-import { runAntigravityBuild, askQuestion, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
+import { runAntigravityBuild, clarifyBrief, askQuestion, type ActiveBuildState, type ClarifyQuestion } from '../hooks/useMultiAgentLoop';
 import { classifyIntent } from '../../../supabase/functions/_shared/intent';
 import { isSharedSlotModelUrl, SHARED_MODEL_MESSAGE } from '../../../supabase/functions/_shared/modelKeys';
 import { useSessions, type ChatMessage } from '../hooks/useSessions';
@@ -77,6 +77,9 @@ interface PendingClarify {
   round: number;
   images: { url: string; caption?: string }[];
 }
+
+/** Short replies that mean "stop asking, just build" (only honoured while questions are pending). */
+const SKIP_REPLY_RE = /^\s*(skip|just build|build( it)?( now)?|use (the |sensible )?defaults?|defaults?|go ahead|you decide|up to you|whatever)\b/i;
 
 interface AIChatProps {
   onLoadIfcUrl?: (url: string) => void;
@@ -429,8 +432,23 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
       return null;
     }
   };
+  const savePendingClarify = (sid: string, p: PendingClarify) => {
+    try { localStorage.setItem(`infrastudio_clarify_${sid}`, JSON.stringify(p)); } catch { /* ignore */ }
+  };
   const clearPendingClarify = (sid: string) => {
     try { localStorage.removeItem(`infrastudio_clarify_${sid}`); } catch { /* ignore */ }
+  };
+
+  const formatQuestions = (questions: ClarifyQuestion[], round: number): string => {
+    const lines = questions.map((q, i) => {
+      const opts = q.options.length ? ` (${q.options.join(' / ')})` : '';
+      const def = q.default ? ` — default: ${q.default}` : '';
+      return `${i + 1}. ${q.question}${opts}${def}`;
+    });
+    const intro = round <= 1
+      ? 'A few quick questions so I get the design right:'
+      : 'Thanks. Just a couple more:';
+    return `${intro}\n\n${lines.join('\n')}\n\nAnswer in one message (e.g. "30 storeys, steel frame, podium"), or skip and I'll use the defaults.`;
   };
 
   const appendAssistant = async (sid: string, msg: ChatMessage) => {
@@ -552,15 +570,45 @@ export const AIChat: React.FC<AIChatProps> = ({ onLoadIfcUrl, onActiveIfcUrlChan
         return;
       }
 
-      // ── Never ask questions first: build now and fill anything unspecified with sensible defaults ──
-      // (The build agent invents every spec the request leaves out.) A question left over from an
-      // older version of the app is answered by this message and folded into the brief.
+      // ── Clarify before building ──
       const pending = loadPendingClarify(sid);
+      const skip = !!pending && userContent.length <= 60 && SKIP_REPLY_RE.test(userContent);
       const allImages = [...(pending?.images || []), ...uploadedImages];
+      setCurrentSteps(['🧠 Reviewing your brief...']);
+      const answers = pending ? [...pending.answers, ...(skip ? [] : [userContent])] : [];
+      const clarified = await clarifyBrief({
+        client_requirements: pending ? pending.brief : userContent,
+        answers: answers.join('\n'),
+        round: pending ? pending.round : 0,
+        skip,
+        has_images: allImages.length > 0,
+        questions_asked: pending?.questions,
+      });
+
+      if (clarified.needs_clarification) {
+        savePendingClarify(sid, {
+          brief: pending ? pending.brief : userContent,
+          answers,
+          questions: clarified.questions,
+          round: clarified.round,
+          images: allImages,
+        });
+        await appendAssistant(sid, {
+          role: 'assistant',
+          content: formatQuestions(clarified.questions, clarified.round),
+        });
+        setCurrentSteps([]);
+        return;
+      }
+
       clearPendingClarify(sid);
-      const buildBrief = pending
-        ? pending.brief + '\n\nClarifications from the user:\n' + [...pending.answers, userContent].join('\n')
-        : userContent;
+      const buildBrief = clarified.refined_brief?.trim() || (pending ? pending.brief : userContent);
+      if (clarified.assumptions.length > 0) {
+        await appendAssistant(sid, {
+          role: 'assistant',
+          content: `Got it, building now. Anything not specified, I'm assuming:\n${clarified.assumptions.map(a => `• ${a}`).join('\n')}`,
+        });
+      }
 
       // Staged mode: this first build is the MASSING stage only; later stages
       // are approved and built one at a time as edits of the previous result.
