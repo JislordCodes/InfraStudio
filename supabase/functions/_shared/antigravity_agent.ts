@@ -28,7 +28,10 @@ const INSTANCE_ID = "i-0fad6ae7f3ef4d4dd";
 const REGION = "eu-north-1";
 const AGY_MODEL = "gemini-4-carbon-high";
 const AGY_EFFORT = "high"; // carbon tops out at high; hydrogen and neon go to xhigh
-const CLARIFY_MODEL = "gemini-4-carbon-high";
+// Short one-shot answers (chat questions, clarifying questions, Studio Ask).
+// carbon-high thinks for 50-70 s, which hits the box timeout and returns
+// nothing; carbon-medium answers in about 13 s.
+const CLARIFY_MODEL = "gemini-4-carbon-medium";
 
 // The box runs 3 fully isolated build slots (own Blender/MCP container each,
 // see ec2/setup_mcp_slots.sh) so up to 3 builds can run at once without
@@ -833,6 +836,7 @@ rm -f /root/agy_oneshot/${id}.txt
       const status = inv.Status;
       if (status === "Success") {
         const out = inv.StandardOutputContent || "";
+        if (!out.trim()) throw new Error("runAgyOneShot: agy returned no output (likely hit its time limit)");
         try {
           const data = JSON.parse(out.slice(out.indexOf("{")));
           return String(data.response ?? data.error ?? out);
